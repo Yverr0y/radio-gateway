@@ -253,7 +253,8 @@
       <span><span class="pkt-label">EP Mode:</span> <span id="st-ep-mode" class="pkt-val">—</span></span>
       <span><span class="pkt-label">DW Proc:</span> <span id="st-ep-dw" class="pkt-val">—</span></span>
       <span><span class="pkt-label">Audio I/O:</span> <span id="st-ep-audio" class="pkt-val">—</span></span>
-      <span><span class="pkt-label">PTT HID:</span> <span id="st-ep-hid" class="pkt-val">—</span></span>
+      <span><span class="pkt-label" id="st-ep-ptt-label">PTT HID:</span> <span id="st-ep-ptt" class="pkt-val">—</span></span>
+      <span id="st-ep-rigctld-wrap" style="display:none;"><span class="pkt-label">Rigctld:</span> <span id="st-ep-rigctld" class="pkt-val">—</span></span>
     </div>
     <div id="ep-mismatch" class="pkt-row ep-mismatch" style="display:none;">
       <span class="ep-mismatch-msg">Endpoint still in data mode — Direwolf holding AIOC. TX audio blocked.</span>
@@ -469,8 +470,18 @@ function pollStatus() {
     document.getElementById('st-mode').className = 'pkt-val ' + (s.mode === 'idle' ? 'yellow' : 'cyan');
     document.getElementById('st-call').textContent = s.callsign || '—';
     document.getElementById('st-modem').textContent = (s.modem || 1200) + ' bps';
-    document.getElementById('st-dw').textContent = s.direwolf_running ? 'running' : 'stopped';
-    document.getElementById('st-dw').className = 'pkt-val ' + (s.direwolf_running ? 'green' : 'red');
+    // Direwolf health — for AIOC endpoints this is the gateway-side TNC;
+    // for local-TNC endpoints (IC-7100) it lives on the endpoint, so fall
+    // back to the endpoint's direwolf_running so the top line still tracks
+    // the actual TNC the session depends on.
+    var dwUp;
+    if (s.endpoint && s.endpoint.local_tnc) {
+      dwUp = !!s.endpoint.direwolf_running;
+    } else {
+      dwUp = !!s.direwolf_running;
+    }
+    document.getElementById('st-dw').textContent = dwUp ? 'running' : 'stopped';
+    document.getElementById('st-dw').className = 'pkt-val ' + (dwUp ? 'green' : 'red');
     document.getElementById('st-kiss').textContent = s.kiss_connected ? 'yes' : 'no';
     document.getElementById('st-kiss').className = 'pkt-val ' + (s.kiss_connected ? 'green' : 'red');
     document.getElementById('st-pkts').textContent = s.packet_count || 0;
@@ -515,9 +526,42 @@ function pollStatus() {
     var aIO = (ep.audio_input ? 'IN' : '--') + '/' + (ep.audio_output ? 'OUT' : '--');
     document.getElementById('st-ep-audio').textContent = aIO;
     document.getElementById('st-ep-audio').className = 'pkt-val ' + (ep.audio_input && ep.audio_output ? 'green' : 'red');
-    document.getElementById('st-ep-hid').textContent = ep.hid_connected ? 'yes' : 'no';
-    document.getElementById('st-ep-hid').className = 'pkt-val ' + (ep.hid_connected ? 'green' : 'red');
-    // Mismatch warning: gateway idle but endpoint still in data mode
+    // PTT row: AIOC reports hid_connected (CM108 hidraw); IC-7100 routes
+    // PTT through the on-endpoint rigctld shim, so show its listening
+    // state instead and label it accordingly.
+    var pttLabel = document.getElementById('st-ep-ptt-label');
+    var pttVal   = document.getElementById('st-ep-ptt');
+    if (ep.local_tnc) {
+      pttLabel.textContent = 'PTT:';
+      var pttOk = !!ep.rigctld_listening;
+      pttVal.textContent = pttOk ? 'rigctld (CI-V)' : 'rigctld down';
+      pttVal.className = 'pkt-val ' + (pttOk ? 'green' : 'red');
+    } else {
+      pttLabel.textContent = 'PTT HID:';
+      pttVal.textContent = ep.hid_connected ? 'yes' : 'no';
+      pttVal.className = 'pkt-val ' + (ep.hid_connected ? 'green' : 'red');
+    }
+    // Rigctld stats row — only for local-TNC endpoints
+    var rcWrap = document.getElementById('st-ep-rigctld-wrap');
+    var rcEl   = document.getElementById('st-ep-rigctld');
+    if (ep.local_tnc) {
+      rcWrap.style.display = '';
+      var st_ = ep.rigctld_stats || {};
+      var conn = st_.connects || 0;
+      var pttN = st_.ptt_set || 0;
+      var unk  = st_.unknown || 0;
+      var err  = st_.errors || 0;
+      rcEl.textContent = 'conn=' + conn + ' ptt=' + pttN +
+                        (unk ? ' unk=' + unk : '') +
+                        (err ? ' err=' + err : '');
+      rcEl.className = 'pkt-val ' + (err || unk ? 'yellow' : 'cyan');
+    } else {
+      rcWrap.style.display = 'none';
+    }
+    // Mismatch warning: gateway idle but endpoint still in data mode.
+    // For local-TNC endpoints the endpoint owns direwolf, so the warning
+    // text "Direwolf holding AIOC" doesn't apply — message is generalised
+    // in the markup ("endpoint still in data mode"), already fine.
     var mismatch = s.mode === 'idle' && ep.connected && epMode === 'data';
     document.getElementById('ep-mismatch').style.display = mismatch ? 'flex' : 'none';
 

@@ -369,6 +369,21 @@ class PacketRadioPlugin:
                 pass
         return self._remote_tnc
 
+    def _endpoint_has_local_tnc(self):
+        """True if the selected packet endpoint advertises 'packet_local_tnc'.
+
+        Such endpoints (e.g. IC-7100) run direwolf on the endpoint box and
+        expose KISS over the network; the gateway-side packet_tnc must stay
+        out of the way. AIOC endpoints leave this False; gateway-side
+        direwolf claims the local hw:N,0.
+        """
+        target = self._find_endpoint()
+        if not target or not self._gateway:
+            return False
+        src = self._gateway.link_endpoints.get(target)
+        caps = getattr(src, '_endpoint_caps', {}) or {}
+        return bool(caps.get('packet_local_tnc'))
+
     def _send_endpoint_mode(self, mode):
         """Send mode command to the remote AIOC endpoint via the link server.
         Returns True on success, False on failure."""
@@ -395,15 +410,29 @@ class PacketRadioPlugin:
         if not target or not self._gateway:
             return {"endpoint_name": None, "connected": False}
         st = self._gateway._link_last_status.get(target, {})
+        # Plugins that own their own audio/data switch (e.g. IC-7100) expose
+        # it as 'tnc_mode' so the radio's own operating-mode field can stay
+        # in 'mode'. Older endpoints (AIOC) only have 'mode'.
+        endpoint_mode = st.get('tnc_mode', st.get('mode', 'unknown'))
+        src = self._gateway.link_endpoints.get(target)
+        caps = getattr(src, '_endpoint_caps', {}) or {}
+        local_tnc = bool(caps.get('packet_local_tnc'))
         return {
             "endpoint_name": target,
             "connected": True,
-            "endpoint_mode": st.get('mode', 'unknown'),
+            "endpoint_mode": endpoint_mode,
             "direwolf_running": st.get('direwolf_running', False),
             "audio_input": st.get('audio_input', False),
             "audio_output": st.get('audio_output', False),
             "hid_connected": st.get('hid_connected', False),
             "ptt_active": st.get('ptt_active', False),
+            # New fields surfaced for the UI to distinguish endpoints that
+            # own their own TNC (IC-7100) from the AIOC pattern.
+            "local_tnc": local_tnc,
+            "ptt_method": ("rigctld (CI-V)" if local_tnc else "CM108"),
+            "rigctld_listening": st.get('rigctld_listening', False),
+            "rigctld_stats": st.get('rigctld_stats', {}),
+            "direwolf_kiss_port": st.get('direwolf_kiss_port'),
         }
 
     def _start_pat(self):
@@ -561,10 +590,13 @@ class PacketRadioPlugin:
             self._stop_pat()
             # Stop gateway-side direwolf before releasing the endpoint's
             # ALSA — the order matters so direwolf doesn't briefly clutch
-            # at a soon-to-be-shared device.
-            tnc = getattr(self._gateway, 'packet_tnc', None)
-            if tnc:
-                tnc.stop()
+            # at a soon-to-be-shared device. For endpoints that run their
+            # own TNC (IC-7100), there's no gateway-side direwolf to stop;
+            # the endpoint reaps its direwolf when we tell it to go to audio.
+            if not self._endpoint_has_local_tnc():
+                tnc = getattr(self._gateway, 'packet_tnc', None)
+                if tnc:
+                    tnc.stop()
             if not self._send_endpoint_mode('audio'):
                 return {"ok": False, "mode": "idle",
                         "warning": "mode set to idle but failed to send audio command to endpoint"}
@@ -578,12 +610,16 @@ class PacketRadioPlugin:
         if not self._send_endpoint_mode('data'):
             self._mode = 'idle'
             return {"ok": False, "error": "failed to send data mode command to endpoint"}
-        # Then start gateway-side direwolf against the AIOC device.
-        tnc = getattr(self._gateway, 'packet_tnc', None)
-        if tnc:
-            tnc.start(callsign=self._callsign, ssid=self._ssid,
-                      modem=self._modem_rate, kiss_port=self._kiss_port,
-                      ptt_channel=int(getattr(self._config, 'AIOC_PTT_CHANNEL', 3)))
+        # Start gateway-side direwolf only for endpoints that don't run their
+        # own (AIOC plugged into the gateway, fed via the loopback link). The
+        # IC-7100 plugin runs direwolf locally on MX where the USB codec
+        # lives; we connect to its KISS port over the network instead.
+        if not self._endpoint_has_local_tnc():
+            tnc = getattr(self._gateway, 'packet_tnc', None)
+            if tnc:
+                tnc.start(callsign=self._callsign, ssid=self._ssid,
+                          modem=self._modem_rate, kiss_port=self._kiss_port,
+                          ptt_channel=int(getattr(self._config, 'AIOC_PTT_CHANNEL', 3)))
         # Connect KISS TCP to remote Direwolf
         threading.Thread(target=self._kiss_connect_loop, daemon=True,
                          name="KISSConnect").start()

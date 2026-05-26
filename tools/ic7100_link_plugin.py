@@ -27,6 +27,8 @@ import time
 import queue as _queue_mod
 import subprocess
 import json
+import collections
+import socket
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _project_dir = os.path.dirname(_script_dir)
@@ -1358,6 +1360,284 @@ class IC7100AudioPlayback:
 
 
 # ---------------------------------------------------------------------------
+# Rigctld shim — minimal hamlib NET rigctl server so direwolf can PTT the
+# IC-7100 via the plugin's already-open CI-V serial port. Direwolf with
+# `PTT RIG 2 host:port` uses hamlib's NETRIGCTL backend, which on connect
+# issues `\dump_state` and during operation sends `T 0|1`. We stub
+# dump_state and forward `T` to CIVController.set_ptt; unknown commands
+# return RPRT -11 (function not implemented) — harmless for PTT-only use.
+# ---------------------------------------------------------------------------
+
+class IC7100Rigctld:
+
+    _DUMP_STATE = (
+        "0\n"
+        "2\n"
+        "2\n"
+        "0 0 0 0 0 0 0\n"
+        "0 0 0 0 0 0 0\n"
+        "0 0\n"
+        "0 0\n"
+        "0\n0\n0\n0\n0\n0\n"
+        "0x0\n0x0\n0x0\n0x0\n0x0\n0\n"
+    )
+
+    def __init__(self, civ_provider, host='127.0.0.1', port=4532):
+        self._get_civ = civ_provider
+        self._host = host
+        self._port = port
+        self._server = None
+        self._thread = None
+        self._running = False
+        self._stats = {'connects': 0, 'ptt_set': 0, 'unknown': 0, 'errors': 0}
+
+    def start(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((self._host, self._port))
+            s.listen(2)
+        except OSError as e:
+            print(f"[IC7100-Rigctld] bind {self._host}:{self._port} failed: {e}",
+                  flush=True)
+            return False
+        self._server = s
+        self._running = True
+        self._thread = threading.Thread(target=self._accept_loop, daemon=True,
+                                        name='IC7100-Rigctld')
+        self._thread.start()
+        print(f"[IC7100-Rigctld] listening on {self._host}:{self._port}", flush=True)
+        return True
+
+    def stop(self):
+        self._running = False
+        if self._server:
+            try:
+                self._server.close()
+            except Exception:
+                pass
+
+    @property
+    def stats(self):
+        return dict(self._stats)
+
+    def _accept_loop(self):
+        while self._running:
+            try:
+                conn, addr = self._server.accept()
+            except Exception:
+                if self._running:
+                    time.sleep(0.5)
+                continue
+            self._stats['connects'] += 1
+            threading.Thread(target=self._client_loop, args=(conn, addr),
+                             daemon=True, name='IC7100-Rigctld-Client').start()
+
+    def _client_loop(self, conn, addr):
+        print(f"[IC7100-Rigctld] client {addr} connected", flush=True)
+        buf = b''
+        try:
+            # No socket timeout — direwolf holds the rigctld connection open
+            # for its entire process lifetime and reuses it for every PTT
+            # change. A timeout (we used to set 120s) silently kills the
+            # link during idle periods between TX cycles, leaving the next
+            # set_ptt with a dead socket. The reader loop exits naturally
+            # on EOF when direwolf shuts down.
+            conn.settimeout(None)
+            while self._running:
+                data = conn.recv(4096)
+                if not data:
+                    break
+                buf += data
+                while b'\n' in buf:
+                    line, _, buf = buf.partition(b'\n')
+                    decoded = line.decode('ascii', 'replace').strip()
+                    resp = self._handle(decoded)
+                    if resp is None:
+                        resp = 'RPRT -11\n'
+                    # Trace every request — invaluable for debugging client
+                    # behaviour (e.g. which command form direwolf uses to
+                    # unkey). Skip the spammy dump_state to keep the log
+                    # readable. First reply line only, for the same reason.
+                    if decoded and decoded != '\\dump_state':
+                        first_resp = resp.split('\n', 1)[0]
+                        print(f"[IC7100-Rigctld] >> {decoded!r}  << {first_resp!r}",
+                              flush=True)
+                    conn.sendall(resp.encode())
+        except Exception as e:
+            self._stats['errors'] += 1
+            print(f"[IC7100-Rigctld] client {addr} error: {e}", flush=True)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            print(f"[IC7100-Rigctld] client {addr} disconnected", flush=True)
+
+    def _handle(self, line):
+        if not line:
+            return 'RPRT 0\n'
+        cmd = line[1:] if line.startswith('\\') else line
+        parts = cmd.split()
+        if not parts:
+            return 'RPRT 0\n'
+        op = parts[0]
+        if op == 'dump_state':
+            return self._DUMP_STATE
+        if op == 'chk_vfo':
+            return 'CHKVFO 0\n'
+        # PTT — direwolf/hamlib clients are split on which form they send:
+        #   short:    `T <state>`            (no VFO)
+        #   short+vfo:`T VFOA <state>`       (direwolf 1.6 does this)
+        #   long:     `\set_ptt <state>` or `\set_ptt VFOA <state>`
+        # The state arg is always the final token; everything between op
+        # and state is a VFO name we ignore. Without this fix, the VFO
+        # token was being misread as the state — both T VFOA 1 and
+        # T VFOA 0 parsed as "key" and the radio never explicitly unkeyed.
+        if op in ('T', 'set_ptt'):
+            if len(parts) < 2:
+                return 'RPRT -1\n'
+            state_tok = parts[-1].lower()
+            state = state_tok not in ('0', '0x0', '0x00')
+            civ = self._get_civ()
+            if not civ or not civ.connected:
+                return 'RPRT -6\n'
+            ok = civ.set_ptt(state)
+            self._stats['ptt_set'] += 1
+            print(f"[IC7100-Rigctld] {op} PTT={'ON' if state else 'off'} "
+                  f"ok={ok}", flush=True)
+            return 'RPRT 0\n' if ok else 'RPRT -9\n'
+        if op in ('t', 'get_ptt'):
+            civ = self._get_civ()
+            tx = bool(civ and civ.transmitting)
+            return f'{1 if tx else 0}\n'
+        if op == 'get_powerstat':
+            return '1\n'
+        if op in ('q', 'quit'):
+            return 'RPRT 0\n'
+        self._stats['unknown'] += 1
+        return 'RPRT -11\n'
+
+
+# ---------------------------------------------------------------------------
+# Direwolf runner — launched on data mode entry, reads/writes the IC-7100
+# USB audio directly via plughw, PTTs via the local rigctld shim.
+# ---------------------------------------------------------------------------
+
+class IC7100DirewolfRunner:
+
+    def __init__(self, audio_device, rigctld_port=4532,
+                 conf_path='/tmp/direwolf_ic7100.conf',
+                 direwolf_path='/usr/bin/direwolf'):
+        self._audio_device = audio_device
+        self._rigctld_port = rigctld_port
+        self._conf_path = conf_path
+        self._direwolf_path = direwolf_path
+        self._proc = None
+        self._lock = threading.Lock()
+        self._log_tail = collections.deque(maxlen=200)
+        self._running = False
+        self._monitor_thread = None
+        self.callsign = ''
+        self.kiss_port = 8001
+        self.modem = 1200
+
+    def start(self, callsign, ssid=0, modem=1200, kiss_port=8001):
+        if not os.path.exists(self._direwolf_path):
+            print(f"[IC7100-Direwolf] not found at {self._direwolf_path}",
+                  flush=True)
+            return False
+        if not self._audio_device:
+            print("[IC7100-Direwolf] no audio device — cannot start", flush=True)
+            return False
+        dev = self._audio_device
+        # PCM2901-class USB codecs need plughw, not raw hw, for duplex.
+        if dev.startswith('hw:'):
+            dev = 'plughw:' + dev[3:]
+        full = str(callsign).strip().upper()
+        if ssid:
+            full = full.split('-')[0] + f'-{ssid}'
+        conf = (
+            f"ADEVICE {dev} {dev}\n"
+            f"ARATE 48000\n"
+            f"ACHANNELS 1\n\n"
+            f"CHANNEL 0\n"
+            f"MYCALL {full}\n"
+            f"MODEM {int(modem)}\n\n"
+            f"PTT RIG 2 127.0.0.1:{int(self._rigctld_port)}\n"
+            f"FIX_BITS 1\n\n"
+            f"KISSPORT {int(kiss_port)}\n"
+            f"AGWPORT 8010\n"
+        )
+        try:
+            with open(self._conf_path, 'w') as f:
+                f.write(conf)
+        except Exception as e:
+            print(f"[IC7100-Direwolf] conf write failed: {e}", flush=True)
+            return False
+        argv = [self._direwolf_path, '-c', self._conf_path, '-t', '0']
+        with self._lock:
+            self.callsign = full
+            self.kiss_port = int(kiss_port)
+            self.modem = int(modem)
+            try:
+                self._proc = subprocess.Popen(
+                    argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    bufsize=1, text=True)
+            except Exception as e:
+                print(f"[IC7100-Direwolf] launch failed: {e}", flush=True)
+                return False
+            self._running = True
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop, daemon=True, name='IC7100-Direwolf')
+        self._monitor_thread.start()
+        print(f"[IC7100-Direwolf] started: device={dev} call={full} "
+              f"modem={modem} KISS={kiss_port}", flush=True)
+        return True
+
+    def stop(self):
+        with self._lock:
+            self._running = False
+            p = self._proc
+            self._proc = None
+        if p:
+            try:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=2)
+            except Exception:
+                pass
+            print("[IC7100-Direwolf] stopped", flush=True)
+
+    @property
+    def running(self):
+        with self._lock:
+            return (self._running and self._proc is not None
+                    and self._proc.poll() is None)
+
+    @property
+    def log_tail(self):
+        return list(self._log_tail)
+
+    def _monitor_loop(self):
+        proc = self._proc
+        if not proc or not proc.stdout:
+            return
+        try:
+            for line in proc.stdout:
+                line = line.rstrip()
+                self._log_tail.append(line)
+                print(f"[IC7100-Direwolf] {line}", flush=True)
+        except Exception as e:
+            print(f"[IC7100-Direwolf] monitor error: {e}", flush=True)
+        with self._lock:
+            self._running = False
+
+
+# ---------------------------------------------------------------------------
 # IC7100Plugin
 # ---------------------------------------------------------------------------
 
@@ -1375,10 +1655,8 @@ class IC7100Plugin(RadioPlugin):
         "rx_gain":   True,
         "tx_gain":   True,
         "smeter":    True,
-        # IC-7100 USB audio + CI-V PTT can host packet (Direwolf); 'mode'
-        # command dispatch is not yet implemented on this plugin, so until
-        # then selecting it from the packet page will surface a clear error.
         "packet":    True,
+        "packet_local_tnc": True,   # endpoint runs its own direwolf in data mode
         "status":    True,
     }
 
@@ -1417,6 +1695,23 @@ class IC7100Plugin(RadioPlugin):
         self._settings_file = os.path.expanduser(
             '~/.config/link-endpoint/ic7100-settings.json')
         self._audio_device = None
+        # Packet TNC mode — mirrors the AIOC plugin's audio/data switch.
+        # In 'data' we release plughw, spawn direwolf locally, and PTT via
+        # the rigctld shim (CI-V stays live so the GUI / metering survive).
+        self._tnc_mode = 'audio'
+        self._tnc_lock = threading.Lock()
+        self._rigctld: IC7100Rigctld | None = None
+        self._direwolf: IC7100DirewolfRunner | None = None
+        self._tnc_callsign = ''
+        self._tnc_ssid = 0
+        self._tnc_modem = 1200
+        self._tnc_kiss_port = 8001
+        # Saved op-mode/filter so we can restore on exit from data mode.
+        # 1200 baud AFSK packet requires FM-D on the radio; if we naively
+        # toggle data mode while the radio is on USB/LSB we get USB-D/LSB-D
+        # which routes audio through the DV/RTTY chain, not the FM data path.
+        self._tnc_saved_mode = None
+        self._tnc_saved_filter = 1
 
     # -- Lifecycle --
 
@@ -1476,6 +1771,18 @@ class IC7100Plugin(RadioPlugin):
             self._capture.start()
             self._playback.start()
 
+        # Rigctld shim — listens always so direwolf (started later on data
+        # mode) can connect without a startup race. Port is configurable;
+        # default 4532 is hamlib standard.
+        rigctld_port = int(config.get('rigctld_port', 4532))
+        self._rigctld = IC7100Rigctld(lambda: self._civ, port=rigctld_port)
+        if not self._rigctld.start():
+            print("[IC7100] Rigctld shim failed to start — packet TNC will not "
+                  "be available until next setup", flush=True)
+            self._rigctld = None
+        # Direwolf runner is created lazily on data-mode entry once we know
+        # the audio device is valid.
+
         # Background threads
         self._watchdog_thread = threading.Thread(
             target=self._watchdog, daemon=True, name='IC7100-Watchdog')
@@ -1491,6 +1798,12 @@ class IC7100Plugin(RadioPlugin):
 
     def teardown(self):
         self._running = False
+        if self._direwolf:
+            self._direwolf.stop()
+            self._direwolf = None
+        if self._rigctld:
+            self._rigctld.stop()
+            self._rigctld = None
         if self._capture:
             self._capture.stop()
         if self._playback:
@@ -1603,6 +1916,13 @@ class IC7100Plugin(RadioPlugin):
 
         elif action == 'mode':
             mode = cmd.get('mode', '')
+            # 'audio'/'data' is the packet-TNC switch from packet_radio.py;
+            # any other value is a radio operating-mode change (LSB/USB/FM…).
+            # Disambiguating by value avoids breaking the existing op-mode
+            # command path while reusing the same 'cmd: mode' wire format
+            # that AIOCPlugin already speaks.
+            if mode in ('audio', 'data'):
+                return self._set_tnc_mode(cmd)
             if not self._civ or not self._civ.connected:
                 return {"ok": False, "error": "CI-V not connected"}
             ok = self._civ.set_mode(mode, int(cmd.get('filter', 1)))
@@ -1902,6 +2222,149 @@ class IC7100Plugin(RadioPlugin):
 
         return {"ok": False, "error": f"unknown command: {action}"}
 
+    # -- Packet TNC mode ----------------------------------------------------
+
+    def _set_tnc_mode(self, cmd):
+        """Switch between voice (audio) and packet (data) on the IC-7100.
+
+        data:
+          - Engage IC-7100 data mode via CI-V (USB MOD input on TX, filter
+            selectable). CI-V stays open so the gateway GUI keeps working.
+          - Stop the plugin's arecord/aplay so plughw:N,0 is free for the
+            duplex direwolf launches.
+          - Launch direwolf locally with audio on plughw:N,0 and PTT via
+            the rigctld shim. KISS port exposed to the gateway.
+
+        audio:
+          - Kill direwolf, drop data mode via CI-V, restart capture/playback.
+        """
+        new_mode = cmd.get('mode', 'audio')
+        if new_mode not in ('audio', 'data'):
+            return {"ok": False, "error": f"invalid tnc mode: {new_mode}"}
+        with self._tnc_lock:
+            if new_mode == self._tnc_mode:
+                return {"ok": True, "tnc_mode": self._tnc_mode}
+
+            if 'callsign' in cmd:
+                self._tnc_callsign = str(cmd['callsign']).strip().upper()
+            if 'ssid' in cmd:
+                try:
+                    self._tnc_ssid = int(cmd['ssid'])
+                except (TypeError, ValueError):
+                    self._tnc_ssid = 0
+            if 'modem' in cmd:
+                try:
+                    self._tnc_modem = int(cmd['modem'])
+                except (TypeError, ValueError):
+                    pass
+            if 'kiss_port' in cmd:
+                try:
+                    self._tnc_kiss_port = int(cmd['kiss_port'])
+                except (TypeError, ValueError):
+                    pass
+
+            print(f"[IC7100] TNC mode {self._tnc_mode} -> {new_mode} "
+                  f"(call={self._tnc_callsign} modem={self._tnc_modem} "
+                  f"KISS={self._tnc_kiss_port})", flush=True)
+
+            if new_mode == 'data':
+                if not self._audio_device:
+                    return {"ok": False, "error": "no audio device — cannot "
+                                                   "enter data mode"}
+                if not self._rigctld:
+                    return {"ok": False, "error": "rigctld shim not running — "
+                                                   "direwolf cannot PTT"}
+                if not self._tnc_callsign:
+                    return {"ok": False, "error": "no callsign provided"}
+                # Save the radio's current op-mode/filter, switch to FM,
+                # then engage data mode → FM-D. 1200 baud AFSK won't make
+                # it onto the air on USB-D / LSB-D / RTTY-D — only FM-D
+                # routes the modem audio through the FM modulator. On
+                # exit we restore the saved mode so the operator returns
+                # to whatever they were on (SSB, etc.).
+                if self._civ and self._civ.connected:
+                    try:
+                        self._tnc_saved_mode = self._civ.mode or 'FM'
+                        self._tnc_saved_filter = self._civ.filter_idx or 1
+                        print(f"[IC7100] TNC entry: saving mode="
+                              f"{self._tnc_saved_mode} filter="
+                              f"{self._tnc_saved_filter}; switching to FM-D",
+                              flush=True)
+                        if self._tnc_saved_mode != 'FM':
+                            self._civ.set_mode('FM', 1)
+                        self._civ.set_data_mode(True)
+                    except Exception as e:
+                        print(f"[IC7100] mode/data switch failed: {e}",
+                              flush=True)
+                # Release the plughw device so direwolf can claim it.
+                if self._capture:
+                    self._capture.stop()
+                    self._capture = None
+                if self._playback:
+                    self._playback.stop()
+                    self._playback = None
+                # Give ALSA a beat to actually free the device.
+                time.sleep(0.5)
+                runner = IC7100DirewolfRunner(
+                    self._audio_device,
+                    rigctld_port=self._rigctld._port)
+                if not runner.start(self._tnc_callsign, ssid=self._tnc_ssid,
+                                    modem=self._tnc_modem,
+                                    kiss_port=self._tnc_kiss_port):
+                    # Restore audio on failure so we don't leave the radio dead.
+                    self._capture = IC7100AudioCapture(self._audio_device,
+                                                      self._rx_queue)
+                    self._playback = IC7100AudioPlayback(self._audio_device)
+                    self._capture.start()
+                    self._playback.start()
+                    if self._civ and self._civ.connected:
+                        try:
+                            self._civ.set_data_mode(False)
+                            if self._tnc_saved_mode and self._tnc_saved_mode != 'FM':
+                                self._civ.set_mode(self._tnc_saved_mode,
+                                                   int(self._tnc_saved_filter))
+                        except Exception:
+                            pass
+                    self._tnc_saved_mode = None
+                    return {"ok": False, "error": "direwolf failed to start"}
+                self._direwolf = runner
+                self._tnc_mode = 'data'
+                self._status_dirty = True
+                return {"ok": True, "tnc_mode": 'data',
+                        "kiss_port": self._tnc_kiss_port}
+
+            # new_mode == 'audio'
+            if self._direwolf:
+                self._direwolf.stop()
+                self._direwolf = None
+            time.sleep(0.5)
+            if self._audio_device:
+                if not self._capture:
+                    self._capture = IC7100AudioCapture(self._audio_device,
+                                                      self._rx_queue)
+                    self._capture.start()
+                if not self._playback:
+                    self._playback = IC7100AudioPlayback(self._audio_device)
+                    self._playback.start()
+            if self._civ and self._civ.connected:
+                try:
+                    self._civ.set_data_mode(False)
+                    # Restore the op-mode the operator was on before we
+                    # forced FM for packet. If the save failed (no CI-V at
+                    # entry) we leave the radio on FM rather than guessing.
+                    if self._tnc_saved_mode and self._tnc_saved_mode != 'FM':
+                        print(f"[IC7100] TNC exit: restoring mode="
+                              f"{self._tnc_saved_mode} filter="
+                              f"{self._tnc_saved_filter}", flush=True)
+                        self._civ.set_mode(self._tnc_saved_mode,
+                                           int(self._tnc_saved_filter))
+                except Exception as e:
+                    print(f"[IC7100] mode restore failed: {e}", flush=True)
+            self._tnc_saved_mode = None
+            self._tnc_mode = 'audio'
+            self._status_dirty = True
+            return {"ok": True, "tnc_mode": 'audio'}
+
     # -- Status --
 
     def get_status(self):
@@ -1979,6 +2442,18 @@ class IC7100Plugin(RadioPlugin):
             "output_active": self._playback is not None,
             "rx_gain_db":    self._rx_gain_db,
             "tx_gain_db":    self._tx_gain_db,
+            # Packet TNC state — packet_radio.get_endpoint_status() reads
+            # 'mode' as endpoint_mode and 'direwolf_running' on top of these
+            # to drive the /packet page status. Use a distinct 'tnc_mode'
+            # key alongside 'mode' (which is the radio op-mode) so the GUI
+            # can show both without ambiguity.
+            "tnc_mode":          self._tnc_mode,
+            "direwolf_running":  bool(self._direwolf and self._direwolf.running),
+            "direwolf_kiss_port": (self._tnc_kiss_port
+                                   if self._tnc_mode == 'data' else None),
+            "rigctld_listening": self._rigctld is not None,
+            "rigctld_stats":     (self._rigctld.stats
+                                   if self._rigctld else {}),
         })
         status.update(self._get_system_stats())
         return status
