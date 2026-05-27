@@ -149,6 +149,14 @@
 
   /* PTT button dimmed when the current band's antenna port is interlocked */
   .rb.blocked { opacity: 0.45; }
+  /* PTT button lit red while transmitting (matches TX badge + pwr LED). */
+  #ic-ptt-btn.active {
+    background: var(--t-err); color: var(--t-bg); border-color: var(--t-err);
+    animation: led-tx-pulse 1.1s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #ic-ptt-btn.active { animation: none; }
+  }
 
   /* Cards */
   .ic-card {
