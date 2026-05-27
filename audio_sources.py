@@ -1608,13 +1608,20 @@ class RemoteAudioSource(AudioSource):
         self.audio_level = 0
         self.server_connected = False
 
-        self._chunk_queue = _queue_mod.Queue(maxsize=16)
+        self._chunk_queue = _queue_mod.Queue(maxsize=32)
         self._sub_buffer = b''
         self._chunk_bytes = config.AUDIO_CHUNK_SIZE * 2  # 16-bit mono
         self._reader_running = False
         self._reader_thread = None
         self._listen_socket = None
         self._conn = None  # current accepted connection (for reset)
+        # Jitter buffer: prime with N chunks (~50 ms each) before draining so
+        # WASAPI callback-gap spikes don't underrun the bus. Modeled on
+        # LinkAudioSource. Un-primes only on disconnect; transient underruns
+        # emit silence but stay primed. 8 chunks = ~400 ms initial cushion,
+        # maxsize=32 = ~1.6 s absorption capacity for bus-side stalls.
+        self._jitter_prefill = 8
+        self._jitter_primed = False
 
     def setup_audio(self, port_override=None):
         """Bind listen socket and start the reader/accept thread."""
@@ -1682,6 +1689,9 @@ class RemoteAudioSource(AudioSource):
                             self._chunk_queue.put_nowait(payload)
                         except _queue_mod.Full:
                             pass
+                    if (not self._jitter_primed and
+                            self._chunk_queue.qsize() >= self._jitter_prefill):
+                        self._jitter_primed = True
             except socket.timeout:
                 continue
             except Exception as e:
@@ -1702,6 +1712,7 @@ class RemoteAudioSource(AudioSource):
         self._conn = None
         self.server_connected = False
         self._sub_buffer = b''
+        self._jitter_primed = False
         # Drain the queue
         while not self._chunk_queue.empty():
             try:
@@ -1733,8 +1744,16 @@ class RemoteAudioSource(AudioSource):
         if not self.enabled:
             return None, False
 
-        # Skip queue lock entirely when not connected — nothing to drain
+        # Skip queue lock entirely when not connected — nothing to drain.
+        # Un-prime so the next connection starts with a fresh prefill cushion.
         if not self.server_connected and not self._sub_buffer:
+            self._jitter_primed = False
+            return None, False
+
+        # Wait until the jitter buffer is primed before delivering audio.
+        # Single transient underruns (below) emit silence for that tick but
+        # leave _jitter_primed alone — only disconnect re-arms it.
+        if not self._jitter_primed:
             return None, False
 
         cb = self._chunk_bytes

@@ -462,10 +462,15 @@ function startWS() {
   function _drainPCM(output) {
     var w = 0, need = output.length;
     if (!_pcmReady) {
-      if (_pcmTotal < 2400) { for (w = 0; w < need; w++) output[w] = 0; return; }
+      // Prefill 200 ms before starting playback so brief network jitter or
+      // browser scheduler hiccups don't underrun. (Was 50 ms — too tight.)
+      if (_pcmTotal < 9600) { for (w = 0; w < need; w++) output[w] = 0; return; }
       _pcmReady = true;
     }
-    while (_pcmTotal > 9600 && _pcmBuf.length > 1) { _pcmTotal -= _pcmBuf[0].length; _pcmBuf.shift(); _pcmPos = 0; }
+    // Drop oldest chunks only when buffer exceeds 1 s, not 200 ms. The lower
+    // ceiling glitched audibly on any TCP burst or sub-1% AudioContext clock
+    // drift; 1 s rides those out.
+    while (_pcmTotal > 48000 && _pcmBuf.length > 1) { _pcmTotal -= _pcmBuf[0].length; _pcmBuf.shift(); _pcmPos = 0; }
     while (w < need) {
       if (!_pcmBuf.length) { for (; w < need; w++) output[w] = 0; break; }
       var cur = _pcmBuf[0], avail = cur.length - _pcmPos;
@@ -523,7 +528,9 @@ function startWS() {
         } else {
           _pcmBuf.push(float32);
           _pcmTotal += float32.length;
-          while (_pcmBuf.length > 4) { _pcmTotal -= _pcmBuf[0].length; _pcmBuf.shift(); _pcmPos = 0; }
+          // Cap receive-side buffer at ~1 s (20 chunks × ~50 ms). Was 4 chunks
+          // (~200 ms), which dropped audibly on any TCP burst.
+          while (_pcmBuf.length > 20) { _pcmTotal -= _pcmBuf[0].length; _pcmBuf.shift(); _pcmPos = 0; }
         }
       }
     };
@@ -532,7 +539,10 @@ function startWS() {
   }
 
   if (_wsCtx.audioWorklet) {
-    var workletCode = 'class P extends AudioWorkletProcessor{constructor(){super();this.b=[];this.p=0;this.tot=0;this.ready=false;this.port.onmessage=e=>{this.b.push(e.data);this.tot+=e.data.length;if(!this.ready&&this.tot>=2400)this.ready=true;if(this.tot>9600){while(this.tot>2400&&this.b.length>1){this.tot-=this.b[0].length;this.b.shift()}this.p=0}}}process(i,o){var c=o[0][0];if(!c)return true;var n=c.length,w=0;if(!this.ready){for(w=0;w<n;w++)c[w]=0;return true}while(w<n){if(!this.b.length){for(;w<n;w++)c[w]=0;break}var r=this.b[0],a=r.length-this.p,t=Math.min(a,n-w);for(var j=0;j<t;j++)c[w++]=r[this.p++];if(this.p>=r.length){this.b.shift();this.p=0;this.tot-=r.length}}return true}}registerProcessor("p",P)';
+    // Buffer thresholds: prefill 9600 (200 ms) before starting; drop only when
+    // buffer exceeds 48000 (1 s); drain back down to 9600 (200 ms) when over.
+    // Was 50 ms / 200 ms / 50 ms — too tight, audible glitch on any burst.
+    var workletCode = 'class P extends AudioWorkletProcessor{constructor(){super();this.b=[];this.p=0;this.tot=0;this.ready=false;this.port.onmessage=e=>{this.b.push(e.data);this.tot+=e.data.length;if(!this.ready&&this.tot>=9600)this.ready=true;if(this.tot>48000){while(this.tot>9600&&this.b.length>1){this.tot-=this.b[0].length;this.b.shift()}this.p=0}}}process(i,o){var c=o[0][0];if(!c)return true;var n=c.length,w=0;if(!this.ready){for(w=0;w<n;w++)c[w]=0;return true}while(w<n){if(!this.b.length){for(;w<n;w++)c[w]=0;break}var r=this.b[0],a=r.length-this.p,t=Math.min(a,n-w);for(var j=0;j<t;j++)c[w++]=r[this.p++];if(this.p>=r.length){this.b.shift();this.p=0;this.tot-=r.length}}return true}}registerProcessor("p",P)';
     var blob = new Blob([workletCode], {type: 'application/javascript'});
     var blobURL = URL.createObjectURL(blob);
     _wsCtx.audioWorklet.addModule(blobURL).then(function() {
@@ -728,7 +738,11 @@ createPoller('/status', 1000, function(s) {
     _sbOrder = [];
     // Dual-lane bars: each full-duplex radio gets its own RX+TX compound bar.
     _sbUpdateDual('aioc', 'AIOC', s.radio_rx, s.radio_tx, false);
-    if(s.kv4p_enabled) _sbUpdateDual('kv4p', 'KV4P', s.kv4p_level, s.kv4p_tx_level, s.kv4p_muted);
+    // KV4P used to render a bare 'KV4P' bar here from the legacy
+    // aggregate status keys (kv4p_enabled / kv4p_level / kv4p_tx_level /
+    // kv4p_muted). Since kv4p moved to a link endpoint per [kv4p.*]
+    // section, the per-endpoint loop below already renders 'kv4p-v' /
+    // 'kv4p-u' bars — keeping the legacy one made a duplicate row.
     // Single-lane bars for RX-only sources and output sinks.
     if(s.sdr1_enabled) _sbUpdate('sdr1', 'SDR1', s.sdr1_level, 'sb-in', s.sdr1_ducked, false);
     if(s.sdr2_enabled) _sbUpdate('sdr2', 'SDR2', s.sdr2_level, 'sb-in', s.sdr2_ducked, false);
