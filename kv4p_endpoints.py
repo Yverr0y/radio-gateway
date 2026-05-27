@@ -45,6 +45,10 @@ def first_endpoint_name(gw) -> Optional[str]:
 def find_endpoint(gw, instance_or_name):
     """Look up a kv4p endpoint by instance ('vhf'), short name ('kv4p-vhf'),
     or fall back to the first connected one.
+
+    Endpoints register with their trailing 'hf' stripped ('kv4p-v' / 'kv4p-u'),
+    so a caller passing 'vhf' or 'kv4p-vhf' still resolves correctly by
+    trying the stripped form after the literal one.
     """
     if not instance_or_name:
         return first_endpoint(gw)
@@ -54,6 +58,14 @@ def find_endpoint(gw, instance_or_name):
     full = f'{_KV4P_PREFIX}{instance_or_name}'
     if full in eps:
         return eps[full]
+    # Suffix-stripped fallback: 'vhf' → 'v', 'kv4p-vhf' → 'kv4p-v'.
+    if instance_or_name.lower().endswith('hf'):
+        short_inst = instance_or_name[:-2]
+        if short_inst in eps:
+            return eps[short_inst]
+        short_full = f'{_KV4P_PREFIX}{short_inst}'
+        if short_full in eps:
+            return eps[short_full]
     return first_endpoint(gw)
 
 

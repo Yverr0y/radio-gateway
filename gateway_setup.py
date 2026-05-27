@@ -275,7 +275,14 @@ def setup_kv4p_loopback_endpoints(gw):
     for instance, cfg in sections.items():
         if not cfg.get('enable', True):
             continue
-        name = f'kv4p-{instance}'
+        # Display name strips trailing 'hf' from the band suffix so
+        # endpoints register as 'kv4p-v' / 'kv4p-u' instead of the noisier
+        # 'kv4p-vhf' / 'kv4p-uhf'. Config section name + internal source/
+        # sink IDs (kv4p_vhf, kv4p_vhf_tx, JS instance: 'vhf') are
+        # unchanged — this is purely the on-the-wire endpoint name used
+        # by the link server / status UI.
+        suffix = instance[:-2] if instance.lower().endswith('hf') else instance
+        name = f'kv4p-{suffix or instance}'
         port_path = cfg.get('port') or cfg.get('device') or '/dev/ttyUSB0'
 
         # Pass the whole section as JSON so the plugin gets per-instance

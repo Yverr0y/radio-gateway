@@ -346,7 +346,7 @@ def handle_kv4pcmd(handler, parent):
                 from kv4p_endpoints import first_endpoint_name as _firstname
                 name = _firstname(gw)
                 if not name:
-                    name = 'kv4p-vhf'  # default instance name
+                    name = 'kv4p-v'  # default supervisor name (post-rename)
                 if gw.process_supervisor:
                     gw.process_supervisor.restart(name)
                     result = {'ok': True, 'response': f'Restarted endpoint {name}'}
