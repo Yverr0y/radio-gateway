@@ -66,6 +66,12 @@ certs/
 # Audio test files — kept locally but never committed (sensitive content)
 audio/
 
+# Windows audio client diagnostic artifacts
+tx_dump_*.wav
+diag_raw_*.wav
+diag_output.txt
+startup.log
+
 # Chrome Remote Desktop session files (system-generated, not project-related)
 chrome-remote-desktop-existing-session/
 
