@@ -68,7 +68,7 @@ def setup_th9800(gw):
     """
     gw.th9800_plugin = None
     try:
-        from th9800_plugin import TH9800Plugin
+        from plugins.th9800 import TH9800Plugin
         print("Initializing TH-9800 plugin...")
         gw.th9800_plugin = TH9800Plugin()
         if gw.th9800_plugin.setup(gw.config, gateway=gw):

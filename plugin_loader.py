@@ -72,7 +72,14 @@ def discover_plugins(config, gateway):
             if instance.setup(config, gateway=gateway):
                 loaded[plugin_id] = instance
                 name = getattr(instance, 'name', plugin_id)
-                print(f"  [Plugins] {name} loaded from {fname}")
+                caps = getattr(instance, 'CAPABILITIES', None) or set()
+                cap_str = f' [{",".join(sorted(caps))}]' if caps else ''
+                print(f"  [Plugins] {name} loaded from {fname}{cap_str}")
+
+                # Optional: web_routes() — register per-plugin HTTP handlers
+                _register_web_routes(instance, gateway)
+                # Optional: mcp_tools() — register plugin-contributed MCP tools
+                _register_mcp_tools(instance)
             else:
                 print(f"  [Plugins] {plugin_id}: setup() returned False")
         except Exception as e:
@@ -80,3 +87,48 @@ def discover_plugins(config, gateway):
             traceback.print_exc()
 
     return loaded
+
+
+def _register_web_routes(plugin, gateway):
+    """Register HTTP routes contributed by a plugin via its web_routes() hook.
+
+    Stashes them on ``gateway._plugin_web_routes`` as a {path: handler} dict;
+    ``web_server.do_GET`` consults this map before falling through to its
+    own dispatch. Plugin authors don't need to know how the gateway routes
+    requests — they just return ``[(path, handler), ...]``.
+    """
+    from plugins._base import get_web_routes
+    routes = get_web_routes(plugin)
+    if not routes:
+        return
+    target = getattr(gateway, '_plugin_web_routes', None)
+    if target is None:
+        target = {}
+        if gateway is not None:
+            gateway._plugin_web_routes = target
+    for entry in routes:
+        try:
+            path, handler = entry
+        except (TypeError, ValueError):
+            print(f"  [Plugins] {plugin.PLUGIN_ID}: bad web_routes entry: {entry!r}")
+            continue
+        target[path] = handler
+        print(f"    web_route: {path}")
+
+
+def _register_mcp_tools(plugin):
+    """Register MCP tools contributed by a plugin via its mcp_tools() hook.
+
+    The MCP server runs in a separate process (spawned from .mcp.json) so we
+    can't actually hook tools into a running mcp.server here — instead we
+    drop a marker file the MCP entry point reads on startup. For now this
+    just logs what the plugin would contribute so we can wire the mcp_server
+    side in a follow-up.
+    """
+    from plugins._base import get_mcp_tools
+    tools = get_mcp_tools(plugin)
+    if not tools:
+        return
+    for fn in tools:
+        name = getattr(fn, '__name__', '?')
+        print(f"    mcp_tool: {name} (registration deferred — see plan)")

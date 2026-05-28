@@ -31,9 +31,14 @@ If your hardware uses a different format, convert in your plugin.
 ### Step 1: Copy the template
 
 ```bash
-cd ~/Downloads/radio-gateway/plugins
-cp example_radio.py myradio.py
+cd ~/Downloads/radio-gateway
+cp examples/example_plugin/plugin.py plugins/myradio.py
 ```
+
+The formal contract — required methods, optional hooks, capability flags —
+lives in [`plugins/_base.py`](../plugins/_base.py). Read that file for the
+authoritative reference; the example plugin under `examples/example_plugin/`
+satisfies it.
 
 ### Step 2: Edit your plugin
 
@@ -314,4 +319,5 @@ sudo systemctl start radio-endpoint
 | `sdr_plugin.py` | RSPduo SDR | Local | PipeWire + rtl_airband |
 | `gateway_link.py` (AudioPlugin) | Generic sound card | Endpoint | PyAudio/ALSA |
 | `gateway_link.py` (AIOCPlugin) | AIOC + CM108 PTT | Endpoint | PyAudio + HID |
-| `plugins/example_radio.py` | Template | Local | (your hardware) |
+| `examples/example_plugin/plugin.py` | Template | Local | (your hardware) |
+| `plugins/_base.py` | Formal contract reference (Protocol + capability flags + optional hooks) | — | — |

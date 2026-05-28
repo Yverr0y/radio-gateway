@@ -152,18 +152,23 @@ Next: 1.B (web_server split) or 1.A (gateway_core split).
 # PHASE 2 — Real plugin system
 
 ## 2.A — Formalise contract
-- ⬜ 2.A.1 Write `plugins/_base.py` with `RadioPlugin` Protocol
-- ⬜ 2.A.2 Add `CAPABILITIES` set, optional `web_routes()`, `mcp_tools()`, lifecycle hooks
-- ⬜ 2.A.3 Update `plugin_loader.py` to honour optional hooks
-- ⬜ 2.A.4 Update `docs/plugin-development.md`
-- ⬜ 2.A.5 Move `example_radio.py` → `examples/example_plugin/` with working dummy
+- ✅ 2.A.1 `plugins/_base.py` — `RadioPlugin` Protocol (runtime_checkable), CAPABILITY_* constants, optional-hook dispatcher helpers (get_web_routes, get_mcp_tools, fire_bus_attach/detach, fire_ptt_change).
+- ✅ 2.A.2 `CAPABILITIES` set on plugins is canonical. Loader logs the cap set at startup.
+- ✅ 2.A.3 `plugin_loader.py` now honors `web_routes()` (stashed on `gw._plugin_web_routes` dict) and logs `mcp_tools()` (full MCP registration deferred — MCP server is a separate process, needs a marker-file or socket bridge to register dynamically).
+- ✅ 2.A.4 `docs/plugin-development.md` updated to point at the new example location and `plugins/_base.py` as the authoritative contract.
+- ✅ 2.A.5 `plugins/example_radio.py` moved (via `git mv`) to `examples/example_plugin/plugin.py`; added README documenting how to copy + enable + extend.
 
-## 2.B — Migrate KV4P (smallest)
-- ⬜ 2.B.1 Move `kv4p_endpoints.py` → `plugins/kv4p.py`, wrap in class
-- ⬜ 2.B.2 Add `ENABLE_KV4P` config (default true to match current behaviour)
-- ⬜ 2.B.3 Remove direct imports from `gateway_core` ; use `self.plugins.get('kv4p')`
-- ⬜ 2.B.4 **Test:** `/kv4p` page works, routing graph survives restart, MCP `kv4p_*` tools respond
-- ⬜ 2.B.5 Cut a release (v3.9)
+## 2.B — Migrate KV4P (NOT VIABLE — revised target)
+- ❌ Original plan was wrong: `kv4p_endpoints.py` is a dispatcher helper for remote link endpoints, not a gateway-resident plugin. The actual KV4P plugin runs on remote hosts via `tools/link_endpoint.py --plugin kv4p`. There's nothing in `kv4p_endpoints.py` to move into `plugins/`.
+
+## 2.B (revised) — Migrate TH-9800 first
+- ✅ 2.B.1 `git mv th9800_plugin.py → plugins/th9800.py` (history preserved).
+- ✅ 2.B.2 Class metadata added: `PLUGIN_ID = 'th9800'`, `PLUGIN_NAME = 'TH-9800'`, `CAPABILITIES = {AUDIO_RX, AUDIO_TX, PTT, FREQUENCY, STATUS, CAT}`. Legacy `name` and `capabilities` (lowercase dict) kept as a back-compat surface for code that hasn't migrated yet.
+- ✅ 2.B.3 Dropped inheritance from `gateway_link.RadioPlugin` (that base targets remote link-endpoint plugins, not gateway-resident ones). Duck-typed against the Protocol now — `isinstance(plug, RadioPlugin)` returns True.
+- ✅ 2.B.4 `gateway_setup.setup_th9800` now imports `from plugins.th9800 import TH9800Plugin`.
+- ✅ 2.B.5 **Lazy-NameError scan applied** (per Phase 1.A lesson): `dis.get_instructions` walked every LOAD_GLOBAL in every method (including nested code objects) — all resolve to module-scope or builtins. CLEAN.
+- ⏭️ 2.B.6 NOT switching to `plugin_loader.discover_plugins()` yet — that would require adding `ENABLE_TH9800 = True` to every gateway_config.txt in the wild. Holds until Phase 2.D (after SDR + packet are migrated and the loader has more to do).
+- 🟡 2.B.7 **Live restart pending** — file moved + class metadata in place + scan clean. User restart will confirm runtime works on the actual hardware (CAT + AIOC + PTT).
 
 ## 2.C — Migrate TH-9800
 - ⬜ 2.C.1 Move `th9800_plugin.py` → `plugins/th9800.py`

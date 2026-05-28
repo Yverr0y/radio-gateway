@@ -23,12 +23,15 @@ import queue as _queue_mod
 import numpy as np
 
 from audio_util import AudioProcessor, pcm_level, pcm_rms
-from gateway_link import RadioPlugin
 from cat_client import RadioCATClient
 from ptt import RelayController, GPIORelayController
+from plugins._base import (
+    CAPABILITY_AUDIO_RX, CAPABILITY_AUDIO_TX, CAPABILITY_PTT,
+    CAPABILITY_FREQUENCY, CAPABILITY_STATUS, CAPABILITY_CAT,
+)
 
 
-class TH9800Plugin(RadioPlugin):
+class TH9800Plugin:
     """TH-9800 radio plugin — AIOC + CAT + relays.
 
     Audio path:
@@ -39,8 +42,23 @@ class TH9800Plugin(RadioPlugin):
       - 'aioc': AIOC HID GPIO (default) — requires RTS relay switching
       - 'relay': CH340 USB relay module
       - 'software': CAT TCP !ptt command
+
+    Migrated to ``plugins/`` in Phase 2.B. The class is duck-typed against
+    ``plugins._base.RadioPlugin`` — no inheritance from the legacy
+    ``gateway_link.RadioPlugin`` (that base targets link-endpoint plugins
+    running on remote hosts, not gateway-resident plugins).
     """
 
+    # ── New plugin contract metadata ────────────────────────────────
+    PLUGIN_ID = 'th9800'
+    PLUGIN_NAME = 'TH-9800'
+    CAPABILITIES = {
+        CAPABILITY_AUDIO_RX, CAPABILITY_AUDIO_TX, CAPABILITY_PTT,
+        CAPABILITY_FREQUENCY, CAPABILITY_STATUS, CAPABILITY_CAT,
+    }
+
+    # Backward-compat surface for code that still reads ``name`` or
+    # ``capabilities`` (lowercase dict). Drop once all callers migrate.
     name = "th9800"
     capabilities = {
         "audio_rx": True,
@@ -56,7 +74,6 @@ class TH9800Plugin(RadioPlugin):
     }
 
     def __init__(self):
-        super().__init__()
         self._config = None
         self._gateway = None  # reference for VAD, calculate_audio_level, etc.
 
