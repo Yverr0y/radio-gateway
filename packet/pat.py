@@ -14,14 +14,30 @@ import time
 
 
 class _PatMixin:
+    # Cached pat binary path — set on first lookup, reused on every restart.
+    # shutil.which is cheap but not free, and we used to call it on every
+    # _start_pat. Set to '' if pat isn't installed; that suppresses repeated
+    # log noise on hosts that intentionally don't have Pat.
+    _pat_bin_cached = None  # None = not looked up yet, '' = looked up & missing
+
+    def _pat_bin(self):
+        if self._pat_bin_cached is None:
+            import shutil
+            self.__class__._pat_bin_cached = shutil.which('pat') or ''
+        return self._pat_bin_cached or None
+
+    def _supervisor(self):
+        """Return the gateway's ProcessSupervisor, or None if unavailable.
+        Wraps three identical guard branches into one accessor."""
+        return getattr(self._gateway, 'process_supervisor', None) if self._gateway else None
+
     def _start_pat(self):
         """Start Pat Winlink client via the gateway's ProcessSupervisor."""
-        import shutil
-        pat_bin = shutil.which('pat')
+        pat_bin = self._pat_bin()
         if not pat_bin:
             print("  [Packet] Pat not found — install from https://getpat.io/")
             return False
-        sup = getattr(self._gateway, 'process_supervisor', None) if self._gateway else None
+        sup = self._supervisor()
         if not sup:
             print("  [Packet] No process supervisor — cannot start pat")
             return False
@@ -38,7 +54,7 @@ class _PatMixin:
 
     def _stop_pat(self):
         """Stop the supervised pat process (gateway shutdown also reaps it)."""
-        sup = getattr(self._gateway, 'process_supervisor', None) if self._gateway else None
+        sup = self._supervisor()
         if not sup:
             return
         try:
@@ -48,9 +64,10 @@ class _PatMixin:
             pass
         except Exception as e:
             print(f"  [Packet] Pat stop error: {e}")
+
     def _is_pat_running(self):
         """Ask the supervisor whether pat is alive."""
-        sup = getattr(self._gateway, 'process_supervisor', None) if self._gateway else None
+        sup = self._supervisor()
         if not sup:
             return False
         try:

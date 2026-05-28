@@ -202,6 +202,24 @@ User flagged packet as messy across 4 concerns: Direwolf lifecycle, Pat integrat
 - ✅ 2.D.6 **Live restart verified**: Packet plugin initialized, AGWPE proxy listening on 127.0.0.1:8010, callsign + modem + endpoint configured, BusManager wired in.
 - ⏭️ 2.D.7 Migration to `plugins/packet.py` deferred — shape is much improved but the user wants packet's *functionality* sorted before relocating it. Picking through the AGWPE/Pat/mode/endpoint code with that intent comes as a follow-up phase.
 
+## 2.D.cleanup — packet functional pass (no behaviour change for the messy bits, fixes for the clear bugs)
+Triage of the 4 messy areas the user flagged. Fixed everything clearly wrong; documented + skipped two items where a fix would be a guess rather than a verifiable improvement.
+
+**Fixed:**
+- ✅ AGWPE per-frame logging is now `PACKET_AGWPE_TRACE` config-gated. Was unconditional — every 4 KiB chunk got a full stats print, flooding the journal during Pat sessions.
+- ✅ `_proxy_sessions_active` race fixed with `_proxy_sessions_lock` (threading.Lock). Inc/dec previously unsynchronised across the accept loop, session handler, and session-end "restart Direwolf?" check.
+- ✅ `_AGWPE_MAX_SESSIONS = 10` lifted to a class-constants block with `_AGWPE_LOCAL_PORT`, `_AGWPE_REMOTE_PORT`, `_AGWPE_DIREWOLF_WAIT_SECS`, `_AGWPE_FORWARD_BUF`. Hardcoded numbers replaced with the named constants.
+- ✅ `shutil.which('pat')` cached on first lookup via `_pat_bin()`; `''` sentinel means "looked up, missing" so we don't re-scan on every restart.
+- ✅ Three identical `getattr(self._gateway, 'process_supervisor', None)` guards collapsed into `_supervisor()`.
+- ✅ `_set_mode` called `_endpoint_has_local_tnc()` twice, with risk of the answers drifting if the endpoint set changed between calls. Now computed once at the top; `gw_tnc` is bound to None for endpoint-owned TNCs and used as the start/stop handle for gateway-owned ones.
+- ✅ `_KISSMixin._clean_mice_comment` cross-mixin static reference documented with a comment explaining why it's not `self.` (it's a staticmethod).
+
+**Documented + skipped:**
+- ⏭️ **Forced Direwolf restart after every AGWPE session ends** — code comment explained it as "for clean reconnect", which sounds like a workaround for a known fragility. Removing it would need testing of back-to-back Pat sessions on real hardware to verify; can't be done from a refactor pass. Kept the behaviour, replaced the terse comment with one that names the trade-off and points future investigation at it.
+- ⏭️ **Fire-and-forget threading in `_set_mode`** (KISS connect + Pat start) — fixing this means defining a real state machine and a way to surface async failures. Out of scope for the cleanup pass.
+
+Verified: SCAN clean, 42 methods on PacketRadioPlugin (+2 helpers), live restart green, AGWPE proxy listening, plugin initialized.
+
 **Phase 2 acceptance:** all four radios under `plugins/`, adding a fifth requires zero core edits.
 
 ---

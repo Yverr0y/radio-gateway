@@ -413,6 +413,9 @@ class _KISSMixin:
 
         comment = ''
         if len(info_str) > 9:
+            # _clean_mice_comment is a @staticmethod; reach it through the
+            # class (we don't have ``self`` in a staticmethod) — using
+            # _KISSMixin here keeps it correct even if someone subclasses.
             comment = _KISSMixin._clean_mice_comment(info_str[9:])
 
         return lat, lon, symbol, comment
