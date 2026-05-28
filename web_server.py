@@ -702,6 +702,7 @@ class WebConfigServer:
                 '/processes': 'processes.html',
                 '/gdrive': 'gdrive.html',
                 '/manager': 'manager.html',
+                '/grafana': 'grafana.html',
                 '/test': 'test.html',
             }
 
@@ -807,6 +808,10 @@ class WebConfigServer:
                     _rg.handle_adsb_proxy(self, parent)
                 elif self.path == '/pat' or self.path.startswith('/pat/'):
                     _rg.handle_pat_proxy(self, parent)
+                elif self.path.startswith('/grafana/'):
+                    _rg.handle_grafana_proxy(self, parent)
+                elif self.path.startswith('/prometheus/'):
+                    _rg.handle_prometheus_proxy(self, parent)
                 elif self.path == '/config':
                     _rg.handle_config(self, parent)
                 elif self.path == '/routing/status':
@@ -873,6 +878,7 @@ class WebConfigServer:
                 # Route dispatch — handlers in web_routes_post.py
                 import web_routes_post as _rp
                 import web_routes_loop as _rl
+                import web_routes_get as _rg  # proxy handlers reused for POST
 
                 if self.path == '/key':
                     _rp.handle_key(self, parent)
@@ -952,6 +958,10 @@ class WebConfigServer:
                     self.wfile.write(_body)
                 elif self.path == '/pat' or self.path.startswith('/pat/'):
                     _rg.handle_pat_proxy(self, parent)
+                elif self.path.startswith('/grafana/'):
+                    _rg.handle_grafana_proxy(self, parent)
+                elif self.path.startswith('/prometheus/'):
+                    _rg.handle_prometheus_proxy(self, parent)
                 elif self.path.startswith('/packet/'):
                     _rp.handle_packet_cmd(self, parent)
                 elif self.path == '/manager/toggle':

@@ -112,6 +112,23 @@ denoise_apply_ms = Histogram(
 )
 
 
+def _refresh_host_telemetry():
+    """Sample CPU temp + fan RPM lazily on scrape. Cheap (~ms): reads
+    /sys files only. Failure is non-fatal — gauges retain prior value.
+    """
+    try:
+        from transcribe_engine import _host_cpu_temp_c, _host_fan_rpm
+        t = _host_cpu_temp_c()
+        if t is not None:
+            cpu_temp_c.set(t)
+        rpm = _host_fan_rpm()
+        if rpm is not None:
+            fan_rpm.labels(fan='primary').set(rpm)
+    except Exception:
+        pass
+
+
 def render() -> tuple[bytes, str]:
     """Return (body, content_type) for the /metrics endpoint."""
+    _refresh_host_telemetry()
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST

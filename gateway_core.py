@@ -351,6 +351,9 @@ class RadioGateway:
         # Fleet Manager Engine
         self.manager_engine = None  # ManagerEngine instance
 
+        # Alert engine (Prom polling → Telegram)
+        self.alert_engine = None
+
         # Automation Engine
         self.automation_engine = None  # AutomationEngine instance
 
@@ -1274,6 +1277,7 @@ class RadioGateway:
             gs.setup_smart_announce(self)
             gs.setup_web_config(self)
             gs.setup_manager_engine(self)
+            gs.setup_alert_engine(self)
             gs.setup_ddns(self)
             gs.setup_cloudflare_tunnel(self)
             gs.setup_supervised_streamers(self)
@@ -2875,6 +2879,12 @@ class RadioGateway:
         if self.manager_engine:
             try:
                 self.manager_engine.stop()
+            except Exception:
+                pass
+
+        if self.alert_engine:
+            try:
+                self.alert_engine.stop()
             except Exception:
                 pass
 

@@ -938,6 +938,140 @@ def handle_recordingsdownload(handler, parent):
         pass
 
 
+def handle_prometheus_proxy(handler, parent):
+    """GET/POST /prometheus/* — reverse proxy to local Prometheus on :9090.
+
+    Prometheus runs with --web.route-prefix=/prometheus, so it natively
+    expects the prefix and generates correct links. Same rationale as
+    handle_grafana_proxy: same-origin access works over CF tunnel, LAN,
+    and Tailscale without extra port mappings.
+    """
+    import urllib.request as _ureq
+    import urllib.error as _uerr
+    _target = f'http://127.0.0.1:9090{handler.path}'
+
+    class _NoRedirect(_ureq.HTTPRedirectHandler):
+        def http_error_302(self, req, fp, code, msg, hdrs):
+            return fp
+        http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+    _opener = _ureq.build_opener(_NoRedirect)
+
+    try:
+        _content_len = int(handler.headers.get('Content-Length', 0))
+        _body_in = handler.rfile.read(_content_len) if _content_len > 0 else None
+        _method = handler.command or 'GET'
+        _req = _ureq.Request(_target, data=_body_in, method=_method)
+        for _h in ('Accept', 'Accept-Language', 'Accept-Encoding',
+                   'Content-Type', 'Cookie'):
+            _v = handler.headers.get(_h)
+            if _v:
+                _req.add_header(_h, _v)
+        _req.add_header('Accept-Encoding', 'identity')
+        with _opener.open(_req, timeout=15) as _resp:
+            _body = _resp.read()
+            _status = getattr(_resp, 'status', None) or _resp.getcode()
+            handler.send_response(_status)
+            for _hk, _hv in _resp.headers.items():
+                if _hk.lower() in ('transfer-encoding', 'content-encoding',
+                                   'content-length', 'connection'):
+                    continue
+                # Prometheus 3.x redirects /prometheus/ → /query (drops the
+                # prefix). Re-prepend so browsers stay in the subpath.
+                if _hk.lower() == 'location' and _hv.startswith('/') and not _hv.startswith('/prometheus'):
+                    _hv = '/prometheus' + _hv
+                handler.send_header(_hk, _hv)
+            handler.send_header('Content-Length', str(len(_body)))
+            handler.end_headers()
+            handler.wfile.write(_body)
+    except _uerr.HTTPError as _e:
+        try:
+            _body = _e.read() if hasattr(_e, 'read') else b''
+            handler.send_response(_e.code)
+            handler.send_header('Content-Length', str(len(_body)))
+            handler.end_headers()
+            if _body:
+                handler.wfile.write(_body)
+        except BrokenPipeError:
+            pass
+    except Exception:
+        _err = b'<html><body style="background:#1a1a1a;color:#888;text-align:center;padding-top:80px"><h3>Prometheus not running</h3><p>systemctl status prometheus</p></body></html>'
+        try:
+            handler.send_response(503)
+            handler.send_header('Content-Type', 'text/html')
+            handler.send_header('Content-Length', str(len(_err)))
+            handler.end_headers()
+            handler.wfile.write(_err)
+        except BrokenPipeError:
+            pass
+
+
+def handle_grafana_proxy(handler, parent):
+    """GET /grafana/* — reverse proxy to local Grafana on :3000.
+
+    Grafana is configured with `serve_from_sub_path = true` and
+    `root_url = .../grafana/`, so it natively expects the /grafana
+    prefix and generates correct asset URLs. We just forward bytes.
+
+    This lets the embedded dashboard work over Cloudflare-tunnel and
+    any other reverse proxy that only exposes the gateway port — no
+    extra port to publish, no mixed-content problems.
+    """
+    import urllib.request as _ureq
+    import urllib.error as _uerr
+    _target = f'http://127.0.0.1:3000{handler.path}'
+    try:
+        _content_len = int(handler.headers.get('Content-Length', 0))
+        _body_in = handler.rfile.read(_content_len) if _content_len > 0 else None
+        _method = handler.command or 'GET'
+        _req = _ureq.Request(_target, data=_body_in, method=_method)
+        # Deliberately drop Accept-Encoding so the upstream returns plain
+        # bytes — we strip Content-Encoding on the response side and would
+        # otherwise forward gzipped bodies with no encoding header, which
+        # the browser renders as binary garbage.
+        for _h in ('Accept', 'Accept-Language',
+                   'Content-Type', 'Cookie', 'Authorization'):
+            _v = handler.headers.get(_h)
+            if _v:
+                _req.add_header(_h, _v)
+        _req.add_header('Accept-Encoding', 'identity')
+        with _ureq.urlopen(_req, timeout=15) as _resp:
+            _body = _resp.read()
+            handler.send_response(_resp.status)
+            for _hk, _hv in _resp.headers.items():
+                if _hk.lower() in ('transfer-encoding', 'content-encoding',
+                                   'content-length', 'connection'):
+                    continue
+                handler.send_header(_hk, _hv)
+            handler.send_header('Content-Length', str(len(_body)))
+            handler.end_headers()
+            handler.wfile.write(_body)
+    except _uerr.HTTPError as _e:
+        try:
+            _body = _e.read() if hasattr(_e, 'read') else b''
+            handler.send_response(_e.code)
+            for _hk, _hv in (_e.headers.items() if _e.headers else []):
+                if _hk.lower() in ('transfer-encoding', 'content-encoding',
+                                   'content-length', 'connection'):
+                    continue
+                handler.send_header(_hk, _hv)
+            handler.send_header('Content-Length', str(len(_body)))
+            handler.end_headers()
+            if _body:
+                handler.wfile.write(_body)
+        except BrokenPipeError:
+            pass
+    except Exception:
+        _err = b'<html><body style="background:#1a1a1a;color:#888;text-align:center;padding-top:80px"><h3>Grafana not running</h3><p>systemctl status grafana</p></body></html>'
+        try:
+            handler.send_response(503)
+            handler.send_header('Content-Type', 'text/html')
+            handler.send_header('Content-Length', str(len(_err)))
+            handler.end_headers()
+            handler.wfile.write(_err)
+        except BrokenPipeError:
+            pass
+
+
 def handle_pat_proxy(handler, parent):
     """GET /pat or /pat/* — reverse proxy to Pat Winlink web UI."""
     import urllib.request as _ureq

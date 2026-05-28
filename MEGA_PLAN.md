@@ -69,18 +69,20 @@
 **Gotcha caught:** Grafana auto-assigns datasource UID on first provision; if you change the UID later you must wipe `media-stack_grafana_data` volume or Grafana refuses to re-provision (error: "data source not found"). Documented for future config changes.
 
 ## 3.D — Remaining metrics
-- ⬜ 3.D.1 `rg_transcription_dispatched_total{engine}` — counter
-- ⬜ 3.D.2 `rg_stream_reconnects_total{stream}` — counter
-- ⬜ 3.D.3 `rg_link_audio_underruns_total{endpoint}` — counter
-- ⬜ 3.D.4 `rg_cpu_temp_c`, `rg_fan_rpm{fan}` — gauges (reuse transcribe-worker status)
-- ⬜ 3.D.5 `rg_vad_speech_events_total{bus}` — counter
-- ⬜ 3.D.6 `rg_denoise_apply_ms{bus,engine}` — histogram in D13 worker
+- ✅ 3.D.1 `rg_transcription_dispatched_total{engine}` — actually wired in 3.B (transcriber.py finally clause).
+- ✅ 3.D.2 `rg_stream_reconnects_total{stream='broadcastify'}` — incremented in `audio_sources.py` Broadcastify auto-reconnect block.
+- ✅ 3.D.3 `rg_link_audio_underruns_total{endpoint}` — incremented in `audio_sources.LinkAudioSource.get_audio` IndexError path (queue empty post-prime).
+- ✅ 3.D.4 `rg_cpu_temp_c`, `rg_fan_rpm{fan='primary'}` — lazily refreshed by `metrics._refresh_host_telemetry` on each `/metrics` scrape, reusing `transcribe_engine._host_cpu_temp_c` / `_host_fan_rpm`. Standalone check: 51.0°C / 1133 RPM on gateway.
+- ✅ 3.D.5 `rg_vad_speech_events_total{bus}` — incremented in `transcriber._submit_utterance` (label = source_id).
+- ✅ 3.D.6 `rg_denoise_apply_ms{bus,engine}` — histogram observed in `audio_util._dn_worker_loop` around `process_mix`. Added `import time as _time` at module top.
 
 ## 3.E — Alerting + Fleet Manager hook
-- ⬜ 3.E.1 Prometheus alertmanager rules: stream down >2min, link down >1min, worker >85°C, denoise p99 >50ms
-- ⬜ 3.E.2 Alertmanager → Telegram via existing notifier
-- ⬜ 3.E.3 New `hourly.md` task that queries Prometheus for last-10min stream + link health
-- ⬜ 3.E.4 **Test:** stop a link endpoint, confirm alert fires in Telegram within 90s
+- ✅ 3.E.1 In-process `alerts.py` engine — 5 default rules (stream down 2m, link down 1m, CPU >85°C 3m, denoise p99 >50ms 5m, transcription backlog 5m). Picked over alertmanager: same outcome, fewer moving parts. Swap later if rule set grows.
+- ✅ 3.E.2 Engine dispatches via existing Telegram path (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID). RECOVERED notification fires on state transition. Stable per-series state keyed by sorted labels so multi-series rules don't conflate.
+- ✅ 3.E.3 Both `hourly.md` and `daily.md` got a "Prometheus signals (additive)" section. Explicitly NOT replacing log/curl checks — note in doc: "Logs find unanticipated bugs; Prom finds threshold drifts; together they catch more than either alone." Manager is instructed to put Prom numbers into findings.
+- 🟡 3.E.4 Engine smoke-tested standalone against live Prom (5 rules evaluating, no false fires). End-to-end Telegram fire test deferred until next gateway restart and a deliberate trip.
+
+Setup hook: `gateway_setup.setup_alert_engine(gw)` called after `setup_manager_engine` in `gateway_core` init. Stop hook added to teardown. Config keys: `ENABLE_ALERT_ENGINE` (default True), `PROMETHEUS_URL` (default localhost:9090/prometheus), `ALERT_POLL_INTERVAL` (default 30s).
 
 **Phase 3 acceptance:** Grafana dashboard live, six core metrics flowing, one alert end-to-end.
 
@@ -222,3 +224,58 @@
   - Grafana: http://localhost:3000 (admin / radio)
   - Prometheus: http://localhost:9090
 - Next: Phase 3.D (remaining metrics) OR Phase 1 (refactor) — user choice.
+
+## 2026-05-28 — Phase 3.D done (remaining metrics)
+- All 6 remaining metrics wired: stream_reconnects, link_underruns, cpu_temp + fan_rpm, vad_speech_events, denoise_apply_ms.
+- Host telemetry (temp/fan) refreshed lazily on each /metrics scrape — no background thread added.
+- Imports verified clean (`python3 -c "import audio_util, audio_sources, transcriber, metrics"`).
+- **BLOCKED ON USER:** restart gateway to load new instrumentation. Then `curl -s localhost:8080/metrics | grep -E '^rg_(cpu|vad|denoise|stream_reconnects|link_audio_underruns)'` to confirm live.
+- Next: Phase 3.E (alerting + Fleet Manager Prometheus hook) OR Phase 1 (monolith split).
+
+## 2026-05-28 — Gateway-hosted /grafana page
+- User wanted to view dashboard from gateway UI, not a separate port.
+- Grafana: enabled `allow_embedding = true` and `[auth.anonymous] enabled = true` so the iframe needs no login.
+- New `web_pages/grafana.html` iframes `http://{host}:3000/d/radio-gateway/radio-gateway?kiosk=tv` so it works from any host (localhost / Tailscale / LAN).
+- Route `/grafana` added to `web_server.py` static-pages dict.
+- "Metrics" nav entry added to System dropdown in `shell.html` (between Manager and Voice).
+- Page also reachable via `/pages/grafana.html` immediately (no gateway restart needed for that path).
+- Installer updated: section 16 now flips `allow_embedding` + anonymous Viewer in grafana.ini automatically.
+- **Next gateway restart** picks up the `/grafana` short route + nav entry.
+
+## 2026-05-28 — Grafana over Cloudflare-tunnel (same-origin proxy)
+- Symptom: gateway-hosted /grafana page worked on LAN but iframe failed over CF tunnel (CF only proxies port 8080; iframe was loading `http://<cf-host>:3000`, unreachable).
+- Fix: serve Grafana under a subpath via reverse proxy from the gateway itself.
+- Grafana `/etc/grafana.ini`: `root_url = .../grafana/` + `serve_from_sub_path = true`. Verified `http://localhost:3000/grafana/api/health` returns 200.
+- New `handle_grafana_proxy` in `web_routes_get.py` forwards `/grafana/*` to `127.0.0.1:3000/grafana/*`. Pattern lifted from existing `handle_pat_proxy`.
+- Wired in `web_server.py` do_GET and do_POST (Grafana POSTs for queries).
+- `web_pages/grafana.html` iframe now uses same-origin `/grafana/d/...` path — works over any reverse proxy reaching the gateway.
+- Installer captures all four Grafana ini tweaks (allow_embedding, anonymous viewer, root_url, serve_from_sub_path).
+- **Next gateway restart** picks up the proxy route.
+
+## 2026-05-28 — Prometheus same-origin proxy added
+- Symmetry with Grafana: `/prometheus/*` on the gateway now reverse-proxies to local Prometheus.
+- Set `PROMETHEUS_ARGS="--web.external-url=http://localhost:9090/prometheus/ --web.route-prefix=/prometheus"` in `/etc/conf.d/prometheus`. After restart, root /metrics returns 404 (expected — moved to /prometheus/metrics).
+- Grafana datasource URL bumped to `http://localhost:9090/prometheus`. Re-applied + Grafana restarted; query through proxy still returns all 3 endpoints UP.
+- `handle_prometheus_proxy` in `web_routes_get.py` mirrors the Grafana proxy pattern.
+- Wired in `web_server.py` for GET and POST.
+- iframe page's "Prometheus ↗" link now uses `/prometheus/` (same origin) — works over CF tunnel too.
+- Installer writes `/etc/conf.d/prometheus` and the updated datasource URL is provisioned automatically.
+- **Next gateway restart** picks up the new proxy route.
+
+## 2026-05-28 — Prometheus CORS fix
+- Symptom: Prometheus UI loaded via `/prometheus/` over CF tunnel returned cross-origin errors. SPA was firing XHRs to `http://localhost:9090/...`, blocked because the page origin was different.
+- Root cause: `--web.external-url=http://localhost:9090/prometheus/` baked the upstream host into the SPA's API base URL.
+- Fix: drop `--web.external-url` entirely. `--web.route-prefix=/prometheus` is sufficient — the SPA uses relative paths.
+- Installer `PROMETHEUS_ARGS` updated; note added explaining the trap.
+- Verified `curl http://localhost:8080/prometheus/api/v1/query?query=up` returns clean JSON via the gateway proxy.
+
+## Phase 3.D verified live (2026-05-28)
+- After gateway restart, `/metrics` exposes the full 3.D set including `rg_cpu_temp_c`, `rg_fan_rpm`, `rg_denoise_apply_ms_*`, `rg_link_audio_underruns_total`, `rg_vad_speech_events_total` series.
+- Confirmed by inspecting Prometheus's `/api/v1/label/__name__/values` via the proxy.
+
+## 2026-05-28 — Phase 3.E done
+- `alerts.py` polls local Prometheus every 30s, evaluates 5 named rules, fires Telegram on threshold + RECOVERED on state change.
+- User-requested design: manager docs augment (not replace) existing log reads. Both `hourly.md` and `daily.md` now have a Prometheus section with explicit guidance that logs and Prom catch different problems.
+- Smoke: standalone engine eval against live Prom returns 0 firing series across all 5 rules; tracking 7 series total (link endpoints + temp + denoise).
+- **Next gateway restart** loads the engine. Then a manual link endpoint stop should fire `link_endpoint_down` to Telegram within ~90s.
+- Phase 3 complete. Next: Phase 1 (monolith split) — recommended start point.

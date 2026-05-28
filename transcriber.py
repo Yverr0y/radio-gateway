@@ -715,6 +715,11 @@ class RadioTranscriber:
         """Finalize this stream's current utterance and queue it for transcription."""
         stream.vad_open = False
         stream.vad_close_time = 0
+        try:
+            import metrics as _m
+            _m.vad_speech_events_total.labels(bus=source_id).inc()
+        except Exception:
+            pass
         duration = stream.audio_buf_samples / _SILERO_SR
         if duration >= self._min_duration and stream.audio_buf_16k:
             audio_16k = np.concatenate(stream.audio_buf_16k)

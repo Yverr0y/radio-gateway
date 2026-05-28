@@ -6,6 +6,7 @@ across plugins and sources.
 """
 
 import math as _math
+import time as _time
 import numpy as np
 
 # v3.5-B: numba JIT for the noise-gate inner loop. Numba is a transitive
@@ -974,6 +975,7 @@ class AudioProcessor:
                         with self._dn_lock:
                             self._dn_queue_out.append(pcm_data)
                         continue
+                _t0 = _time.monotonic()
                 try:
                     stream.set_atten_lim_db(atten)
                     samples = np.frombuffer(pcm_data, dtype=np.int16)
@@ -989,6 +991,14 @@ class AudioProcessor:
                 except Exception as e:
                     print(f"[DFN] {self.name}: worker process error — {e}")
                     out_bytes = pcm_data
+                try:
+                    import metrics as _m
+                    _m.denoise_apply_ms.labels(
+                        bus=getattr(self, 'name', 'unknown'),
+                        engine=engine or 'unknown',
+                    ).observe((_time.monotonic() - _t0) * 1000.0)
+                except Exception:
+                    pass
                 with self._dn_lock:
                     self._dn_queue_out.append(out_bytes)
         # Shutdown — release the stream.

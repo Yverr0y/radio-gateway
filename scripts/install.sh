@@ -1603,6 +1603,18 @@ if [ "$_obs_ok" = "true" ]; then
     # Prometheus config — scrape localhost:8080/metrics every 15s
     sudo install -m 644 "$GATEWAY_DIR/docs/prometheus/prometheus.yml" /etc/prometheus/prometheus.yml \
         && sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml 2>/dev/null || true
+    # Prometheus subpath for same-origin reverse proxy from the gateway.
+    # The native systemd unit reads PROMETHEUS_ARGS from /etc/conf.d/prometheus.
+    if [ -f /etc/conf.d/prometheus ] || [ -d /etc/conf.d ]; then
+        sudo mkdir -p /etc/conf.d
+        # NOTE: --web.external-url is deliberately NOT set. If it bakes in
+        # an absolute host (e.g. localhost:9090), the Prometheus SPA fires
+        # CORS-blocked XHRs when reached via gateway:8080, Tailscale, or
+        # the CF tunnel. --web.route-prefix alone is enough — the UI uses
+        # relative paths.
+        echo 'PROMETHEUS_ARGS="--web.route-prefix=/prometheus"' \
+            | sudo tee /etc/conf.d/prometheus >/dev/null
+    fi
     # Grafana provisioning (Arch + Debian both ship grafana with
     # provisioning rooted at /var/lib/grafana/conf/provisioning on Arch
     # and /etc/grafana/provisioning on Debian — handle both.)
@@ -1622,6 +1634,19 @@ if [ "$_obs_ok" = "true" ]; then
     [ -f /etc/grafana/grafana.ini ] && _gf_ini=/etc/grafana/grafana.ini
     if [ -f "$_gf_ini" ] && ! sudo grep -q "^admin_password = radio" "$_gf_ini"; then
         sudo sed -i 's/^;\?admin_password = .*/admin_password = radio/' "$_gf_ini"
+    fi
+    # Allow iframe embedding so the gateway's /grafana page can host the
+    # dashboard inline. Enable anonymous Viewer so the iframe doesn't prompt
+    # for login. Safe because Grafana is bound to localhost-reachable routes
+    # only and the data it shows is the same /metrics already exposed.
+    if [ -f "$_gf_ini" ]; then
+        sudo sed -i 's/^;\?allow_embedding = .*/allow_embedding = true/' "$_gf_ini"
+        sudo sed -i '/^\[auth.anonymous\]/,/^\[/{s/^;\?enabled = false/enabled = true/}' "$_gf_ini"
+        # Serve Grafana under /grafana/ so the gateway can reverse-proxy it
+        # from the same origin (works over CF tunnel, Tailscale, LAN, all
+        # without an extra port mapping).
+        sudo sed -i 's|^;\?root_url = .*|root_url = %(protocol)s://%(domain)s/grafana/|' "$_gf_ini"
+        sudo sed -i 's|^;\?serve_from_sub_path = .*|serve_from_sub_path = true|' "$_gf_ini"
     fi
     sudo systemctl enable --now prometheus grafana 2>&1 | grep -v "Created symlink" || true
     echo "  ✓ Prometheus on :9090, Grafana on :3000 (admin / radio)"

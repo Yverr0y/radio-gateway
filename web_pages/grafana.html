@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metrics</title>
+<link rel="stylesheet" href="/pages/common.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: var(--t-bg); }
+  .gf-bar {
+    display: flex; align-items: center; gap: var(--s-3);
+    padding: var(--s-2) var(--s-3);
+    background: var(--t-panel); border-bottom: 1px solid var(--t-border);
+    flex-shrink: 0;
+  }
+  .gf-title { font-size: var(--f-sm); font-weight: 600; color: var(--t-accent); }
+  .gf-hint  { font-size: var(--f-xs); color: var(--t-text-dim); }
+  .gf-spacer { flex: 1; }
+  .gf-link {
+    font-size: var(--f-xs);
+    color: var(--t-text-dim);
+    text-decoration: none;
+    padding: var(--s-1) var(--s-2);
+    border: 1px solid var(--t-border);
+    border-radius: var(--r-sm);
+  }
+  .gf-link:hover { color: var(--t-text); border-color: var(--t-accent); }
+  iframe {
+    flex: 1; width: 100%; border: 0; background: var(--t-bg);
+  }
+  .gf-fallback {
+    padding: var(--s-4); color: var(--t-text-dim);
+    font-size: var(--f-sm); line-height: 1.6;
+  }
+  .gf-fallback code {
+    background: var(--t-panel); padding: 2px 6px; border-radius: 3px;
+    color: var(--t-text);
+  }
+</style>
+</head>
+<body>
+<div class="gf-bar">
+  <span class="gf-title">Metrics</span>
+  <span class="gf-hint">Grafana → Prometheus → /metrics (15 s scrape)</span>
+  <span class="gf-spacer"></span>
+  <a class="gf-link" id="gf-open" href="#" target="_blank">Open Grafana ↗</a>
+  <a class="gf-link" id="gf-prom" href="#" target="_blank">Prometheus ↗</a>
+  <a class="gf-link" href="/metrics" target="_blank">Raw /metrics ↗</a>
+</div>
+<iframe id="gf-frame" src="about:blank"></iframe>
+
+<script>
+(function () {
+  // Same-origin proxy path: /grafana/* on the gateway is reverse-proxied to
+  // local Grafana on :3000. Works over LAN, Tailscale, and Cloudflare
+  // tunnel without any extra port mapping, and no mixed-content from
+  // HTTPS → HTTP because everything goes through the gateway origin.
+  var origin = window.location.origin;
+  var dashUrl = '/grafana/d/radio-gateway/radio-gateway?orgId=1&kiosk=tv&theme=dark&refresh=5s';
+
+  document.getElementById('gf-open').href = '/grafana/d/radio-gateway/radio-gateway?orgId=1';
+  document.getElementById('gf-prom').href = '/prometheus/query';
+
+  var gfBase = origin + '/grafana';
+
+  var frame = document.getElementById('gf-frame');
+  var loaded = false;
+
+  function showFallback() {
+    if (loaded) return;
+    frame.style.display = 'none';
+    if (document.getElementById('gf-fallback-msg')) return;
+    var msg = document.createElement('div');
+    msg.id = 'gf-fallback-msg';
+    msg.className = 'gf-fallback';
+    msg.innerHTML =
+      '<strong>Grafana dashboard is not reachable</strong> at <code>' + gfBase + '</code>.<br><br>' +
+      'On the gateway host: <code>systemctl status grafana</code> and ' +
+      '<code>systemctl status prometheus</code>.<br>' +
+      'Raw metrics are still available at <a href="/metrics">/metrics</a>.';
+    document.body.appendChild(msg);
+  }
+
+  // Browser cross-origin rules forbid fetch(..., {mode: 'cors'}) without
+  // CORS headers from Grafana — that's why a probe is unreliable. Instead,
+  // assume the iframe will load, and only fall back if onload never fires
+  // within a generous window.
+  frame.addEventListener('load', function () { loaded = true; });
+  frame.src = dashUrl;
+  setTimeout(showFallback, 8000);
+})();
+</script>
+</body>
+</html>

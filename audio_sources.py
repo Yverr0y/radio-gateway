@@ -1918,6 +1918,11 @@ class LinkAudioSource(AudioSource):
                 if _st and _st.active:
                     _st.record(f'{self.endpoint_name}_rx', 'get_audio', None,
                                0, 'UNDERRUN')
+                try:
+                    import metrics as _m
+                    _m.link_audio_underruns_total.labels(endpoint=self.endpoint_name).inc()
+                except Exception:
+                    pass
                 return None, False
 
         raw = self._sub_buffer[:cb]
@@ -2618,6 +2623,11 @@ class StreamOutputSource:
                 self._reconnecting = True
                 self._reconnect_count += 1
                 count = self._reconnect_count
+                try:
+                    import metrics as _m
+                    _m.stream_reconnects_total.labels(stream='broadcastify').inc()
+                except Exception:
+                    pass
                 def _auto_reconnect():
                     try:
                         time.sleep(5)

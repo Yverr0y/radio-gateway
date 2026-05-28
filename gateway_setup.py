@@ -604,6 +604,27 @@ def setup_manager_engine(gw):
         print(f"  [Manager] Init error: {e}")
 
 
+def setup_alert_engine(gw):
+    """In-process alert engine — polls local Prometheus, fires Telegram.
+
+    Skipped silently if local Prometheus isn't reachable; the gateway works
+    fine without it, the only loss is alerting (and the Manager docs already
+    cover threshold queries from their side).
+    """
+    if not getattr(gw.config, 'ENABLE_ALERT_ENGINE', True):
+        print(f"  [Alerts] disabled via config")
+        return
+    try:
+        from alerts import AlertEngine
+        prom_url = str(getattr(gw.config, 'PROMETHEUS_URL',
+                               'http://127.0.0.1:9090/prometheus')).strip()
+        poll = int(getattr(gw.config, 'ALERT_POLL_INTERVAL', 30))
+        gw.alert_engine = AlertEngine(gw, prom_url=prom_url, poll_interval=poll)
+        gw.alert_engine.start()
+    except Exception as e:
+        print(f"  [Alerts] Init error: {e}")
+
+
 def setup_ddns(gw):
     if not getattr(gw.config, 'ENABLE_DDNS', False):
         return
