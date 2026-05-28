@@ -599,10 +599,14 @@ def rms_to_level(rms, gain=1.0):
 def update_level(current, new_level, attack=1.0, decay=0.5):
     """Smooth a level value: instant attack, exponential decay.
 
-    Default behaviour (attack=1.0, decay=0.3):
+    Default behaviour (attack=1.0, decay=0.5):
       - If *new_level* > *current*, jump to *new_level* immediately.
       - Otherwise blend: current * (1-decay) + new_level * decay.
     Returns int.
+
+    This is the canonical meter-smoothing entry point. Do not roll your
+    own `prev * X + new * Y` blends in callers — use this so the meter
+    response stays consistent project-wide.
     """
     if new_level > current * attack:
         return int(new_level)

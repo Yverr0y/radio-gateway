@@ -1844,7 +1844,7 @@ class LinkAudioSource(AudioSource):
         self.muted = False
         self.audio_level = 0
         self._audio_level_last_mono = 0.0
-        self._chunk_bytes = int(getattr(config, 'AUDIO_RATE', 48000)) * 2 * int(getattr(config, 'AUDIO_CHANNELS', 1)) // 20  # 50ms
+        self._chunk_bytes = config.AUDIO_CHUNK_SIZE * getattr(config, 'AUDIO_CHANNELS', 1) * 2  # 50 ms, 16-bit
         # Jitter buffer. Single producer (link reader thread → push_audio)
         # and single consumer (bus tick → get_audio). deque's append/popleft
         # are individually atomic under the GIL; compound ops (e.g. len()
@@ -2653,8 +2653,10 @@ class StreamOutputSource:
         silence frames the MP3 encoder keeps producing a constant bitrate
         stream even when the radio is quiet.
         """
-        # 50ms of silence at 48kHz mono 16-bit = 4800 bytes
-        _silence = b'\x00' * 4800
+        # One bus tick of silence — matches the chunk size every other
+        # source produces, so the encoder sees uniform input regardless of
+        # whether real audio or keepalive is flowing.
+        _silence = b'\x00' * self._chunk_bytes
         while True:
             time.sleep(self.SILENCE_INTERVAL)
             if not self.connected or not self._encoder:

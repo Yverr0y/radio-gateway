@@ -844,7 +844,7 @@ def dump_audio_trace(gw, out_path=None):
                         f"min={min(tx_rms_vals):.0f}  max={max(tx_rms_vals):.0f}\n")
             if tx_frames_total > 0:
                 audio_sent = tx_frames_total * 3840
-                audio_in = len(tx_ticks) * 4800
+                audio_in = len(tx_ticks) * gw.config.AUDIO_CHUNK_SIZE * 2
                 sent_pct = audio_sent * 100 // max(1, audio_in)
                 f.write(f"    audio_sent={audio_sent}B ({sent_pct}% of {audio_in}B input)  "
                         f"buf_carry is bytes held across ticks, not dropped\n")

@@ -1102,7 +1102,7 @@ class WebConfigServer:
             t.start()
             # Feed silence when no real audio is arriving — keeps encoder producing output
             def _silence_feed():
-                _silence = b'\x00' * 4800  # 50ms
+                _silence = b'\x00' * (self.config.AUDIO_CHUNK_SIZE * 2)  # 50 ms
                 while proc.poll() is None:
                     time.sleep(0.05)
                     if time.monotonic() - self._last_audio_push > 0.2:
