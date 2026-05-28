@@ -200,6 +200,48 @@ Next: 1.B (web_server split) or 1.A (gateway_core split).
 
 ---
 
+# Lessons learned
+
+## Lazy NameErrors survive AST-level import scans
+Discovered during Phase 1.A. After splitting `gateway_core.py` into mixins,
+the import-time AST scan and a per-module `importlib.import_module` smoke
+returned all-green. The gateway then failed to start on the next restart
+with `NameError: name 'LogWriter' is not defined`, then again with
+`NameError: name '__version__' is not defined` — both raised from inside
+methods that only execute at runtime, not at import.
+
+**Why the scan missed it:** Python resolves bareword names lazily inside
+function bodies, at call time. `import X` checks happen at module load.
+`def foo(): return X` does not check `X` until `foo()` is actually called.
+A method that runs once at startup (like `_LifecycleMixin.run()`) can hide
+unresolved globals through every static check.
+
+**For future refactors that lift methods between modules, do all three:**
+
+1. AST scan for project-level names referenced but not imported (catches
+   the easy cases — names used in module-level statements or expressions).
+2. Per-module `importlib.import_module` (catches syntax + module-load
+   issues — same coverage as the AST scan, basically).
+3. **Runtime exercise of every extracted method, not just import.** For
+   each method, either call it with stub inputs, or — at minimum — run
+   `compile()` on the method body and walk its `co_names` and `co_freevars`
+   to find symbols that will be resolved at call time but aren't in scope.
+
+**Circular import resolution:** the offending names lived in
+`gateway_core.py`, which imports the `core/` package. A top-level
+`from gateway_core import ...` in a `core/*.py` mixin would cycle. The
+fix is a function-local `from gateway_core import LogWriter, __version__`
+inside the method that needs them — Python evaluates it only on first
+call, by which time `gateway_core` is fully loaded.
+
+## Apply this to Phase 2 (plugin migration)
+Each radio plugin will need its own version of this scan. KV4P/TH-9800/SDR
+all access cross-cutting helpers (audio_util, bus_manager, ProcessSupervisor,
+etc.) the same way `gateway_core` did. Don't just AST-scan and ship — also
+run a method-level `co_names` audit before declaring the migration done.
+
+---
+
 # Session log (append-only — record what each work session did)
 
 ## 2026-05-28 — Plan created
