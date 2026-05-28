@@ -787,6 +787,11 @@ class RadioGateway:
         elif self.th9800_plugin:
             self.th9800_plugin.execute({'cmd': 'ptt', 'state': state_on})
         self.ptt_active = state_on
+        try:
+            import metrics as _m
+            _m.bus_ptt_active.labels(bus=tx_radio).set(1 if state_on else 0)
+        except Exception:
+            pass
 
     def _ptt_aioc(self, state_on):
         """PTT via AIOC HID GPIO.

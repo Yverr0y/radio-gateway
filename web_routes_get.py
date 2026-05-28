@@ -19,6 +19,44 @@ def handle_status(handler, parent):
         pass
 
 
+def handle_metrics(handler, parent):
+    """GET /metrics — Prometheus exposition.
+
+    LAN/Tailnet only — never expose via Cloudflare. Auth-style gating
+    relies on the same client_address allowlist used by other diag
+    routes; if that's missing, fall back to RFC1918 + Tailnet check.
+    """
+    addr = handler.client_address[0] if handler.client_address else ''
+    allowed = (
+        addr.startswith('127.') or
+        addr.startswith('192.168.') or
+        addr.startswith('10.') or
+        addr.startswith('100.')  # Tailscale CGNAT range
+    )
+    if not allowed:
+        handler.send_response(403)
+        handler.end_headers()
+        return
+    try:
+        import metrics as _metrics
+        body, ct = _metrics.render()
+        handler.send_response(200)
+        handler.send_header('Content-Type', ct)
+        handler.send_header('Cache-Control', 'no-cache')
+        handler.send_header('Content-Length', str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    except BrokenPipeError:
+        pass
+    except Exception as e:
+        try:
+            handler.send_response(500)
+            handler.end_headers()
+            handler.wfile.write(f'metrics error: {e}'.encode())
+        except Exception:
+            pass
+
+
 def handle_sourcestats(handler, parent):
     """GET /sourcestats — per-source get_audio() timing (v3.5-E.1)."""
     bm = getattr(parent.gateway, 'bus_manager', None) if parent.gateway else None

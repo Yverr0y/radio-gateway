@@ -734,6 +734,8 @@ class WebConfigServer:
 
                 if self.path == '/status':
                     _rg.handle_status(self, parent)
+                elif self.path == '/metrics':
+                    _rg.handle_metrics(self, parent)
                 elif self.path == '/sinkstats':
                     _rg.handle_sinkstats(self, parent)
                 elif self.path == '/sourcestats':

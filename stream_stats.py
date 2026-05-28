@@ -86,6 +86,21 @@ def get_stream_stats(gw):
     if not so or not so.connected:
         return {}
     uptime_s = int(so.uptime)
+    try:
+        import metrics as _m
+        _stream_name = getattr(gw.config, 'STREAM_MOUNT', '') or 'icecast'
+        _cur = int(so._bytes_sent)
+        _prev = getattr(gw, '_metrics_last_bytes_sent', {}).get(_stream_name, 0)
+        # Bytes_sent resets on reconnect; only feed positive deltas.
+        if _cur >= _prev:
+            _delta = _cur - _prev
+            if _delta:
+                _m.stream_bytes_sent_total.labels(stream=_stream_name).inc(_delta)
+        if not hasattr(gw, '_metrics_last_bytes_sent'):
+            gw._metrics_last_bytes_sent = {}
+        gw._metrics_last_bytes_sent[_stream_name] = _cur
+    except Exception:
+        pass
     return {
         'connected': True,
         'uptime': uptime_s,

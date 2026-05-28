@@ -1,0 +1,77 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Bus audio level",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rg_bus_audio_level", "legendFormat": "{{bus}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "PTT activity",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rg_bus_ptt_active", "legendFormat": "{{bus}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"min": 0, "max": 1, "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter", "fillOpacity": 30}}}
+    },
+    {
+      "type": "stat",
+      "title": "Link endpoints up",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rg_link_endpoint_up", "legendFormat": "{{endpoint}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}},
+      "options": {"colorMode": "background", "graphMode": "none"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Stream throughput (kbps)",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rate(rg_stream_bytes_sent_total[1m]) * 8 / 1000", "legendFormat": "{{stream}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "Kbits", "custom": {"drawStyle": "line", "fillOpacity": 20}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Transcription throughput",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "id": 5,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(rg_transcription_dispatched_total[1m]) * 60", "legendFormat": "{{engine}} dispatched/min", "refId": "A"},
+        {"expr": "rg_transcription_inflight", "legendFormat": "{{engine}} inflight", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Transcription latency p95",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "id": 6,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, engine) (rate(rg_transcription_seconds_bucket[5m])))", "legendFormat": "{{engine}} p95", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 10}}}
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["radio-gateway"],
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Radio Gateway",
+  "uid": "radio-gateway",
+  "version": 1
+}

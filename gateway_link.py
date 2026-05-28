@@ -656,6 +656,15 @@ class GatewayLinkServer:
                 print(f"  [Link] Dead peer detected: {name} — {silence:.1f}s silent, closing")
                 self._remove_endpoint(name, reason="dead_peer")
 
+            try:
+                import metrics as _m
+                _dead_names = {n for n, _ in dead}
+                for ep in snapshot:
+                    _m.link_endpoint_up.labels(endpoint=ep.name).set(
+                        0 if ep.name in _dead_names else 1)
+            except Exception:
+                pass
+
 
 # ---------------------------------------------------------------------------
 # mDNS Discovery

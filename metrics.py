@@ -1,0 +1,117 @@
+"""Prometheus metrics for radio-gateway.
+
+Single registry shared across modules. Import the metric objects you
+need; set/observe at the boundary you already have (bus tick, PTT
+transition, transcription completion). Keep instrumentation off the
+audio hot path — sample at coarse boundaries, not inside chunk
+callbacks. Labels stay low-cardinality (bus/engine/endpoint), never
+per-utterance.
+"""
+
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+)
+
+REGISTRY = CollectorRegistry()
+
+bus_audio_level = Gauge(
+    'rg_bus_audio_level',
+    'Per-bus audio level (0.0-1.0, smoothed via audio_util.update_level)',
+    ['bus'],
+    registry=REGISTRY,
+)
+
+bus_ptt_active = Gauge(
+    'rg_bus_ptt_active',
+    'Per-bus PTT state (1=keyed, 0=idle)',
+    ['bus'],
+    registry=REGISTRY,
+)
+
+transcription_inflight = Gauge(
+    'rg_transcription_inflight',
+    'Utterances currently being transcribed, per engine',
+    ['engine'],
+    registry=REGISTRY,
+)
+
+transcription_seconds = Histogram(
+    'rg_transcription_seconds',
+    'Transcription wall time per utterance',
+    ['engine'],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+    registry=REGISTRY,
+)
+
+transcription_dispatched_total = Counter(
+    'rg_transcription_dispatched_total',
+    'Utterances dispatched per engine',
+    ['engine'],
+    registry=REGISTRY,
+)
+
+stream_bytes_sent_total = Counter(
+    'rg_stream_bytes_sent_total',
+    'Bytes sent to each outbound stream (Broadcastify/Icecast)',
+    ['stream'],
+    registry=REGISTRY,
+)
+
+stream_reconnects_total = Counter(
+    'rg_stream_reconnects_total',
+    'Outbound stream reconnect events',
+    ['stream'],
+    registry=REGISTRY,
+)
+
+link_endpoint_up = Gauge(
+    'rg_link_endpoint_up',
+    'Gateway-link endpoint heartbeat state (1=up, 0=down)',
+    ['endpoint'],
+    registry=REGISTRY,
+)
+
+link_audio_underruns_total = Counter(
+    'rg_link_audio_underruns_total',
+    'Link audio jitter-buffer underrun events',
+    ['endpoint'],
+    registry=REGISTRY,
+)
+
+cpu_temp_c = Gauge(
+    'rg_cpu_temp_c',
+    'CPU temperature in Celsius',
+    registry=REGISTRY,
+)
+
+fan_rpm = Gauge(
+    'rg_fan_rpm',
+    'Fan RPM (label identifies which fan)',
+    ['fan'],
+    registry=REGISTRY,
+)
+
+vad_speech_events_total = Counter(
+    'rg_vad_speech_events_total',
+    'Silero VAD speech-segment closures per bus',
+    ['bus'],
+    registry=REGISTRY,
+)
+
+denoise_apply_ms = Histogram(
+    'rg_denoise_apply_ms',
+    'Per-chunk neural-denoise apply time in milliseconds',
+    ['bus', 'engine'],
+    buckets=(0.5, 1, 2.5, 5, 10, 25, 50, 100),
+    registry=REGISTRY,
+)
+
+
+def render() -> tuple[bytes, str]:
+    """Return (body, content_type) for the /metrics endpoint."""
+    return generate_latest(REGISTRY), CONTENT_TYPE_LATEST

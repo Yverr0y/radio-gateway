@@ -948,6 +948,12 @@ class RadioTranscriber:
                     _eng = _pick_worker(self._pool, _item.get('duration', 0.0),
                                         self._split_threshold)
                     _eng._inflight += 1
+                    try:
+                        import metrics as _m
+                        _eng_label = getattr(_eng, 'engine', None) or getattr(_eng, 'url', 'remote')
+                        _m.transcription_inflight.labels(engine=_eng_label).set(_eng._inflight)
+                    except Exception:
+                        pass
                     _fut = _executor.submit(self._run_inference, _eng, _item)
                     _in_flight[_fut] = None
 
@@ -1006,6 +1012,15 @@ class RadioTranscriber:
         finally:
             engine._inflight = max(0, engine._inflight - 1)
             engine._dispatched += 1
+            try:
+                import metrics as _m
+                _eng_label = getattr(engine, 'engine', None) or getattr(engine, 'url', 'remote')
+                _m.transcription_inflight.labels(engine=_eng_label).set(engine._inflight)
+                _m.transcription_dispatched_total.labels(engine=_eng_label).inc()
+                if '_proc_time' in locals():
+                    _m.transcription_seconds.labels(engine=_eng_label).observe(_proc_time)
+            except Exception:
+                pass
 
     def _handle_result(self, stat, result):
         """Store stat, log, forward result. Called from dispatcher thread."""

@@ -1433,6 +1433,17 @@ class BusManager:
             gw.transcription_audio_level = self._meters['transcription']
             gw.remote_audio_tx_level = self._meters['remote_audio_tx']
             gw.nul_audio_level = self._meters['nul']
+            try:
+                import metrics as _m
+                _m.bus_audio_level.labels(bus='stream').set(self._meters['stream_audio'] / 100.0)
+                _m.bus_audio_level.labels(bus='mumble_tx').set(self._meters['mumble_tx'] / 100.0)
+                _m.bus_audio_level.labels(bus='transcription').set(self._meters['transcription'] / 100.0)
+                _m.bus_audio_level.labels(bus='remote_audio_tx').set(self._meters['remote_audio_tx'] / 100.0)
+                _m.bus_audio_level.labels(bus='nul').set(self._meters['nul'] / 100.0)
+                for _eln, _lv in self._link_tx_meters.items():
+                    _m.bus_audio_level.labels(bus=f'link_{_eln}').set(_lv / 100.0)
+            except Exception:
+                pass
             # Reuse the dict in-place so anything holding a reference still works.
             _gw_link_tx = getattr(gw, '_link_tx_levels', None)
             if _gw_link_tx is not None:

@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: radio-gateway
+    static_configs:
+      - targets: ['localhost:8080']
+        labels:
+          instance: gateway
+    metrics_path: /metrics
+
+# transcribe-workers scrape will be enabled once transcribe_worker.py exposes /metrics (Phase 3.D)

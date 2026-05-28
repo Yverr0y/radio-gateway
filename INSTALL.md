@@ -93,7 +93,7 @@ post-install health checks.
 
 ### What the installer does
 
-The script is broken into 15 numbered phases. The main ones:
+The script is broken into 16 numbered phases. The main ones:
 
 1. System packages (`pacman`/`apt`): Python, PortAudio, HIDAPI, FFmpeg, Opus, alsa-utils, tmux, avahi.
 2. ALSA loopback module (`snd-aloop`): persistent load + validation.
@@ -104,7 +104,8 @@ The script is broken into 15 numbered phases. The main ones:
 7. Optional: Darkice, WirePlumber loopback disable, SDRplay stack, Mumble server.
 8. `gateway_config.txt` created from `examples/gateway_config.txt` if missing.
 9. Systemd unit installed: `/etc/systemd/system/radio-gateway.service` with substituted paths.
-10. Post-install health check.
+10. **Observability stack**: native Prometheus + Grafana via `pacman` (Arch) or apt (Debian/Ubuntu, Grafana repo). Prometheus scrapes `localhost:8080/metrics` every 15s; Grafana auto-provisions the **Radio Gateway** dashboard (bus levels, PTT, link endpoints, stream throughput, transcription stats). Defaults: Prometheus at `:9090`, Grafana at `:3000` with `admin / radio`. Change the password from the Grafana UI before exposing beyond LAN.
+11. Post-install health check.
 
 ### After the installer finishes
 

@@ -99,7 +99,7 @@ fi
 echo
 
 # ── 1. System packages ───────────────────────────────────────
-echo "[ 1/15 ] Installing system packages..."
+echo "[ 1/16 ] Installing system packages..."
 if [ "$DISTRO" = "arch" ]; then
     sudo pacman -Sy --noconfirm --needed \
         python \
@@ -172,7 +172,7 @@ fi
 echo
 
 # ── 2. ALSA loopback module ──────────────────────────────────
-echo "[ 2/15 ] Setting up ALSA loopback (for SDR input)..."
+echo "[ 2/16 ] Setting up ALSA loopback (for SDR input)..."
 
 # Write modprobe options first:
 #   enable=1   → enable a single loopback card (used by packet radio + DarkIce)
@@ -248,7 +248,7 @@ echo "$LOOPBACK_LINES" | grep "Loopback" | sed 's/^/    /' || true
 echo
 
 # ── 3. Python packages ───────────────────────────────────────
-echo "[ 3/15 ] Installing Python packages..."
+echo "[ 3/16 ] Installing Python packages..."
 
 # Helper: try --break-system-packages (Debian 12+), then plain pip
 _pip() {
@@ -438,7 +438,7 @@ fi
 echo
 
 # ── 4. UDEV rules for AIOC ──────────────────────────────────
-echo "[ 4/15 ] Setting up UDEV rules for AIOC USB device..."
+echo "[ 4/16 ] Setting up UDEV rules for AIOC USB device..."
 UDEV_RULE='SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="7388", MODE="0666", GROUP="audio"
 SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="7388", MODE="0666", GROUP="audio"
 SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="7388", MODE="0666", GROUP="uucp"'
@@ -660,7 +660,7 @@ fi
 echo
 
 # ── 5. Audio group, realtime limits, and sudoers ─────────────────
-echo "[ 5/15 ] Setting up audio permissions..."
+echo "[ 5/16 ] Setting up audio permissions..."
 set +e   # None of this should abort the install
 
 # Determine the real (non-root) user running this script
@@ -736,7 +736,7 @@ fi
 echo
 
 # ── 6. Darkice (optional — for Broadcastify/Icecast streaming) ───
-echo "[ 6/15 ] Darkice streaming (optional)..."
+echo "[ 6/16 ] Darkice streaming (optional)..."
 set +e
 if [ "$DISTRO" = "arch" ]; then
     if sudo pacman -S --noconfirm --needed lame 2>/dev/null; then
@@ -837,7 +837,7 @@ set -e
 echo
 
 # ── 7. SDR stack (optional — for SDR receiver input via rtl_airband) ──
-echo "[ 7/15 ] Installing SDR receiver stack (optional — for web-controlled SDR input)..."
+echo "[ 7/16 ] Installing SDR receiver stack (optional — for web-controlled SDR input)..."
 set +e
 
 SDR_INSTALLED=false
@@ -1073,7 +1073,7 @@ set -e
 echo
 
 # ── 8. ADS-B stack (optional — dump1090-fa + FlightRadar24 feeder) ─
-echo "[ 8/15 ] Installing ADS-B stack (optional — dump1090-fa + fr24feed)..."
+echo "[ 8/16 ] Installing ADS-B stack (optional — dump1090-fa + fr24feed)..."
 set +e
 
 DUMP1090_PORT=30080   # Avoids conflict with gateway default port 8080
@@ -1331,7 +1331,7 @@ set -e
 echo
 
 # ── 9. Mumble GUI client ─────────────────────────────────────
-echo "[ 9/15 ] Installing Mumble client..."
+echo "[ 9/16 ] Installing Mumble client..."
 set +e
 if [ "$DISTRO" = "arch" ]; then
     sudo pacman -S --noconfirm --needed mumble 2>/dev/null
@@ -1347,7 +1347,7 @@ set -e
 echo
 
 # ── 10. Mumble server (murmurd) ──────────────────────────────
-echo "[ 10/15 ] Installing Mumble server (optional — for local server instances)..."
+echo "[ 10/16 ] Installing Mumble server (optional — for local server instances)..."
 set +e
 if [ "$DISTRO" = "arch" ]; then
     if sudo pacman -S --noconfirm --needed mumble-server 2>/dev/null; then
@@ -1396,7 +1396,7 @@ set -e
 echo
 
 # ── 11. OpenSSL TLS compatibility (for older Mumble servers) ─
-echo "[ 11/15 ] Configuring OpenSSL for TLS 1.0 compatibility..."
+echo "[ 11/16 ] Configuring OpenSSL for TLS 1.0 compatibility..."
 OPENSSL_CNF="/etc/ssl/openssl.cnf"
 if [ -f "$OPENSSL_CNF" ]; then
     # Check if already patched
@@ -1425,7 +1425,7 @@ fi
 echo
 
 # ── 12. Gateway configuration ────────────────────────────────
-echo "[ 12/15 ] Setting up configuration..."
+echo "[ 12/16 ] Setting up configuration..."
 
 CONFIG_DEST="$GATEWAY_DIR/gateway_config.txt"
 CONFIG_SRC="$GATEWAY_DIR/examples/gateway_config.txt"
@@ -1447,7 +1447,7 @@ echo "  ✓ audio/ directory ready (place announcement files here)"
 echo
 
 # ── 13. Make scripts executable ──────────────────────────────
-echo "[ 13/15 ] Setting permissions..."
+echo "[ 13/16 ] Setting permissions..."
 chmod +x "$GATEWAY_DIR/radio_gateway.py" 2>/dev/null || true
 chmod +x "$GATEWAY_DIR/scripts/"*.sh 2>/dev/null || true
 chmod +x "$GATEWAY_DIR/scripts/install.sh" 2>/dev/null || true
@@ -1455,7 +1455,7 @@ echo "  ✓ Scripts are executable"
 echo
 
 # ── 14. Systemd service ──────────────────────────────────────
-echo "[ 14/15 ] Installing systemd service..."
+echo "[ 14/16 ] Installing systemd service..."
 ACTUAL_USER=${SUDO_USER:-$USER}
 ACTUAL_HOME=$(eval echo "~$ACTUAL_USER")
 ACTUAL_UID=$(id -u "$ACTUAL_USER")
@@ -1540,7 +1540,7 @@ rm -f /tmp/_sudoers_gw
 echo
 
 # ── 15. Desktop shortcuts ────────────────────────────────────
-echo "[ 15/15 ] Creating desktop shortcuts..."
+echo "[ 15/16 ] Creating desktop shortcuts..."
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 if [ -d "$DESKTOP_DIR" ] || mkdir -p "$DESKTOP_DIR" 2>/dev/null; then
     # Remove old manual-launch shortcut (replaced by systemd service shortcuts)
@@ -1567,6 +1567,64 @@ if [ -d "$DESKTOP_DIR" ] || mkdir -p "$DESKTOP_DIR" 2>/dev/null; then
     fi
 else
     echo "  ⚠ Desktop directory not found (skipping shortcuts)"
+fi
+echo
+
+# ── 16. Observability stack (Prometheus + Grafana) ───────────
+# Local-only TSDB + dashboard. Scrapes the gateway's /metrics endpoint,
+# stores 30 days of history, exposes the Radio Gateway dashboard at
+# http://localhost:3000 (admin / radio). Native packages on Arch;
+# best-effort on Debian/Ubuntu — Grafana's own repo is required there.
+echo "[ 16/16 ] Installing observability stack (Prometheus + Grafana)..."
+_obs_ok=true
+if [ "$DISTRO" = "arch" ]; then
+    sudo pacman -S --noconfirm --needed prometheus grafana \
+        || { echo "  ⚠ pacman failed to install prometheus/grafana — observability stack skipped"; _obs_ok=false; }
+else
+    # Debian/Ubuntu: prometheus is in main; grafana needs the upstream repo.
+    sudo apt-get install -y prometheus 2>/dev/null \
+        || { echo "  ⚠ apt install prometheus failed"; _obs_ok=false; }
+    if ! command -v grafana-server >/dev/null && ! command -v grafana >/dev/null; then
+        set +e
+        if curl -fsSL https://apt.grafana.com/gpg.key | sudo tee /usr/share/keyrings/grafana.gpg >/dev/null 2>&1 \
+           && echo "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list >/dev/null 2>&1 \
+           && sudo apt-get update -qq 2>/dev/null \
+           && sudo apt-get install -y grafana 2>/dev/null; then
+            echo "  ✓ grafana installed (upstream repo)"
+        else
+            echo "  ⚠ grafana install failed — skipping observability stack"
+            _obs_ok=false
+        fi
+        set -e
+    fi
+fi
+
+if [ "$_obs_ok" = "true" ]; then
+    # Prometheus config — scrape localhost:8080/metrics every 15s
+    sudo install -m 644 "$GATEWAY_DIR/docs/prometheus/prometheus.yml" /etc/prometheus/prometheus.yml \
+        && sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml 2>/dev/null || true
+    # Grafana provisioning (Arch + Debian both ship grafana with
+    # provisioning rooted at /var/lib/grafana/conf/provisioning on Arch
+    # and /etc/grafana/provisioning on Debian — handle both.)
+    if [ -d /etc/grafana/provisioning ]; then
+        _gf_prov=/etc/grafana/provisioning
+        _gf_dash=/var/lib/grafana/dashboards
+    else
+        _gf_prov=/var/lib/grafana/conf/provisioning
+        _gf_dash=/var/lib/grafana/dashboards
+    fi
+    sudo install -d -o grafana -g grafana "$_gf_prov/datasources" "$_gf_prov/dashboards" "$_gf_dash"
+    sudo install -m 644 -o grafana -g grafana "$GATEWAY_DIR/docs/grafana/provisioning/datasources/prometheus.yml" "$_gf_prov/datasources/"
+    sudo install -m 644 -o grafana -g grafana "$GATEWAY_DIR/docs/grafana/provisioning/dashboards/dashboards.yml" "$_gf_prov/dashboards/"
+    sudo install -m 644 -o grafana -g grafana "$GATEWAY_DIR/docs/grafana/dashboards/radio-gateway.json" "$_gf_dash/"
+    # Default admin password — change later via Grafana UI if exposed beyond LAN.
+    _gf_ini=/etc/grafana.ini
+    [ -f /etc/grafana/grafana.ini ] && _gf_ini=/etc/grafana/grafana.ini
+    if [ -f "$_gf_ini" ] && ! sudo grep -q "^admin_password = radio" "$_gf_ini"; then
+        sudo sed -i 's/^;\?admin_password = .*/admin_password = radio/' "$_gf_ini"
+    fi
+    sudo systemctl enable --now prometheus grafana 2>&1 | grep -v "Created symlink" || true
+    echo "  ✓ Prometheus on :9090, Grafana on :3000 (admin / radio)"
 fi
 echo
 
@@ -1657,6 +1715,18 @@ if ! python3 -c "import pymumble_py3" 2>/dev/null && ! python3 -c "import pymumb
     _hc_fail "pymumble not importable — gateway cannot connect to Mumble"
 fi
 
+# Observability stack
+if systemctl is-active --quiet prometheus 2>/dev/null; then
+    _hc_pass "prometheus is active on :9090"
+else
+    _hc_warn "prometheus is not running — observability disabled"
+fi
+if systemctl is-active --quiet grafana 2>/dev/null; then
+    _hc_pass "grafana is active on :3000 (admin / radio)"
+else
+    _hc_warn "grafana is not running — dashboard unavailable"
+fi
+
 echo "============================================================"
 echo
 
@@ -1679,6 +1749,11 @@ echo "  2. If using Broadcastify streaming, edit /etc/darkice.cfg:"
 echo "       password  = YOUR_STREAM_PASSWORD"
 echo "       mountPoint = YOUR_STREAM_KEY"
 echo "       device    = hw:<card>,1,0  (check: aplay -l | grep Loopback)"
+echo
+echo "  2b. Grafana dashboard:"
+echo "       Open  http://localhost:3000  (admin / radio)"
+echo "       Dashboard auto-provisioned: 'Radio Gateway'"
+echo "       Change the admin password from the Grafana UI before exposing beyond LAN."
 echo
 echo "  3. Connect your AIOC USB device and/or KV4P HT"
 echo "     (unplug and replug after install so udev rules take effect)"
