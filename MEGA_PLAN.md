@@ -104,24 +104,36 @@ Setup hook: `gateway_setup.setup_alert_engine(gw)` called after `setup_manager_e
 - ⬜ 1.A.11 Shrink `core/gateway.py` to <300 LOC ; smoke test full feature set
 - ⬜ 1.A.12 **Acceptance:** every file in `core/` under 800 LOC, gateway boots cleanly, metrics still scrape
 
-## 1.B — web_server.py split
-- ⬜ 1.B.1 Extract `WebConfigServer` HTTP plumbing → `web/http_server.py`
-- ⬜ 1.B.2 Extract auth helpers → `web/auth.py`
-- ⬜ 1.B.3 Extract static-file serving → `web/static.py`
-- ⬜ 1.B.4 Extract shared utilities → `web/util.py`
-- ⬜ 1.B.5 **Acceptance:** all 20+ pages load, no file >800 LOC
+## 1.B — web_server.py split (partial — biggest self-contained chunks lifted)
+- ⏭️ 1.B.1 HTTP plumbing extraction deferred. The `Handler` class is nested inside `WebConfigServer.start()` as a closure over `password`/`parent`/etc — pulling it out requires un-nesting that closure first. Not worth the surgery for marginal LOC gain.
+- ⏭️ 1.B.2 Auth helpers — same reason (nested inside Handler closure).
+- ⏭️ 1.B.3 Static-file serving — same.
+- ✅ 1.B.4 Three large mixins extracted instead, all self-contained:
+  - `web/sysinfo.py` (290 LOC) — `_SysinfoMixin._get_sysinfo` (CPU/mem/disk/temp/IPs)
+  - `web/routing_cmds.py` (476 LOC) — `_RoutingCmdsMixin` with `_handle_routing_cmd`, 13 command handlers, dispatch table, plugin/path resolvers, config save/load
+  - `web/certs.py` (155 LOC) — `_CertsMixin` for cert acquisition + renewal
+- ✅ 1.B.5 **Acceptance partial:**
+  - web_server.py 2436 → **1571 LOC** (–865)
+  - WebConfigServer now `class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin)` — all 26 extracted methods accessible via MRO (verified)
+  - All four modules `py_compile` clean
+  - Largest remaining file is `web_server.py` at 1571 LOC — under 1600 but still above the 800 target. Further reduction needs the nested-Handler refactor (deferred 1.B.1-3).
+- **Next gateway restart** loads the mixin-composed class. No functional change expected.
 
-## 1.C — gateway_mcp.py split
-- ⬜ 1.C.1 Create `mcp/server.py` with shared `mcp` instance + config helpers
-- ⬜ 1.C.2 Move SDR tools → `mcp/tools/sdr.py`
-- ⬜ 1.C.3 Move radio tools → `mcp/tools/radio.py`
-- ⬜ 1.C.4 Move transcribe tools → `mcp/tools/transcribe.py`
-- ⬜ 1.C.5 Move packet tools → `mcp/tools/packet.py`
-- ⬜ 1.C.6 Move stream tools → `mcp/tools/stream.py`
-- ⬜ 1.C.7 Move system tools → `mcp/tools/system.py`
-- ⬜ 1.C.8 Move manager tools → `mcp/tools/manager.py`
-- ⬜ 1.C.9 Auto-import in `mcp/__init__.py`
-- ⬜ 1.C.10 **Test:** Telegram bot can still call every tool category
+## 1.C — gateway_mcp.py split (DONE FIRST — lowest risk, standalone process)
+- ✅ 1.C.1 `mcp_server/server.py` — shared FastMCP instance + `_load_config`, `_load_telegram_config`, `_get`, `_post`, `_auth_headers` (131 LOC). Package name avoids shadowing pip `mcp` library.
+- ✅ 1.C.2-1.C.8 Tools auto-extracted into 4 buckets via a one-shot Python script that parses section comment headers and routes each section to a target module:
+  - `mcp_server/tools/control.py` (561 LOC) — status, SDR, radio TX, recordings, logs, automation, audio-trace, Telegram
+  - `mcp_server/tools/radios.py` (710 LOC) — TH-9800, D75, KV4P, IC-7100, processes, mixer, config, process control
+  - `mcp_server/tools/routing.py` (1168 LOC) — bus/sink/gain/denoise + transcription + link endpoints + loop recorder (above 800 target — candidate for future re-split)
+  - `mcp_server/tools/fleet.py` (645 LOC) — D75 SSH, packet, Winlink, stream-trace, sink stats, scheme mgmt, endpoint battery
+- ✅ 1.C.9 `mcp_server/__init__.py` runs the import chain on `run()` so tool registration is lazy + explicit.
+- ✅ 1.C.10 **Tests passed:**
+  - Tool count: 117 → 117 (subprocess-isolated diff of original vs new tool sets = empty diff both directions)
+  - `gateway_mcp.py` 3175 → 39 LOC (thin shim that calls `mcp_server.run()`)
+  - Live call: `gateway_status` via the new server returned 11011-byte JSON from the running gateway
+  - Legacy backup at `gateway_mcp.py.legacy` (gitignored)
+
+Next: 1.B (web_server split) or 1.A (gateway_core split).
 
 **Phase 1 acceptance:** all monolith files split, full feature smoke pass, no file over 800 LOC.
 

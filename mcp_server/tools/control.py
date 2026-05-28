@@ -1,0 +1,561 @@
+"""Auto-extracted from gateway_mcp.py — tools registered against the shared
+``mcp`` instance via @mcp.tool() decorator side effects on import.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL
+
+
+# ---------------------------------------------------------------------------
+# Tools — Status
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def gateway_status() -> str:
+    """
+    Get full gateway status: audio mixer state, connected radios, SDR receivers,
+    Broadcastify stream health, active PTT, recording state, and duck/hold flags.
+    This is the primary overview tool — call it first when diagnosing issues.
+    """
+    data = _get('/status')
+    if 'error' in data and not data.get('ok', True):
+        return f"Error reaching gateway: {data['error']}"
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def sdr_status() -> str:
+    """
+    Get SDR receiver status: whether rtl_airband is running, each channel's
+    frequency and audio level, queue depth, and any error state.
+    """
+    return json.dumps(_get('/sdrstatus'), indent=2)
+
+
+@mcp.tool()
+def cat_status() -> str:
+    """
+    Get CAT (Computer-Aided Transceiver) radio status for the TH-9800 main radio:
+    connected flag, current frequency, mode, VFO state, and serial link health.
+    """
+    return json.dumps(_get('/catstatus'), indent=2)
+
+
+@mcp.tool()
+def system_info() -> str:
+    """
+    Get host system info: CPU usage, memory, disk space, CPU temperature,
+    and running service states (rtl_airband, liquidsoap, etc.).
+    """
+    return json.dumps(_get('/sysinfo'), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — SDR control
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def sdr_tune(
+    freq_mhz: float,
+    channel: int = 1,
+    squelch_db: float | None = None,
+) -> str:
+    """
+    Retune an SDR receiver channel to a new frequency.  Restarts tuners (~8-12s).
+
+    In dual mode: channel 1 or 2 tunes the corresponding tuner.
+    In single mode: channel number is the 1-based index in the channel list.
+
+    Args:
+        freq_mhz:    Frequency in MHz (e.g. 118.1 for aircraft, 162.55 for NOAA weather).
+        channel:     SDR channel number — 1 or 2 in dual mode, 1-8 in single mode (default 1).
+        squelch_db:  Optional squelch threshold in dBFS (negative, e.g. -40.0).
+                     Omit to keep current squelch.
+    """
+    # Check current mode
+    status = _get('/sdrstatus')
+    mode = status.get('sdr_mode', 'dual')
+
+    if mode == 'single':
+        channels = status.get('single_channels', [])
+        idx = channel - 1
+        if idx < 0 or idx >= len(channels):
+            return json.dumps({'ok': False, 'error': f'Channel {channel} not found (have {len(channels)} channels)'})
+        payload: dict = {'cmd': 'single_update_channel', 'index': idx, 'freq': freq_mhz}
+        if squelch_db is not None:
+            payload['squelch_threshold'] = int(squelch_db)
+        result = _post('/sdrcmd', payload, timeout=20)
+    else:
+        freq_key = 'frequency' if channel == 1 else 'frequency2'
+        squelch_key = 'squelch_threshold' if channel == 1 else 'squelch_threshold2'
+        payload = {'cmd': 'tune', freq_key: freq_mhz}
+        if squelch_db is not None:
+            payload[squelch_key] = squelch_db
+        result = _post('/sdrcmd', payload, timeout=20)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def sdr_set_mode(mode: str) -> str:
+    """
+    Switch SDR between dual-tuner and single-tuner mode.
+
+    Dual mode: two independent tuners (master/slave), higher CPU, independent frequencies.
+    Single mode: one tuner with multiple demodulated channels, lower CPU, frequencies
+    must fit within the selected sample rate bandwidth.
+
+    Args:
+        mode: 'dual' for master/slave dual tuner, 'single' for one tuner with multiple channels.
+    """
+    result = _post('/sdrcmd', {'cmd': 'set_mode', 'mode': mode}, timeout=25)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def sdr_single_tune(
+    centerfreq: float | None = None,
+    sample_rate: float | None = None,
+    channels: list | None = None,
+) -> str:
+    """
+    Update single-mode SDR settings and restart. Only applies when SDR is in single mode.
+
+    Args:
+        centerfreq:   Center frequency in MHz (e.g. 446.70)
+        sample_rate:  Sample rate / bandwidth in MHz (e.g. 0.5, 1.0, 2.0)
+        channels:     List of channel dicts, each with 'freq' (MHz), 'modulation' ('nfm'/'am'),
+                      'squelch_threshold' (dBFS, e.g. -26), and optional 'label'.
+                      Example: [{"freq": 446.76, "modulation": "nfm", "squelch_threshold": -26, "label": "PMR 1"}]
+    """
+    payload: dict = {'cmd': 'single_tune'}
+    if centerfreq is not None:
+        payload['centerfreq'] = centerfreq
+    if sample_rate is not None:
+        payload['sample_rate'] = sample_rate
+    if channels is not None:
+        payload['channels'] = channels
+    result = _post('/sdrcmd', payload, timeout=20)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def sdr_add_channel(
+    freq: float,
+    modulation: str = "nfm",
+    squelch_db: int = -26,
+    label: str = "",
+) -> str:
+    """
+    Add a channel to single-mode SDR. Restarts the tuner.
+
+    Args:
+        freq:        Frequency in MHz (must fit within current bandwidth)
+        modulation:  'nfm' or 'am' (default 'nfm')
+        squelch_db:  Squelch threshold in dBFS (default -26)
+        label:       Display label for the channel
+    """
+    payload: dict = {
+        'cmd': 'single_add_channel',
+        'freq': freq,
+        'modulation': modulation,
+        'squelch_threshold': squelch_db,
+        'label': label,
+    }
+    result = _post('/sdrcmd', payload, timeout=20)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def sdr_remove_channel(index: int) -> str:
+    """
+    Remove a channel from single-mode SDR by index (0-based). Restarts the tuner.
+
+    Args:
+        index: Channel index to remove (0 = first channel). Use sdr_status to see channels.
+    """
+    result = _post('/sdrcmd', {'cmd': 'single_remove_channel', 'index': index}, timeout=20)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def sdr_restart() -> str:
+    """
+    Restart the rtl_airband SDR decoder process.  Use when SDR status shows
+    STOPPED or audio has dropped out.  Restarts the sdrplay systemd service
+    and relaunches rtl_airband.
+    """
+    result = _post('/sdrcmd', {'cmd': 'restart'}, timeout=20)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def sdr_stop() -> str:
+    """
+    Stop the rtl_airband SDR decoder process without restarting it.
+    """
+    result = _post('/sdrcmd', {'cmd': 'stop'})
+    return json.dumps(result, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Radio TX
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def radio_ptt(on: bool) -> str:
+    """
+    Key (on=True) or unkey (on=False) the transmitter.  Uses the currently
+    configured TX radio and PTT method (AIOC, relay, or software).
+
+    IMPORTANT: Always call radio_ptt(False) after transmitting to unkey the radio.
+    """
+    key_char = 'k' if on else 'u'
+    result = _post('/key', {'key': key_char})
+    state = 'ON (transmitting)' if on else 'OFF (receive)'
+    if result.get('ok'):
+        return f"PTT {state}"
+    return f"PTT command failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def radio_tts(
+    text: str,
+    voice: int = 1,
+) -> str:
+    """
+    Speak text over the air using text-to-speech synthesis.
+    The gateway keys the radio, plays the TTS audio, then unkeys automatically.
+
+    Args:
+        text:   Text to speak over the air (max ~200 words recommended).
+        voice:  TTS voice number (1=default male, 2=female, etc. — depends on
+                available voices; use 1 if unsure).
+    """
+    if not text.strip():
+        return 'Error: text cannot be empty'
+    result = _post('/tts', {'text': text, 'voice': voice})
+    if result.get('ok'):
+        return f'TTS queued: "{text[:60]}{"..." if len(text) > 60 else ""}"'
+    return f"TTS failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def radio_cw(
+    text: str,
+    wpm: int = 20,
+    freq_hz: int = 700,
+    volume: float = 1.0,
+) -> str:
+    """
+    Send Morse code (CW) over the air.  The gateway keys the radio, plays the
+    CW tones, then unkeys automatically.
+
+    Args:
+        text:     Text to encode as Morse code (letters, numbers, punctuation).
+        wpm:      Words per minute — typical range 10-25 (default 20).
+        freq_hz:  CW tone frequency in Hz (default 700 Hz).
+        volume:   Volume multiplier 0.0-1.0 (default 1.0 = full volume).
+    """
+    if not text.strip():
+        return 'Error: text cannot be empty'
+    result = _post('/cw', {
+        'text': text,
+        'wpm': wpm,
+        'freq': freq_hz,
+        'vol': volume,
+    })
+    if result.get('ok'):
+        return f'CW queued: "{text}" at {wpm} WPM, {freq_hz} Hz'
+    return f"CW failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def radio_ai_announce(
+    prompt: str,
+    target_secs: int = 30,
+    voice: int = 1,
+    top_text: str = 'QST',
+    tail_text: str = '',
+) -> str:
+    """
+    Generate and transmit an AI-written radio announcement.  The gateway sends
+    the prompt to the configured AI engine, synthesizes the result as TTS, and
+    transmits it with optional callsign/identifier text.
+
+    Args:
+        prompt:      Natural-language description of what to announce
+                     (e.g. "current weather conditions are foggy with low visibility").
+        target_secs: Target duration in seconds (5-120, default 30).
+        voice:       TTS voice number (default 1).
+        top_text:    Text spoken/displayed at the start (default 'QST').
+        tail_text:   Text spoken/displayed at the end (e.g. callsign).
+    """
+    if not prompt.strip():
+        return 'Error: prompt cannot be empty'
+    result = _post('/aitext', {
+        'text': prompt,
+        'target_secs': max(5, min(120, target_secs)),
+        'voice': voice,
+        'top_text': top_text,
+        'tail_text': tail_text,
+    })
+    if result.get('ok'):
+        return f'AI announcement queued: "{prompt[:80]}{"..." if len(prompt) > 80 else ""}"'
+    return f"AI announce failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def radio_set_tx(radio: str) -> str:
+    """
+    Select which radio is used for transmit.
+
+    Args:
+        radio: Radio identifier — 'th9800', 'kv4p', or any link endpoint
+               source_id (e.g. 'd75_pi', 'ftm_150', 'celeron_aioc').
+    """
+    radio = radio.lower().strip()
+    result = _post('/catcmd', {'cmd': 'SET_TX_RADIO', 'radio': radio})
+    if result.get('ok'):
+        return f"TX radio set to: {radio}"
+    return f"Failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def radio_get_tx() -> str:
+    """
+    Get the currently selected TX radio (th9800, d75, or kv4p).
+    """
+    result = _post('/catcmd', {'cmd': 'GET_TX_RADIO'})
+    if result.get('ok'):
+        return f"Current TX radio: {result.get('radio', 'unknown')}"
+    return f"Failed: {result.get('error', 'unknown error')}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Recordings
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def recordings_list() -> str:
+    """
+    List all saved audio recordings.  Returns filename, size, frequency,
+    date/time, and label for each recording.  Recordings are WAV files
+    saved by the automation engine.
+    """
+    files = _get('/recordingslist')
+    if isinstance(files, dict) and 'error' in files:
+        return f"Error: {files['error']}"
+    if not files:
+        return 'No recordings found.'
+    lines = [f"{'Filename':<50} {'Size':>8}  {'Freq':>8}  Date       Time"]
+    lines.append('-' * 90)
+    for f in files:
+        size_kb = f.get('size', 0) // 1024
+        lines.append(
+            f"{f.get('name', ''):<50} {size_kb:>7}K  "
+            f"{f.get('freq', ''):>8}  "
+            f"{f.get('date', ''):10} {f.get('time', '')}"
+        )
+    return '\n'.join(lines)
+
+
+@mcp.tool()
+def recordings_delete(filename: str) -> str:
+    """
+    Delete a recording file by filename (basename only, no path).
+    Get the filename from recordings_list first.
+
+    Args:
+        filename: Exact filename as returned by recordings_list
+                  (e.g. "SDR_118.100MHz_2025-01-15_14-30-00.wav").
+    """
+    if not filename or '/' in filename or '..' in filename:
+        return 'Error: invalid filename'
+    result = _post('/recordingsdelete', {'files': [filename]})
+    if result.get('ok'):
+        return f"Deleted: {filename}"
+    return f"Delete failed: {result.get('error', 'unknown error')}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Logs
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def gateway_logs(lines: int = 50) -> str:
+    """
+    Retrieve recent gateway log lines (console output).  Useful for diagnosing
+    errors, checking connection state, or seeing what the gateway is doing.
+
+    Args:
+        lines: Number of recent log lines to return (default 50, max 500).
+    """
+    lines = max(1, min(500, lines))
+    data = _get(f'/logdata?after=0')
+    if 'error' in data and not data.get('ok', True):
+        return f"Error: {data['error']}"
+    all_lines = data.get('lines', [])
+    # Return last N lines
+    return '\n'.join(all_lines[-lines:]) if all_lines else 'No log lines available.'
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Raw control
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def gateway_key(key_char: str) -> str:
+    """
+    Send a raw single-character key command to the gateway — the same as
+    pressing a key in the terminal UI.
+
+    Common keys:
+      'k' = PTT key-down (start transmitting)
+      'u' = PTT unkey (stop transmitting)
+      'r' = toggle recording
+      'q' = quit gateway (use with caution)
+      'm' = mute/unmute audio
+      't' = force audio trace dump
+
+    Args:
+        key_char: Single character command to send.
+    """
+    if len(key_char) != 1:
+        return 'Error: key_char must be exactly one character'
+    result = _post('/key', {'key': key_char})
+    if result.get('ok'):
+        return f"Key '{key_char}' sent"
+    return f"Key command failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def automation_status() -> str:
+    """
+    Get the automation engine status: configured tasks, schedules,
+    time window, and whether the engine is active.
+    """
+    return json.dumps(_get('/automationstatus'), indent=2)
+
+
+@mcp.tool()
+def automation_history() -> str:
+    """
+    Get recent automation execution history — which tasks ran, when,
+    and whether they succeeded or failed.
+    """
+    return json.dumps(_get('/automationhistory'), indent=2)
+
+
+@mcp.tool()
+def automation_reload() -> str:
+    """
+    Reload the automation scheme from the config file.
+    Use after editing automation tasks in gateway_config.txt.
+    """
+    result = _post('/automationcmd', {'cmd': 'reload'})
+    if result.get('ok'):
+        return f"Reloaded: {result.get('tasks', 0)} tasks"
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def automation_trigger(task_name: str) -> str:
+    """
+    Manually trigger a named automation task (from the gateway's automation
+    scheme).  Use gateway_status first to see available automation tasks.
+
+    Args:
+        task_name: Name of the automation task to trigger (e.g. 'weather_announce').
+    """
+    result = _post('/automationcmd', {'cmd': 'trigger', 'task': task_name})
+    if result.get('ok'):
+        return f"Triggered: {result.get('triggered', task_name)}"
+    return f"Failed: {result.get('error', 'unknown error')}"
+
+
+@mcp.tool()
+def audio_trace_toggle() -> str:
+    """
+    Toggle the audio mixer trace recording on or off.  When active, the gateway
+    records per-tick audio state for all sources.  When stopped, it dumps a
+    human-readable trace file to disk and prints the path.  Useful for
+    diagnosing duck/hold timing issues or audio dropout.
+    """
+    # tracecmd uses form-encoded body, not JSON — use raw post
+    url = GW_BASE_URL + '/tracecmd'
+    body = b'type=audio'
+    headers = {**_auth_headers(), 'Content-Type': 'application/x-www-form-urlencoded'}
+    req = urllib.request.Request(url, data=body, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            result = json.loads(resp.read())
+    except Exception as e:
+        return f"Error: {e}"
+    active = result.get('active', False)
+    return f"Audio trace {'STARTED' if active else 'STOPPED and dumped to disk'}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Telegram
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def telegram_reply(message: str) -> str:
+    """
+    Send a reply to the Telegram user who sent the current command.
+    Call this ONCE when you have completely finished processing the request.
+    Do not call it until you are done — this is the user's only feedback channel.
+
+    Args:
+        message: Plain-text response to send back to the user's phone.
+                 Keep it concise — Telegram messages should be readable on mobile.
+                 Use newlines for structure, avoid markdown formatting.
+    """
+    import json as _json
+    import time as _time
+
+    tg = _load_telegram_config()
+    token = tg['token']
+    chat_id = tg['chat_id']
+
+    if not token or not chat_id:
+        return 'Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing)'
+
+    url = f'https://api.telegram.org/bot{token}/sendMessage'
+    payload = json.dumps({'chat_id': chat_id, 'text': message}).encode()
+    headers = {'Content-Type': 'application/json'}
+    req = urllib.request.Request(url, data=payload, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+    except Exception as e:
+        return f'Telegram send failed: {e}'
+
+    if not result.get('ok'):
+        return f"Telegram send failed: {result.get('description', 'unknown error')}"
+
+    # Update status file with reply timestamp
+    ts = _time.strftime('%Y-%m-%dT%H:%M:%S')
+    try:
+        status_path = tg['status_file']
+        existing = {}
+        if os.path.isfile(status_path):
+            with open(status_path) as f:
+                existing = _json.load(f)
+        existing['last_reply_time'] = ts
+        existing['last_reply_text'] = message[:120]
+        with open(status_path, 'w') as f:
+            _json.dump(existing, f)
+    except Exception:
+        pass
+
+    return f'Telegram reply sent at {ts}'
+
+
+# ---------------------------------------------------------------------------
