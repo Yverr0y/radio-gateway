@@ -19,6 +19,9 @@ import sys
 import threading
 import time
 
+import numpy as np
+from audio_util import pcm_level, pcm_rms, rms_to_level, pcm_db
+
 
 class _AudioProcMixin:
     def calculate_audio_level(self, pcm_data):

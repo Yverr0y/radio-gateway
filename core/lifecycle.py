@@ -19,6 +19,8 @@ import sys
 import threading
 import time
 
+import pyaudio
+
 
 class _LifecycleMixin:
     def notify(self, message, level='error'):
@@ -496,7 +498,10 @@ class _LifecycleMixin:
             except Exception:
                 pass
 
-        # Install stdout/stderr wrapper early so ALL messages get timestamps
+        # Install stdout/stderr wrapper early so ALL messages get timestamps.
+        # Deferred import: LogWriter and __version__ live in gateway_core
+        # which imports this module — top-level import here would loop.
+        from gateway_core import LogWriter, __version__
         buf_lines = int(getattr(self.config, 'LOG_BUFFER_LINES', 2000))
         self._status_writer = LogWriter(
             sys.stdout, buffer_lines=buf_lines, log_file=log_file

@@ -19,6 +19,11 @@ import sys
 import threading
 import time
 
+import numpy as np
+import pyaudio
+import hid
+from audio_util import pcm_level
+
 
 class _USBAudioMixin:
     def find_usb_device_path(self):

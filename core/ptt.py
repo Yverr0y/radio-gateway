@@ -19,6 +19,8 @@ import sys
 import threading
 import time
 
+from struct import Struct
+
 
 class _PTTMixin:
     def set_ptt_state(self, state_on):

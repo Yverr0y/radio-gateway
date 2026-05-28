@@ -19,6 +19,19 @@ import sys
 import threading
 import time
 
+try:
+    from pymumble_py3 import Mumble
+    from pymumble_py3.callbacks import (
+        PYMUMBLE_CLBK_SOUNDRECEIVED,
+        PYMUMBLE_CLBK_TEXTMESSAGERECEIVED,
+    )
+except ImportError:
+    from pymumble import Mumble
+    from pymumble.callbacks import (
+        PYMUMBLE_CLBK_SOUNDRECEIVED,
+        PYMUMBLE_CLBK_TEXTMESSAGERECEIVED,
+    )
+
 
 class _SetupAudioMumbleMixin:
     def setup_audio(self):

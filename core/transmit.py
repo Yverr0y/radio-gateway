@@ -19,6 +19,9 @@ import sys
 import threading
 import time
 
+import numpy as np
+from audio_util import pcm_level, pcm_db
+
 
 class _TransmitMixin:
     def _get_cross_clock_drift_ms(self):
