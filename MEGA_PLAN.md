@@ -176,11 +176,15 @@ Next: 1.B (web_server split) or 1.A (gateway_core split).
 - ⬜ 2.C.3 **Test:** TX, RX, CAT control, AIOC PTT
 - ⬜ 2.C.4 Release v4.0
 
-## 2.D — Migrate SDR
-- ⬜ 2.D.1 Move `sdr_plugin.py` → `plugins/sdr.py`
-- ⬜ 2.D.2 Plugin contributes its own `/sdr` web route via `web_routes()`
-- ⬜ 2.D.3 **Test:** dual-tuner master/slave, channels, ADS-B unchanged
-- ⬜ 2.D.4 Release v4.1
+## 2.C — Migrate SDR
+- ✅ 2.C.1 `git mv sdr_plugin.py → plugins/sdr.py` (history preserved).
+- ✅ 2.C.2 New contract metadata: `PLUGIN_ID = 'sdr'`, `PLUGIN_NAME = 'RSPduo SDR'`, `CAPABILITIES = {AUDIO_RX, FREQUENCY, STATUS}` (RX-only — no PTT/TX). Legacy `name = "sdr_rspduo"` + lowercase `capabilities` dict kept for back-compat.
+- ✅ 2.C.3 Dropped inheritance from `gateway_link.RadioPlugin`.
+- ✅ 2.C.4 `gateway_setup.py` imports from new path.
+- ✅ 2.C.5 **Contract refinement** — uncovered an issue: SDR is RX-only and has no `put_audio`, so the original Protocol's `runtime_checkable` rejected it. Fixed the Protocol: dropped `get_audio` + `put_audio` from required attributes, documented them as optional and gated by `CAPABILITY_AUDIO_RX` / `CAPABILITY_AUDIO_TX`. CAPABILITIES is now the single source of truth for audio direction; both TH-9800 and SDR pass `isinstance(plug, RadioPlugin)`.
+- ✅ 2.C.6 LOAD_GLOBAL scan (refined to use each function's own `__globals__` after first-pass false positives from re-exported `AudioProcessor` etc.). All plugins/sdr.py functions clean.
+- ⏭️ 2.C.7 `web_routes()` hook **not used** yet — the existing `/sdr` page is served via gateway-level routes in `web_routes_get.py`, not by the SDR plugin. Moving that wiring into the plugin is a separate refactor (would test the hook end-to-end but requires touching the route dispatch). Defer to Phase 2.E or a follow-up.
+- 🟡 2.C.8 **Live restart pending** — same workflow as TH-9800.
 
 ## 2.E — Migrate packet
 - ⬜ 2.E.1 Move `packet_radio.py` + `packet_tnc.py` → `plugins/packet/`

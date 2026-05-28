@@ -22,7 +22,9 @@ import numpy as np
 
 from audio_bus import DuckGroup, check_signal_instant, mix_audio_streams
 from audio_util import AudioProcessor, pcm_level, pcm_rms, rms_to_level, update_level
-from gateway_link import RadioPlugin
+from plugins._base import (
+    CAPABILITY_AUDIO_RX, CAPABILITY_FREQUENCY, CAPABILITY_STATUS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -351,14 +353,25 @@ class _TunerCapture:
 # SDRPlugin — the main plugin class
 # ---------------------------------------------------------------------------
 
-class SDRPlugin(RadioPlugin):
+class SDRPlugin:
     """RSPduo dual tuner plugin.
 
     Manages two tuners (master + slave) as a single audio source.
     Internal ducking: master audio always flows, slave only when master is quiet.
     Absorbs RTLAirbandManager (process control, config generation, tuning).
+
+    Migrated to ``plugins/`` in Phase 2.C. Duck-typed against
+    ``plugins._base.RadioPlugin`` Protocol.
     """
 
+    # ── New plugin contract metadata ────────────────────────────────
+    PLUGIN_ID = 'sdr'
+    PLUGIN_NAME = 'RSPduo SDR'
+    CAPABILITIES = {
+        CAPABILITY_AUDIO_RX, CAPABILITY_FREQUENCY, CAPABILITY_STATUS,
+    }
+
+    # Backward-compat surface — same convention as TH-9800.
     name = "sdr_rspduo"
     capabilities = {
         "audio_rx": True,

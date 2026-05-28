@@ -39,7 +39,7 @@ def setup_sdr(gw):
     if not (gw.config.ENABLE_SDR or getattr(gw.config, 'ENABLE_SDR2', False)):
         return
     try:
-        from sdr_plugin import SDRPlugin
+        from plugins.sdr import SDRPlugin
         print("Initializing SDR plugin (RSPduo dual tuner)...")
         gw.sdr_plugin = SDRPlugin()
         if gw.sdr_plugin.setup(gw.config):

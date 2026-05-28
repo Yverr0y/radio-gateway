@@ -87,15 +87,20 @@ class RadioPlugin(Protocol):
 
     def setup(self, config, gateway=None) -> bool: ...
 
-    def get_audio(self, chunk_size=None) -> tuple[bytes | None, bool]: ...
-
-    def put_audio(self, pcm: bytes) -> None: ...
-
     def execute(self, cmd: dict) -> dict: ...
 
     def get_status(self) -> dict: ...
 
     def cleanup(self) -> None: ...
+
+    # Audio I/O is OPTIONAL — declared by the CAPABILITIES set:
+    #   * CAPABILITY_AUDIO_RX → plugin implements ``get_audio(chunk_size)``
+    #     returning ``(pcm_bytes | None, ptt_required)``
+    #   * CAPABILITY_AUDIO_TX → plugin implements ``put_audio(pcm)``
+    # The bus tick checks the capability set before calling either method.
+    # RX-only plugins (e.g. SDR) and TX-only plugins (e.g. announcement
+    # sinks) should leave the unused method off entirely rather than
+    # stubbing a no-op — that keeps the capability set authoritative.
 
 
 # ── Optional-hook helpers ──────────────────────────────────────────
