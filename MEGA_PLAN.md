@@ -186,11 +186,21 @@ Next: 1.B (web_server split) or 1.A (gateway_core split).
 - ⏭️ 2.C.7 `web_routes()` hook **not used** yet — the existing `/sdr` page is served via gateway-level routes in `web_routes_get.py`, not by the SDR plugin. Moving that wiring into the plugin is a separate refactor (would test the hook end-to-end but requires touching the route dispatch). Defer to Phase 2.E or a follow-up.
 - 🟡 2.C.8 **Live restart pending** — same workflow as TH-9800.
 
-## 2.E — Migrate packet
-- ⬜ 2.E.1 Move `packet_radio.py` + `packet_tnc.py` → `plugins/packet/`
-- ⬜ 2.E.2 Direwolf + Pat + BBS via plugin lifecycle hooks
-- ⬜ 2.E.3 **Test:** Winlink mail send/receive, APRS decode, BBS terminal
-- ⬜ 2.E.4 Release v4.2
+## 2.D — Decompose packet_radio.py into packet/ package (BEHAVIOUR-PRESERVING)
+User flagged packet as messy across 4 concerns: Direwolf lifecycle, Pat integration, AGWPE proxy, endpoint/mode switching. Triage said "messy but working" — so split shape without changing behaviour. Move to `plugins/packet.py` comes after, once the shape is clean enough to be worth migrating.
+
+- ✅ 2.D.1 5 mixins extracted into `packet/`:
+  - `packet/agwpe_proxy.py` (163 LOC) — `_AGWPEProxyMixin`: TCP proxy on :8010, accept loop, forwarder
+  - `packet/endpoint.py` (175 LOC) — `_EndpointMixin`: `_find_endpoint`, list/set/get/has_local_tnc, `_send_endpoint_mode`, `get_endpoint_status`
+  - `packet/pat.py` (81 LOC) — `_PatMixin`: `_start_pat`, `_stop_pat`, `_is_pat_running`, `_delayed_pat_start`
+  - `packet/mode.py` (84 LOC) — `_ModeMixin`: `_set_mode`, `_tnc_status_fields`
+  - `packet/kiss.py` (599 LOC) — `_KISSMixin`: KISS connect/reader, AX.25 framing, APRS handler + parsers (position/object/weather/mice + cleaner), beacon, message, BBS (connect/disconnect/send/handle), `_agw_frame` builder
+- ✅ 2.D.2 `packet_radio.py` 1235 → **221 LOC** — kept `__init__`, `setup`, `teardown`, `execute`, `get_status`, `get_audio`, `put_audio` plus a `class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin, _ModeMixin, _KISSMixin)` declaration that composes everything.
+- ✅ 2.D.3 Caught one cross-mixin static reference: `_parse_mice` called `PacketRadioPlugin._clean_mice_comment` (both now on `_KISSMixin`) — rewrote to `_KISSMixin._clean_mice_comment`. LOAD_GLOBAL scan caught it.
+- ✅ 2.D.4 Off-by-one fix during extraction (kiss.py range 653-1235, not 653-1234 — the `_bbs_send` method's final `return` line was getting orphaned).
+- ✅ 2.D.5 Method surface diff vs HEAD: all 41 original methods present on the new composed class.
+- ✅ 2.D.6 **Live restart verified**: Packet plugin initialized, AGWPE proxy listening on 127.0.0.1:8010, callsign + modem + endpoint configured, BusManager wired in.
+- ⏭️ 2.D.7 Migration to `plugins/packet.py` deferred — shape is much improved but the user wants packet's *functionality* sorted before relocating it. Picking through the AGWPE/Pat/mode/endpoint code with that intent comes as a follow-up phase.
 
 **Phase 2 acceptance:** all four radios under `plugins/`, adding a fifth requires zero core edits.
 
