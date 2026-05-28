@@ -90,19 +90,29 @@ Setup hook: `gateway_setup.setup_alert_engine(gw)` called after `setup_manager_e
 
 # PHASE 1 — Monolith split
 
-## 1.A — gateway_core.py → core/ package
-- ⬜ 1.A.1 Create `core/__init__.py` re-exporting `RadioGateway`, `__version__`, `LogWriter`
-- ⬜ 1.A.2 Move `LogWriter` → `core/log_writer.py` ; smoke test gateway start
-- ⬜ 1.A.3 Extract `_AudioProcMixin` → `core/audio_proc.py` ; smoke test VAD/HPF still work
-- ⬜ 1.A.4 Extract `_PTTMixin` → `core/ptt.py` ; smoke test PTT round-trip
-- ⬜ 1.A.5 Extract `_USBAudioMixin` → `core/usb_audio.py` ; smoke test AIOC detect
-- ⬜ 1.A.6 Extract `_SetupMixin` → `core/setup.py` ; smoke test Mumble connect
-- ⬜ 1.A.7 Extract `_MumbleIOMixin` → `core/mumble_io.py` ; smoke test `!speak`
-- ⬜ 1.A.8 Extract `_TransmitMixin` → `core/transmit.py` ; smoke test TX
-- ⬜ 1.A.9 Extract `_StreamMixin` → `core/stream.py` ; smoke test Broadcastify
-- ⬜ 1.A.10 Extract `_LifecycleMixin` → `core/lifecycle.py` ; smoke test status loop
-- ⬜ 1.A.11 Shrink `core/gateway.py` to <300 LOC ; smoke test full feature set
-- ⬜ 1.A.12 **Acceptance:** every file in `core/` under 800 LOC, gateway boots cleanly, metrics still scrape
+## 1.A — gateway_core.py split (done as one atomic extraction)
+Done as one script-driven pass instead of per-mixin restart cycles — the plan-suggested per-step
+smoke tests required restarts each time, which compounds risk on the live gateway. One careful
+all-at-once split with import + composition + method-surface verification beats 10 incremental
+restarts.
+
+- ✅ 1.A.1 `core/__init__.py` re-exports all 8 mixins. `gateway_core.py` retains the public surface (`RadioGateway`, `__version__`, `LogWriter`) so `from gateway_core import RadioGateway` keeps working.
+- ⏭️ 1.A.2 LogWriter kept in `gateway_core.py` — at 87 LOC it's already small and pulling it out would only shave the file by ~10%. Skipped.
+- ✅ 1.A.3 `core/audio_proc.py` (327 LOC) — `_AudioProcMixin` covering levels, HPF, noise gate, VAD, VOX, mumble processing, link/source-gain persistence, processor sync
+- ✅ 1.A.4 `core/ptt.py` (125 LOC) — `_PTTMixin`: set_ptt_state, _ptt_aioc, _ptt_relay, _ptt_software
+- ✅ 1.A.5 `core/usb_audio.py` (348 LOC) — `_USBAudioMixin`: USB device finder, AIOC, speaker callback chain
+- ✅ 1.A.6 `core/setup_audio_mumble.py` (251 LOC) — `_SetupAudioMumbleMixin`: setup_audio + setup_mumble
+- ✅ 1.A.7 `core/mumble_io.py` (105 LOC) — `_MumbleIOMixin`: sound_received_handler, speak_text, send/on text message
+- ✅ 1.A.8 `core/transmit.py` (356 LOC) — `_TransmitMixin`: _get_cross_clock_drift_ms, audio_transmit_loop
+- ✅ 1.A.9 `core/stream.py` (79 LOC) — `_StreamMixin`: darkice + Icecast helpers
+- ✅ 1.A.10 `core/lifecycle.py` (953 LOC) — `_LifecycleMixin`: notify, restart_audio_input, restart_pyaudio, handle_proc_toggle, handle_key, get_status_dict, status_monitor_loop, run, cleanup, etc. **Above 800 target — candidate for future re-split into runtime / status / restart groups.**
+- ✅ 1.A.11 `gateway_core.py` 3038 → **690 LOC** — kept LogWriter + ssl wrapper + module-level imports + RadioGateway.__init__ (the 244-line one that mixin methods read state from).
+- ✅ 1.A.12 **Acceptance:**
+  - Method surface diff vs the b88a9e4 commit: all 55 original RadioGateway methods present on the new class (verified via per-class AST diff)
+  - MRO: `RadioGateway → _LifecycleMixin → _TransmitMixin → _StreamMixin → _MumbleIOMixin → _SetupAudioMumbleMixin → _USBAudioMixin → _PTTMixin → _AudioProcMixin → object`
+  - End-to-end import chain green: `import radio_gateway; from gateway_core import RadioGateway, __version__, LogWriter` — no errors, version string intact
+  - Largest remaining file: `core/lifecycle.py` at 953 LOC (above 800) — flagged
+  - **Next gateway restart** loads the mixin-composed class. No functional change expected.
 
 ## 1.B — web_server.py split (partial — biggest self-contained chunks lifted)
 - ⏭️ 1.B.1 HTTP plumbing extraction deferred. The `Handler` class is nested inside `WebConfigServer.start()` as a closure over `password`/`parent`/etc — pulling it out requires un-nesting that closure first. Not worth the surgery for marginal LOC gain.

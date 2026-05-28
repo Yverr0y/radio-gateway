@@ -1,0 +1,79 @@
+"""Extracted from gateway_core.py during Phase 1.A.
+
+Methods kept class-bound; the original code freely reads/writes self.*
+attributes that are initialised in RadioGateway.__init__, so composing
+back via inheritance keeps the runtime semantics identical without
+threading attribute references through arguments.
+"""
+
+import collections
+import json as json_mod
+import math as _math_mod
+import os
+import queue as _queue_mod
+import re
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+
+class _StreamMixin:
+    def _find_darkice_pid(self):
+        from stream_stats import find_darkice_pid
+        return find_darkice_pid(self)
+    def _get_darkice_stats(self):
+        from stream_stats import get_darkice_stats
+        return get_darkice_stats(self)
+    def _get_stream_stats(self):
+        from stream_stats import get_stream_stats
+        return get_stream_stats(self)
+    def _get_darkice_stats_cached(self):
+        from stream_stats import get_darkice_stats_cached
+        return get_darkice_stats_cached(self)
+    def _restart_darkice(self):
+        # If supervised, delegate to the supervisor (which respawns the
+        # process itself). Otherwise fall back to the legacy spawn-and-pray
+        # implementation used by external systemd users.
+        if bool(getattr(self.config, 'SUPERVISE_DARKICE', False)) \
+                and self.process_supervisor:
+            try:
+                self.process_supervisor.restart('darkice')
+                self._darkice_restart_count += 1
+                return
+            except KeyError:
+                pass
+        from stream_stats import restart_darkice
+        restart_darkice(self)
+
+    def _send_stream_alert(self, message):
+        """Send Broadcastify stream alert via email and Telegram."""
+        import datetime
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Email alert
+        if self.email_notifier:
+            try:
+                import socket
+                hostname = socket.gethostname()
+            except Exception:
+                hostname = ''
+            subject = f"Broadcastify Stream Down{' — ' + hostname if hostname else ''}"
+            body = f"{message}\n\nTime: {now}\n\n-- Radio Gateway"
+            self.email_notifier.send(subject, body)
+        # Telegram alert
+        bot_token = str(getattr(self.config, 'TELEGRAM_BOT_TOKEN', '') or '').strip()
+        chat_id = str(getattr(self.config, 'TELEGRAM_CHAT_ID', '') or '').strip()
+        if bot_token and chat_id:
+            try:
+                import urllib.request, json
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                data = json.dumps({'chat_id': chat_id, 'text': f"[Gateway] {message}\n{now}"}).encode()
+                req = urllib.request.Request(url, data=data,
+                                            headers={'Content-Type': 'application/json'})
+                urllib.request.urlopen(req, timeout=10)
+                print(f"  [Telegram] Stream alert sent")
+            except Exception as e:
+                print(f"  [Telegram] Alert failed: {e}")
+
