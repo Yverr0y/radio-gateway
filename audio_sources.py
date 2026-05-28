@@ -2473,6 +2473,7 @@ class StreamOutputSource:
         self.connected = False
         self._encoder = None      # ffmpeg subprocess
         self._icecast_sock = None  # TCP socket to Icecast
+        self._chunk_bytes = config.AUDIO_CHUNK_SIZE * 2  # 16-bit mono — used by keepalive silence
         self._lock = threading.Lock()
         # Serialise writes to the ffmpeg encoder's stdin. Two threads write
         # PCM into it: send_audio() (called from BusManager / sink-drain
