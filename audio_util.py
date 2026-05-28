@@ -596,7 +596,7 @@ def rms_to_level(rms, gain=1.0):
     return min(100, int(raw * gain))
 
 
-def update_level(current, new_level, attack=1.0, decay=0.3):
+def update_level(current, new_level, attack=1.0, decay=0.5):
     """Smooth a level value: instant attack, exponential decay.
 
     Default behaviour (attack=1.0, decay=0.3):

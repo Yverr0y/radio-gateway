@@ -338,6 +338,10 @@
     );
     box-shadow: 0 0 4px var(--t-ok);
     position: relative; z-index: 1;
+    /* Smooth between polls so the bar glides instead of stepping. Slightly
+       longer than the poll interval (33 ms) so each transition has just
+       finished as the next value arrives. */
+    transition: clip-path 40ms linear;
   }
   .drawflow-node.ptt-active {
     border-color: var(--t-err);
@@ -1281,9 +1285,9 @@ function setSpeakerMode(mode) {
 }
 
 // Poll audio levels and update bars
-// Exponential smoothing with asymmetric CSS transition: instant attack,
-// 0.15-per-sample decay, 80ms rise / 200ms fall so the bar glides between
-// polls instead of stepping. Matches the shell/dashboard meters.
+// Exponential smoothing: instant attack, fast decay so transients are
+// visible and the meter doesn't lag. ~30 FPS poll + 0.35-per-sample fall =
+// ~120 ms to drop 80% of peak.
 var _lvlSmooth = {};
 var _lvlLastClip = {}; // last written clip value per key (1% change threshold)
 var _lvlFillCache = new Map(); // id -> .level-fill element
@@ -1292,11 +1296,14 @@ function _setLevel(fillEl, raw, key) {
   var prev = _lvlSmooth[key] || 0;
   var v = Math.min(Math.max(raw || 0, 0), 100);
   var rising = v > prev;
-  var a = rising ? 1.0 : 0.15;
+  var a = rising ? 1.0 : 0.35;
   var s = prev + (v - prev) * a;
   _lvlSmooth[key] = s;
   var lastClip = _lvlLastClip[key];
-  if (lastClip === undefined || Math.abs(s - lastClip) > 1) {
+  // Sub-percent threshold: 0.25 ≈ ¼ px on an 80 px bar — below visible
+  // resolution so we don't waste paint, but fine enough that the bar
+  // doesn't quantize in 1 % steps.
+  if (lastClip === undefined || Math.abs(s - lastClip) > 0.25) {
     _lvlLastClip[key] = s;
     fillEl.style.clipPath = 'inset(0 ' + (100 - s) + '% 0 0)';
   }
@@ -1304,7 +1311,7 @@ function _setLevel(fillEl, raw, key) {
 
 var _lvlPollBusy = false;
 var _lvlLastRaf = 0;
-var _LVL_INTERVAL = 67; // ~15fps
+var _LVL_INTERVAL = 33; // ~30fps
 
 function _lvlRafLoop(ts) {
   requestAnimationFrame(_lvlRafLoop);

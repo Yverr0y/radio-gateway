@@ -1087,7 +1087,7 @@ class BusManager:
             if sink_id == 'nul':
                 _lvl = gw.calculate_audio_level(audio)
                 _prev = self._meters['nul']
-                self._meters['nul'] = _lvl if _lvl > _prev else int(_prev * 0.7 + _lvl * 0.3)
+                self._meters['nul'] = _lvl if _lvl > _prev else int(_prev * 0.5 + _lvl * 0.5)
                 if _st:
                     _st.record(f'{bus_id}_deliver', 'nul', audio)
                 continue
@@ -1127,7 +1127,7 @@ class BusManager:
                 # pymumble.SoundOutput is internally thread-safe.
                 self._enqueue_sink('mumble', (audio,))
                 _prev = self._meters['mumble_tx']
-                self._meters['mumble_tx'] = _audio_level if _audio_level > _prev else int(_prev * 0.7 + _audio_level * 0.3)
+                self._meters['mumble_tx'] = _audio_level if _audio_level > _prev else int(_prev * 0.5 + _audio_level * 0.5)
                 if _st and _st.active:
                     _st.record(f'{bus_id}_deliver', 'mumble', audio, -1, 'enq')
             elif sink_id == 'speaker':
@@ -1152,7 +1152,7 @@ class BusManager:
                     _upstream = getattr(_bus_obj, 'last_dominant_source', None) if _bus_obj else None
                     ctx.transcriber.feed(audio, source_id=bus_id, upstream_source=_upstream)
                     _prev = self._meters['transcription']
-                    self._meters['transcription'] = _audio_level if _audio_level > _prev else int(_prev * 0.7 + _audio_level * 0.3)
+                    self._meters['transcription'] = _audio_level if _audio_level > _prev else int(_prev * 0.5 + _audio_level * 0.5)
                 except Exception as _te:
                     # Log once so future regressions are visible instead of silent.
                     if not hasattr(self, '_trans_err_logged'):
@@ -1168,7 +1168,7 @@ class BusManager:
                             _extra = f'remote_tx {_ra_ms:.1f}ms' if _ra_ms > 5 else ''
                             _st.record(f'{bus_id}_deliver', 'remote_audio_tx', audio, -1, _extra)
                         _prev = self._meters['remote_audio_tx']
-                        self._meters['remote_audio_tx'] = _audio_level if _audio_level > _prev else int(_prev * 0.7 + _audio_level * 0.3)
+                        self._meters['remote_audio_tx'] = _audio_level if _audio_level > _prev else int(_prev * 0.5 + _audio_level * 0.5)
                     except Exception:
                         pass
 
@@ -1210,7 +1210,7 @@ class BusManager:
                         if _audio_level and _audio_level > _prev:
                             self._link_tx_meters[_eln] = _audio_level
                         else:
-                            self._link_tx_meters[_eln] = int(_prev * 0.7 + (_audio_level or 0) * 0.3)
+                            self._link_tx_meters[_eln] = int(_prev * 0.5 + (_audio_level or 0) * 0.5)
                         break
 
         # Per-bus PCM/MP3: deposit processed audio into shared buffer.
