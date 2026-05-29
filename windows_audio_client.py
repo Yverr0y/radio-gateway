@@ -24,7 +24,7 @@ toggle on/off with v. All effects are stateful/click-free across chunks.
 
 Keyboard controls (only act while this window is focused):
   MIC (your voice):
-    SPACE  = talk — hold to talk (or, if `keyboard` is not installed, tap on/off)
+    SPACE  = talk on/off (tap to start, tap again to stop — latching)
     - / =  = mic gain down / up 10% (0–1000%; boosts the quiet mic)
     v      = voice effect on / off
     n / m  = previous / next voice effect
@@ -77,16 +77,6 @@ except ImportError:
         _RESAMPLER = "scipy"
     except ImportError:
         _RESAMPLER = None
-
-# Optional keyboard backend — required for true hold-to-talk (key release
-# detection). msvcrt/termios only see key-down, so without this the mic
-# transmit key degrades to a press-on/press-off toggle.
-try:
-    import keyboard as _keyboard  # noqa: F401
-    _HAVE_KEYBOARD = True
-except ImportError:
-    _keyboard = None
-    _HAVE_KEYBOARD = False
 
 # ---------------------------------------------------------------------------
 # Constants — must match gateway defaults
@@ -148,144 +138,22 @@ def save_config(cfg):
 # ---------------------------------------------------------------------------
 # Keyboard input (cross-platform)
 # ---------------------------------------------------------------------------
-def _make_focus_check():
-    """Return focused() -> bool: is THIS app's console/terminal window in the
-    foreground? Used to gate the global `keyboard` hooks so the hotkeys only act
-    when our window is focused (not system-wide).
-
-    Robust across terminals via three independent positive checks:
-      * foreground window IS our console window      (classic conhost)
-      * foreground window's process owns our console  (Windows Terminal: both
-        the visible window and our pseudo-console belong to the terminal proc)
-      * foreground window's process is in our ancestry (shells / IDE terminals)
-    Win32 handle types are declared so 64-bit handles aren't truncated. Off
-    Windows, or if detection can't be set up, returns always-True (no gating)."""
-    if sys.platform != "win32":
-        return lambda: True
-    try:
-        import ctypes
-        from ctypes import wintypes
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-        # correct return/arg types so HWND/HANDLE (pointers) survive on 64-bit
-        user32.GetForegroundWindow.restype = wintypes.HWND
-        kernel32.GetConsoleWindow.restype = wintypes.HWND
-        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND,
-                                                    ctypes.POINTER(wintypes.DWORD)]
-        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-
-        TH32CS_SNAPPROCESS = 0x00000002
-        class PE32(ctypes.Structure):
-            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                        ("th32ProcessID", wintypes.DWORD),
-                        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                        ("th32ParentProcessID", wintypes.DWORD),
-                        ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
-                        ("szExeFile", ctypes.c_char * 260)]
-        kernel32.Process32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE32)]
-        kernel32.Process32First.restype = wintypes.BOOL
-        kernel32.Process32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE32)]
-        kernel32.Process32Next.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-
-        def _pid_of(hwnd):
-            pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            return pid.value
-
-        ppid = {}
-        snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if snap:
-            pe = PE32(); pe.dwSize = ctypes.sizeof(PE32)
-            ok = kernel32.Process32First(snap, ctypes.byref(pe))
-            while ok:
-                ppid[pe.th32ProcessID] = pe.th32ParentProcessID
-                ok = kernel32.Process32Next(snap, ctypes.byref(pe))
-            kernel32.CloseHandle(snap)
-        ancestry, cur = set(), os.getpid()
-        for _ in range(20):
-            if not cur or cur in ancestry:
-                break
-            ancestry.add(cur)
-            cur = ppid.get(cur, 0)
-
-        console_hwnd = kernel32.GetConsoleWindow()
-        console_pid = _pid_of(console_hwnd) if console_hwnd else 0
-
-        def focused():
-            try:
-                fg = user32.GetForegroundWindow()
-                if not fg:
-                    return False
-                if console_hwnd and fg == console_hwnd:
-                    return True
-                fpid = _pid_of(fg)
-                if console_pid and fpid == console_pid:
-                    return True
-                return fpid in ancestry
-            except Exception:
-                return True
-        return focused
-    except Exception:
-        return lambda: True
-
-
 def _keyboard_listener(state):
-    """Dispatch to the hold-to-talk-capable backend when the `keyboard` library
-    is available, otherwise fall back to console input (PTT becomes a toggle)."""
-    if _HAVE_KEYBOARD:
-        _keyboard_listener_kbd(state)
-    else:
-        _keyboard_listener_console(state)
+    """Read single keypresses from the console and update shared state.
 
-
-def _keyboard_listener_kbd(state):
-    """`keyboard` library backend — true hold-to-talk plus discrete keys.
-
-    The PTT key (default SPACE) is read by polling is_pressed() so we get real
-    press/release edges; all other keys are handled on key-down via on_press.
+    Input comes from the CONSOLE INPUT buffer (msvcrt on Windows), which only
+    delivers keystrokes while THIS terminal window/tab is focused — so the
+    hotkeys never fire system-wide or leak in from another terminal window.
+    No global hook, no fragile focus detection. Trade-off: the console cannot
+    report key release, so SPACE is a tap-on / tap-off talk toggle.
     """
-    ptt_key = state.get("ptt_key", "space")
-    if state.get("focus_keys", True):
-        focused = _make_focus_check()   # only act when our window is focused
-        sys.stderr.write('[kbd] hotkeys focus-gated (set "focus_keys": false in '
-                         'the config for global keys)\n')
-    else:
-        focused = lambda: True          # global hotkeys (old behaviour)
-        sys.stderr.write("[kbd] global hotkeys (focus gating off)\n")
-    sys.stderr.flush()
+    _keyboard_listener_console(state)
 
-    def on_press(ev):
-        if not focused():
-            return  # ignore keystrokes meant for whatever app is focused
-        name = getattr(ev, "name", None)
-        if not name or name == ptt_key:
-            return  # PTT is handled by the polling loop below
-        if len(name) == 1:
-            _handle_key(name.lower(), state)
-
-    try:
-        _keyboard.on_press(on_press)
-    except Exception as e:
-        sys.stderr.write(f"[kbd] hook failed ({e}); using console input\n")
-        _keyboard_listener_console(state)
-        return
-
-    while state["running"]:
-        try:
-            # hold-to-talk only while our window is focused
-            state["ptt_held"] = focused() and _keyboard.is_pressed(ptt_key)
-        except Exception:
-            pass
-        time.sleep(0.02)
 
 
 def _keyboard_listener_console(state):
-    """Fallback backend: read single keypresses. No key-release detection, so
-    the transmit key (SPACE) toggles instead of being hold-to-talk."""
+    """Read single keypresses from the console input buffer (focus-local).
+    No key-release detection, so the transmit key (SPACE) is a talk toggle."""
     try:
         # Windows
         import msvcrt
@@ -371,9 +239,7 @@ def _handle_key(ch, state):
         state["effect_name"] = effect_name(i)
         state["effected"] = (i != 0)
     elif ch == " ":
-        # Console fallback only: no key-release available, so SPACE toggles TX.
-        # (With the `keyboard` library this branch is never reached — SPACE is
-        # polled for true hold-to-talk.)
+        # SPACE is a latching talk toggle (console input can't report key-up).
         state["ptt_held"] = not state.get("ptt_held", False)
 
 # ---------------------------------------------------------------------------
@@ -1699,7 +1565,7 @@ def _display_thread_func(state, gateway_host, tx_port, rx_port,
             mic_tag = f"{RED}● FX{RESET}" if effected else f"{RED}● TX{RESET}"
         else:
             mic_tag = f"{GRAY}idle{RESET}"
-        talk_help = "hold to talk" if _HAVE_KEYBOARD else "tap = talk on/off"
+        talk_help = "tap = talk on/off"
         # Voice-effect field: show the selected effect and whether it's engaged.
         fx_idx = state.get("effect_index", 0)
         fx_name = state.get("effect_name") or effect_name(fx_idx)
@@ -2041,11 +1907,6 @@ def main():
     cfg["mic_device_name"] = mic_dev_name
     save_config(cfg)
 
-    if not _HAVE_KEYBOARD:
-        sys.stderr.write(
-            "[startup] `keyboard` library not installed — SPACE will TOGGLE mic "
-            "TX instead of hold-to-talk. Install with: pip install keyboard\n")
-
     # --- Shared state -------------------------------------------------------
     state = {
         "running": True,
@@ -2063,7 +1924,6 @@ def main():
         "tx_last_frames": 0,
         # mic / broadcast-mix state
         "ptt_key": cfg.get("ptt_key", "space"),
-        "focus_keys": bool(cfg.get("focus_keys", True)),
         "ptt_held": False,
         "mic_tx_active": False,
         "mic_db": -100.0,
