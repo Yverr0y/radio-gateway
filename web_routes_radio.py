@@ -656,7 +656,7 @@ def handle_packet_cmd(handler, parent):
         elif action == 'winlink/compose':
             result = _winlink_compose(data)
         elif action == 'winlink/connect':
-            result = _winlink_connect(data)
+            result = _winlink_connect(data, gateway=parent.gateway)
         else:
             result = {"ok": False, "error": f"unknown action: {action}"}
 
@@ -694,8 +694,68 @@ def _winlink_compose(data):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def _winlink_connect(data):
-    """Connect to a Winlink gateway via Pat CLI + AGW."""
+def _winlink_tune_endpoint(freq_mhz: float, gateway) -> dict:
+    """Send a tune command to the currently-selected packet endpoint.
+
+    Returns a dict with:
+      * ``ok``: True if the endpoint ACKed or the tune was skipped without
+        error; False only when a tune was attempted and rejected.
+      * ``log``: a single multi-line string for the connect-log panel,
+        regardless of outcome.
+
+    Skip cases (logged but considered ok):
+      * No gateway runtime (called outside a live process).
+      * No packet plugin / no active packet endpoint.
+      * Endpoint doesn't expose the 'frequency' capability — operator
+        is expected to have tuned manually.
+
+    Real failures:
+      * Endpoint NAKs the tune (link send_command_to_and_wait returns
+        ok=False) — the connect proceeds anyway because the operator
+        might be on the right freq already, but the warning is in the log.
+    """
+    gw = gateway
+    if gw is None:
+        return {'ok': True, 'log': f'Auto-tune requested ({freq_mhz} MHz) — '
+                                    'gateway reference unavailable; skipping'}
+    plugin = getattr(gw, 'packet_plugin', None)
+    if plugin is None or not hasattr(plugin, '_find_endpoint'):
+        return {'ok': True, 'log': f'Auto-tune ({freq_mhz} MHz) — '
+                                    'no packet plugin; skipping'}
+    endpoint_name = plugin._find_endpoint()
+    if not endpoint_name:
+        return {'ok': True, 'log': f'Auto-tune ({freq_mhz} MHz) — '
+                                    'no active packet endpoint; skipping'}
+    link_endpoints = getattr(gw, 'link_endpoints', {}) or {}
+    ep_source = link_endpoints.get(endpoint_name)
+    caps = getattr(ep_source, '_endpoint_caps', {}) or {}
+    if not caps.get('frequency'):
+        return {'ok': True, 'log': f"Auto-tune ({freq_mhz} MHz) — endpoint "
+                                    f"{endpoint_name!r} doesn't expose "
+                                    "'frequency' capability; tune manually"}
+    link_server = getattr(gw, 'link_server', None)
+    if link_server is None or not hasattr(link_server, 'send_command_to_and_wait'):
+        return {'ok': True, 'log': f'Auto-tune ({freq_mhz} MHz) — '
+                                    'link server unavailable; skipping'}
+    cmd = {'cmd': 'frequency', 'freq_mhz': freq_mhz}
+    result = link_server.send_command_to_and_wait(endpoint_name, cmd, timeout=5.0)
+    if result.get('ok'):
+        return {'ok': True,
+                'log': f'Tuned {endpoint_name} to {freq_mhz} MHz'}
+    return {'ok': False,
+            'log': f'Auto-tune failed: {result.get("error", "no ACK")} '
+                   f'— proceeding anyway, operator should verify dial'}
+
+
+def _winlink_connect(data, gateway=None):
+    """Connect to a Winlink gateway via Pat CLI + AGW.
+
+    If the request includes a numeric ``freq`` (MHz), first ask the active
+    packet endpoint to tune to it. Failure to tune doesn't abort the
+    connect — the operator may have already manually tuned, and a stale
+    endpoint capability list shouldn't block a working session. Tune
+    attempts are logged.
+    """
     global _winlink_log
     import subprocess, shutil, threading
     pat = shutil.which('pat')
@@ -705,6 +765,16 @@ def _winlink_connect(data):
     if not gateway:
         return {"ok": False, "error": "gateway callsign required"}
     _winlink_log = f"Connecting to {gateway}...\n"
+    # Optional auto-tune. Freq comes from the UI's selected dropdown
+    # option (data-freq attribute, parsed to float). If the active packet
+    # endpoint doesn't expose the 'frequency' capability we log and skip.
+    try:
+        freq_mhz = float(data.get('freq')) if data.get('freq') else None
+    except (TypeError, ValueError):
+        freq_mhz = None
+    if freq_mhz:
+        tune_result = _winlink_tune_endpoint(freq_mhz, gateway=gateway)
+        _winlink_log += tune_result['log'] + '\n'
     try:
         proc = subprocess.Popen(
             [pat, 'connect', f'ax25+agwpe:///{gateway}'],

@@ -325,9 +325,11 @@
   <!-- Toolbar -->
   <div class="pkt-card wl-toolbar">
     <button class="pkt-btn" onclick="wlConnect()" id="wl-connect-btn">Connect &amp; Sync</button>
+    <!-- Options populated by loadWinlinkGateways() from /packet/winlink/gateways.
+         Each option carries the freq in a data-freq attribute so wlConnect()
+         can ship it back to the server for auto-tuning. -->
     <select id="wl-gateway" class="pkt-input">
-      <option value="KM6RTE-12">KM6RTE-12 (144.970) Loma Ridge 19km</option>
-      <option value="KF6BRC-10">KF6BRC-10 (145.090) Mission Viejo 0km</option>
+      <option value="">Loading…</option>
     </select>
     <span id="wl-status" class="wl-status">idle</span>
   </div>
@@ -772,7 +774,35 @@ function loadWinlinkGateways() {
   console.log('[WL-GW] Loading gateways, map=' + !!_aprsMap);
   pktGet('winlink/gateways').then(function(d) {
     console.log('[WL-GW] Got response:', JSON.stringify(d).substring(0, 200));
-    if (!d.ok || !d.gateways || !_aprsMap) return;
+    if (!d.ok || !d.gateways) return;
+
+    // Populate the connect-dropdown. The list is already sorted by distance
+    // ascending on the server. The data-freq attribute carries the freq we
+    // ship back to /packet/winlink/connect for auto-tune. Skipping gateways
+    // without a parsable freq leaves them out of the dropdown but still on
+    // the map — operators can dial them in manually if they want them.
+    var sel = document.getElementById('wl-gateway');
+    if (sel) {
+      sel.innerHTML = '';
+      d.gateways.forEach(function(g) {
+        var freqNum = parseFloat(g.freq);
+        var opt = document.createElement('option');
+        opt.value = g.callsign || '';
+        if (!isNaN(freqNum)) opt.dataset.freq = freqNum;
+        opt.textContent = (g.callsign || '?')
+          + ' (' + (g.freq || '?') + ')'
+          + ' ' + (g.dist_km != null ? g.dist_km + 'km' : '');
+        sel.appendChild(opt);
+      });
+      if (!sel.options.length) {
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'No gateways within range';
+        sel.appendChild(placeholder);
+      }
+    }
+
+    if (!_aprsMap) return;
     // Clear old markers
     _wlGwMarkers.forEach(function(m) { _aprsMap.removeLayer(m); });
     _wlGwMarkers = [];
@@ -962,7 +992,12 @@ function wlSend() {
 }
 var _wlLogPoll = null;
 function wlConnect() {
-  var gw = document.getElementById('wl-gateway').value;
+  var sel = document.getElementById('wl-gateway');
+  var gw = sel.value;
+  // Read freq off the currently-selected option for auto-tune. Empty if the
+  // option had no data-freq (we don't tune in that case — server skips).
+  var opt = sel.options[sel.selectedIndex];
+  var freq = opt && opt.dataset && opt.dataset.freq ? parseFloat(opt.dataset.freq) : null;
   var btn = document.getElementById('wl-connect-btn');
   var st = document.getElementById('wl-status');
   var log = document.getElementById('wl-log');
@@ -975,15 +1010,16 @@ function wlConnect() {
     pktPost('mode', {mode: 'winlink'}).then(function(r) {
       if (!r.ok) { st.textContent = 'error: ' + (r.error||'mode switch failed'); btn.disabled = false; return; }
       // Wait for Direwolf to start then connect
-      setTimeout(function() { _doWlConnect(gw, btn, st, log); }, 3000);
+      setTimeout(function() { _doWlConnect(gw, freq, btn, st, log); }, 3000);
     });
     return;
   }
-  _doWlConnect(gw, btn, st, log);
+  _doWlConnect(gw, freq, btn, st, log);
 }
-function _doWlConnect(gw, btn, st, log) {
-  st.textContent = 'connecting to ' + gw + '...';
-  log.textContent = 'Connecting to ' + gw + '...\n';
+function _doWlConnect(gw, freq, btn, st, log) {
+  var tuneNote = freq ? ' (auto-tune ' + freq + ' MHz)' : '';
+  st.textContent = 'connecting to ' + gw + tuneNote + '...';
+  log.textContent = 'Connecting to ' + gw + tuneNote + '...\n';
   // Start polling log
   if (_wlLogPoll) clearInterval(_wlLogPoll);
   _wlLogPoll = setInterval(function() {
@@ -994,7 +1030,9 @@ function _doWlConnect(gw, btn, st, log) {
       }
     });
   }, 500);
-  pktPost('winlink/connect', {gateway: gw}).then(function(r) {
+  var connectBody = {gateway: gw};
+  if (freq) connectBody.freq = freq;
+  pktPost('winlink/connect', connectBody).then(function(r) {
     btn.disabled = false;
     clearInterval(_wlLogPoll); _wlLogPoll = null;
     // Final log fetch
