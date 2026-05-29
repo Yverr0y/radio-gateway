@@ -401,6 +401,14 @@ function switchTab(name) {
   if (name === 'aprs') {
     if (!window._aprsMapInit) initAprsMap();
     else if (_aprsMap) setTimeout(function() { _aprsMap.invalidateSize(); }, 100);
+  } else if (name === 'winlink') {
+    // Populate the connect dropdown if it's still on the "Loading…" placeholder.
+    // Was previously only reached when the APRS tab initialised the map; users
+    // who jumped straight to Winlink saw an empty dropdown forever.
+    var sel = document.getElementById('wl-gateway');
+    if (sel && sel.options.length <= 1 && (!sel.options[0] || !sel.options[0].value)) {
+      loadWinlinkGateways();
+    }
   }
 }
 
