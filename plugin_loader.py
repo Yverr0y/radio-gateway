@@ -62,6 +62,15 @@ def discover_plugins(config, gateway):
         plugin_id = plugin_cls.PLUGIN_ID
         enable_key = f'ENABLE_{plugin_id.upper()}'
 
+        # Skip plugins already loaded by the explicit gateway_setup path.
+        # Phase 2.B/2.C/2.D migrated TH-9800, SDR, and packet into plugins/
+        # so the loader now sees them. They're still instantiated explicitly
+        # by gateway_setup so the gateway can hold the canonical reference
+        # in gw.<id>_plugin; double-loading would start two processes.
+        if gateway is not None and getattr(gateway, f'{plugin_id}_plugin', None) is not None:
+            print(f"  [Plugins] {plugin_id}: already loaded by gateway_setup, skipping discover")
+            continue
+
         # Check if enabled in config (default: disabled)
         if not getattr(config, enable_key, False):
             print(f"  [Plugins] {plugin_id}: skipped (set {enable_key} = True to enable)")

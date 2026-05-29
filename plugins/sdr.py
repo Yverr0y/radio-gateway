@@ -497,8 +497,13 @@ class SDRPlugin:
         self._single_iq_correction = True
         self._single_external_ref = False
 
-    def setup(self, config):
-        """Initialize the SDR plugin: load settings, start rtl_airband, open audio captures."""
+    def setup(self, config, gateway=None):
+        """Initialize the SDR plugin: load settings, start rtl_airband, open audio captures.
+
+        ``gateway`` is accepted for parity with the new plugin contract; the
+        SDR plugin doesn't need it (rtl_airband + PipeWire is self-contained),
+        so we ignore it.
+        """
         if isinstance(config, dict):
             # Called from link endpoint style — not our use case
             return False

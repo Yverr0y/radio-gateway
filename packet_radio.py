@@ -22,10 +22,11 @@ from packet.endpoint import _EndpointMixin
 from packet.pat import _PatMixin
 from packet.mode import _ModeMixin
 from packet.kiss import _KISSMixin
+from packet.state import _PacketStateMixin
 
 
 class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin,
-                        _ModeMixin, _KISSMixin):
+                        _ModeMixin, _KISSMixin, _PacketStateMixin):
     """Software TNC (Direwolf) plugin for the gateway routing system."""
 
     name = "tnc"
@@ -62,7 +63,8 @@ class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin,
         # Internal state
         self._config = None
         self._gateway = None
-        self._mode = 'idle'           # idle / aprs / winlink / bbs
+        self._mode = 'idle'           # legacy alias for state.target; kept in sync by _advance.
+        self._init_packet_state()     # seeds _target/_phase/_step/_last_error
         # direwolf log lives in gateway.packet_tnc.log_tail now.
         self._running = False
 
@@ -190,9 +192,13 @@ class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin,
         """Return current TNC state."""
         positioned = sum(1 for s in self._aprs_stations.values() if s.get('lat') is not None)
         ep = self.get_endpoint_status()
+        state = self.state_snapshot()
         return {
             "plugin": self.name,
             "mode": self._mode,
+            # State machine triple — target/phase/step/last_error/phase_age.
+            # ``mode`` above stays as a legacy alias for state['target'].
+            "state": state,
             "callsign": f"{self._callsign}-{self._ssid}",
             "modem": self._modem_rate,
             "direwolf_running": self._mode != 'idle',

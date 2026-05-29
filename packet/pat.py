@@ -78,12 +78,20 @@ class _PatMixin:
             return False
     def _delayed_pat_start(self):
         """Wait for Direwolf to be ready then start Pat HTTP server.
+
         Tests the remote KISS port (not the local AGWPE proxy) to avoid
-        opening a spurious AGWPE session that would trigger a Direwolf restart."""
+        opening a spurious AGWPE session that would trigger a Direwolf
+        restart.
+
+        State machine integration: declares STEADY on successful start,
+        ERROR with last_error if pat won't start or Direwolf never came up.
+        """
         import socket as _sock
         if self._is_pat_running():
-            return  # already running
+            self._reach_steady()
+            return
         ep_ip = self._get_endpoint_ip()
+        direwolf_up = False
         if ep_ip:
             for _attempt in range(15):
                 time.sleep(1)
@@ -92,7 +100,14 @@ class _PatMixin:
                     s.settimeout(2)
                     s.connect((ep_ip, self._kiss_port))
                     s.close()
+                    direwolf_up = True
                     break
                 except Exception:
                     continue
-        self._start_pat()
+        if ep_ip and not direwolf_up:
+            self._fail(f"Direwolf KISS port {ep_ip}:{self._kiss_port} unreachable after 15s")
+            return
+        if not self._start_pat():
+            self._fail("Pat failed to start (see prior log lines)")
+            return
+        self._reach_steady()

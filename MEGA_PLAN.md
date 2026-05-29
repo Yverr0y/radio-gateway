@@ -220,6 +220,26 @@ Triage of the 4 messy areas the user flagged. Fixed everything clearly wrong; do
 
 Verified: SCAN clean, 42 methods on PacketRadioPlugin (+2 helpers), live restart green, AGWPE proxy listening, plugin initialized.
 
+## 2.D.cleanup.2 — packet state machine
+Replaces the implicit "self._mode + fire-and-forget threads" model with a
+proper target/phase/step/last_error triple. Async failures now surface
+explicitly instead of disappearing into the journal.
+
+- ✅ New `packet/state.py` — `_PacketStateMixin` with `_advance(...)`, `_reach_steady()`, `_fail(error)`, `state_snapshot()`. Fields seeded by `_init_packet_state()` called from `PacketRadioPlugin.__init__`.
+- ✅ Two axes:
+  - **target**: `'idle'|'aprs'|'winlink'|'bbs'` — what was requested
+  - **phase**: `'steady'|'starting'|'stopping'|'error'` — where we are in the transition
+  - **step**: `'send_endpoint_mode'|'start_local_tnc'|'connect_kiss'|'start_pat'|'stop_pat'|'stop_local_tnc'|None`
+  - **last_error**: string set when phase→error, cleared on next steady
+  - **phase_age_secs**: how long we've been in the current phase
+- ✅ `_set_mode` drives the synchronous side: advance through `send_endpoint_mode → start_local_tnc → connect_kiss → start_pat`. Each substep can fail the transition with a meaningful error.
+- ✅ `_kiss_connect_loop` reports first-connect success and a failure after `_KISS_STARTING_FAIL_AFTER` (10) attempts during STARTING. Subsequent reconnects after steady don't toggle phase.
+- ✅ `_delayed_pat_start` reports `STEADY` on Pat-running success, `ERROR` on Direwolf-unreachable or Pat-start-failure.
+- ✅ `PacketRadioPlugin.get_status` now returns `state` alongside the legacy `mode` field. The /packet page (and MCP tools) see the full triple.
+- ✅ `PACKET_DISABLE_FORCED_RESTART = True` config knob — opts out of the AGWPE session-end Direwolf restart. Now safer to flip since transition failures are visible.
+- ✅ Pre-existing regression fixed: `plugins/sdr.py` setup signature didn't accept `gateway=None`; the discover_plugins loader was crashing trying to load it. SDR setup now accepts the kwarg and ignores it; the loader also gained a guard that skips plugin IDs already loaded by `gateway_setup` (belt + suspenders).
+- ✅ **Live verified:** `curl /status` returns `state = {'target': 'idle', 'phase': 'steady', 'step': None, 'last_error': None, 'phase_age_secs': 16.6}`. SDR/TH-9800/Packet all loaded clean; AGWPE proxy up.
+
 **Phase 2 acceptance:** all four radios under `plugins/`, adding a fifth requires zero core edits.
 
 ---

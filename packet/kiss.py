@@ -26,10 +26,27 @@ class _KISSMixin:
 
     # ── KISS TCP client ───────────────────────────────────────────────
 
+    # If KISS hasn't connected after this many attempts, the state machine
+    # reports ERROR so the UI can show "KISS giving up — Direwolf?" instead
+    # of leaving phase=='starting' forever. Reconnects after a steady
+    # transition keep retrying — they don't toggle phase.
+    _KISS_STARTING_FAIL_AFTER = 10
+
     def _kiss_connect_loop(self):
-        """Connect to remote Direwolf's KISS TCP port with retries."""
+        """Connect to remote Direwolf's KISS TCP port with retries.
+
+        State machine integration:
+          * On the first successful connect while phase=STARTING, declare
+            STEADY (for aprs/bbs) — winlink waits for Pat to mark steady.
+          * If we burn through _KISS_STARTING_FAIL_AFTER attempts during
+            STARTING, mark ERROR with a meaningful last_error.
+          * Reconnects after a previous steady state stay quiet — they
+            don't re-toggle phase.
+        """
+        from packet.state import PHASE_STARTING
         kiss_host = self._get_endpoint_ip()
         attempt = 0
+        starting_fail_reported = False
         while self._running and self._mode != 'idle':
             attempt += 1
             try:
@@ -39,6 +56,10 @@ class _KISSMixin:
                 self._kiss_sock = sock
                 self._kiss_connected = True
                 print(f"  [Packet] KISS connected ({kiss_host}:{self._kiss_port})")
+                # First-connect bookkeeping for the state machine.
+                if self._phase == PHASE_STARTING and self._mode != 'winlink':
+                    self._reach_steady()
+                # winlink: stay in STARTING until _delayed_pat_start finishes.
                 self._kiss_reader()
                 # Reader returned = disconnected
                 self._kiss_connected = False
@@ -47,9 +68,17 @@ class _KISSMixin:
                     time.sleep(5)
                     continue
                 return
-            except Exception:
+            except Exception as e:
                 if attempt % 10 == 1:
                     print(f"  [Packet] KISS connect to {kiss_host}:{self._kiss_port} attempt {attempt}...")
+                # If we've been STARTING for too many failed tries, report
+                # ERROR so the UI doesn't hide the situation. Only fire
+                # this once per starting cycle.
+                if (not starting_fail_reported
+                        and self._phase == PHASE_STARTING
+                        and attempt >= self._KISS_STARTING_FAIL_AFTER):
+                    self._fail(f"KISS connect to {kiss_host}:{self._kiss_port} failed: {e}")
+                    starting_fail_reported = True
                 time.sleep(2)
 
     def _kiss_reader(self):

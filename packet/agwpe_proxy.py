@@ -179,14 +179,17 @@ class _AGWPEProxyMixin:
 
         # Forced Direwolf restart after a session ends. Workaround for
         # observed fragility where Pat's next KISS connection was racing
-        # Direwolf's socket state. Kept on purpose — removing it would
-        # need testing of back-to-back Pat sessions on real hardware,
-        # which is out of scope for the cleanup pass that introduced
-        # this comment.
-        if self._mode in ('winlink', 'bbs'):
+        # Direwolf's socket state. Set PACKET_DISABLE_FORCED_RESTART=True
+        # in gateway_config.txt to skip — the state machine in
+        # packet/state.py now surfaces transition failures explicitly,
+        # so disabling this workaround no longer means silent breakage.
+        disable_forced = bool(getattr(self._config, 'PACKET_DISABLE_FORCED_RESTART', False)) if self._config else False
+        if self._mode in ('winlink', 'bbs') and not disable_forced:
             if _active_now > 1:
                 print("  [Packet] AGWPE proxy: new session active — skipping restart")
             else:
                 print("  [Packet] AGWPE proxy: restarting Direwolf for clean reconnect")
                 self._send_endpoint_mode('data')
+        elif self._mode in ('winlink', 'bbs') and disable_forced:
+            print("  [Packet] AGWPE proxy: session ended — forced restart disabled")
 
