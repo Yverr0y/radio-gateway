@@ -656,7 +656,7 @@ def handle_packet_cmd(handler, parent):
         elif action == 'winlink/compose':
             result = _winlink_compose(data)
         elif action == 'winlink/connect':
-            result = _winlink_connect(data, gateway=parent.gateway)
+            result = _winlink_connect(data, gw=parent.gateway)
         else:
             result = {"ok": False, "error": f"unknown action: {action}"}
 
@@ -694,8 +694,13 @@ def _winlink_compose(data):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-def _winlink_tune_endpoint(freq_mhz: float, gateway) -> dict:
+def _winlink_tune_endpoint(freq_mhz: float, gw) -> dict:
     """Send a tune command to the currently-selected packet endpoint.
+
+    ``gw`` is the live RadioGateway instance — must not be confused with
+    the Winlink RMS-gateway callsign that lives next to this call in
+    ``_winlink_connect``. The earlier name ``gateway`` was a foot-gun;
+    keep them lexically distinct.
 
     Returns a dict with:
       * ``ok``: True if the endpoint ACKed or the tune was skipped without
@@ -714,7 +719,6 @@ def _winlink_tune_endpoint(freq_mhz: float, gateway) -> dict:
         ok=False) — the connect proceeds anyway because the operator
         might be on the right freq already, but the warning is in the log.
     """
-    gw = gateway
     if gw is None:
         return {'ok': True, 'log': f'Auto-tune requested ({freq_mhz} MHz) — '
                                     'gateway reference unavailable; skipping'}
@@ -737,7 +741,11 @@ def _winlink_tune_endpoint(freq_mhz: float, gateway) -> dict:
     if link_server is None or not hasattr(link_server, 'send_command_to_and_wait'):
         return {'ok': True, 'log': f'Auto-tune ({freq_mhz} MHz) — '
                                     'link server unavailable; skipping'}
-    cmd = {'cmd': 'frequency', 'freq_mhz': freq_mhz}
+    # Different endpoint plugins use different key names for the same
+    # MHz float — IC-7100 reads ``freq``, the example template documents
+    # ``freq_mhz``. Send both so a single command works against either
+    # convention without the dispatcher needing to know about each plugin.
+    cmd = {'cmd': 'frequency', 'freq': freq_mhz, 'freq_mhz': freq_mhz}
     result = link_server.send_command_to_and_wait(endpoint_name, cmd, timeout=5.0)
     if result.get('ok'):
         return {'ok': True,
@@ -747,7 +755,7 @@ def _winlink_tune_endpoint(freq_mhz: float, gateway) -> dict:
                    f'— proceeding anyway, operator should verify dial'}
 
 
-def _winlink_connect(data, gateway=None):
+def _winlink_connect(data, gw=None):
     """Connect to a Winlink gateway via Pat CLI + AGW.
 
     If the request includes a numeric ``freq`` (MHz), first ask the active
@@ -755,6 +763,11 @@ def _winlink_connect(data, gateway=None):
     connect — the operator may have already manually tuned, and a stale
     endpoint capability list shouldn't block a working session. Tune
     attempts are logged.
+
+    The arg is ``gw`` (RadioGateway instance) — the older name ``gateway``
+    collided with the local that holds the Winlink RMS-gateway callsign
+    from the POST body. Keeping them as distinct names prevents silent
+    shadowing.
     """
     global _winlink_log
     import subprocess, shutil, threading
@@ -773,7 +786,7 @@ def _winlink_connect(data, gateway=None):
     except (TypeError, ValueError):
         freq_mhz = None
     if freq_mhz:
-        tune_result = _winlink_tune_endpoint(freq_mhz, gateway=gateway)
+        tune_result = _winlink_tune_endpoint(freq_mhz, gw=gw)
         _winlink_log += tune_result['log'] + '\n'
     try:
         proc = subprocess.Popen(
