@@ -747,12 +747,33 @@ def _winlink_tune_endpoint(freq_mhz: float, gw) -> dict:
     # convention without the dispatcher needing to know about each plugin.
     cmd = {'cmd': 'frequency', 'freq': freq_mhz, 'freq_mhz': freq_mhz}
     result = link_server.send_command_to_and_wait(endpoint_name, cmd, timeout=5.0)
-    if result.get('ok'):
-        return {'ok': True,
-                'log': f'Tuned {endpoint_name} to {freq_mhz} MHz'}
-    return {'ok': False,
-            'log': f'Auto-tune failed: {result.get("error", "no ACK")} '
-                   f'— proceeding anyway, operator should verify dial'}
+    if not result.get('ok'):
+        return {'ok': False,
+                'log': f'Auto-tune failed: {result.get("error", "no ACK")} '
+                       f'— proceeding anyway, operator should verify dial'}
+    log_lines = [f'Tuned {endpoint_name} to {freq_mhz} MHz']
+
+    # Endpoints that own their TNC (IC-7100) need explicit FM-D switching:
+    # 1200 baud AFSK only modulates correctly out of the FM stage with
+    # DATA mode engaged. AIOC-style endpoints (TH-9800, FTM, KV4P, D75)
+    # don't have a separate data mode — they're AFSK-on-FM by hardware
+    # design — so we skip those two commands for them.
+    if caps.get('packet_local_tnc'):
+        m = link_server.send_command_to_and_wait(
+            endpoint_name, {'cmd': 'mode', 'mode': 'FM', 'filter': 1},
+            timeout=5.0)
+        if m.get('ok'):
+            log_lines.append(f'Set {endpoint_name} to FM mode')
+        else:
+            log_lines.append(f'FM mode set failed: {m.get("error", "no ACK")}')
+        d = link_server.send_command_to_and_wait(
+            endpoint_name, {'cmd': 'data_mode', 'on': True},
+            timeout=5.0)
+        if d.get('ok'):
+            log_lines.append(f'Engaged FM-D (DATA mode) on {endpoint_name}')
+        else:
+            log_lines.append(f'FM-D engage failed: {d.get("error", "no ACK")}')
+    return {'ok': True, 'log': '\n'.join(log_lines)}
 
 
 def _winlink_connect(data, gw=None):
