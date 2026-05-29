@@ -158,10 +158,21 @@ class _AGWPEProxyMixin:
                 print(f"  [Packet] AGWPE [{label}]: ERR after {_frames}f "
                       f"{_bytes}B {elapsed:.1f}s: {_e}", flush=True)
             finally:
-                try: src.close()
-                except: pass
-                try: dst.close()
-                except: pass
+                # shutdown() before close() so Direwolf sees an immediate
+                # FIN on the AGWPE socket and reaps its client slot.
+                # Without this, sockets pile up in ESTABLISHED state on
+                # the endpoint, eventually exhausting Direwolf's AGWPE
+                # client pool — the 4th-or-so Pat connect then times out
+                # with "context deadline exceeded".
+                for _s in (src, dst):
+                    try:
+                        _s.shutdown(socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+                    try:
+                        _s.close()
+                    except Exception:
+                        pass
                 done.set()
 
         threading.Thread(target=_fwd, args=(client, remote, 'pat→dw'),
