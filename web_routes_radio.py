@@ -757,7 +757,7 @@ def _winlink_tune_endpoint(freq_mhz: float, gw) -> dict:
     # 1200 baud AFSK only modulates correctly out of the FM stage with
     # DATA mode engaged. AIOC-style endpoints (TH-9800, FTM, KV4P, D75)
     # don't have a separate data mode — they're AFSK-on-FM by hardware
-    # design — so we skip those two commands for them.
+    # design — so we skip those three commands for them.
     if caps.get('packet_local_tnc'):
         m = link_server.send_command_to_and_wait(
             endpoint_name, {'cmd': 'mode', 'mode': 'FM', 'filter': 1},
@@ -773,6 +773,29 @@ def _winlink_tune_endpoint(freq_mhz: float, gw) -> dict:
             log_lines.append(f'Engaged FM-D (DATA mode) on {endpoint_name}')
         else:
             log_lines.append(f'FM-D engage failed: {d.get("error", "no ACK")}')
+        # Force a known TX power level for packet. IC-7100's per-band
+        # power can drift to near-0% across menu pages and the
+        # front-panel knob doesn't always restore it — the PO meter
+        # reads dead even though TX is engaged. 25% is a safe default
+        # for a packet session (≈12W on VHF/UHF); tune via
+        # PACKET_TX_POWER_PCT in gateway_config.txt.
+        power_pct = 25
+        try:
+            import web_server as _ws
+            cfg = getattr(getattr(_ws, '_gateway_instance', gw), 'config', None)
+            if cfg is None:
+                cfg = getattr(gw, 'config', None)
+            if cfg is not None:
+                power_pct = int(getattr(cfg, 'PACKET_TX_POWER_PCT', 25))
+        except Exception:
+            pass
+        p = link_server.send_command_to_and_wait(
+            endpoint_name, {'cmd': 'power', 'pct': power_pct},
+            timeout=5.0)
+        if p.get('ok'):
+            log_lines.append(f'Set {endpoint_name} TX power to {power_pct}%')
+        else:
+            log_lines.append(f'TX power set failed: {p.get("error", "no ACK")}')
     return {'ok': True, 'log': '\n'.join(log_lines)}
 
 
