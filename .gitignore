@@ -96,3 +96,6 @@ tools/room-monitor-app/app/build/
 tools/room-monitor-app/build/
 tools/room-monitor-app/local.properties
 gateway_mcp.py.legacy
+
+# Project memory — synced via a separate PRIVATE repo, never in this public one
+.claude/memory/
