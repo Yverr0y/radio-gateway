@@ -124,7 +124,15 @@ class _EndpointMixin:
 
     def _send_endpoint_mode(self, mode):
         """Send mode command to the remote AIOC endpoint via the link server.
-        Returns True on success, False on failure."""
+        Returns True on success, False on failure.
+
+        For mode='data' we include a TXDELAY value (Direwolf TXDELAY is in
+        10ms units — 120 = 1200 ms of leading tone). 800 ms (the legacy
+        hardcoded value on the IC-7100 endpoint) wasn't enough to give
+        the radio's TX stage time to come up before the actual frame
+        bits, so the start of the first frame in a session was clipped.
+        Tune via PACKET_TXDELAY in gateway_config.txt.
+        """
         target = self._find_endpoint(force=True)
         if not target:
             print(f"  [Packet] No AIOC endpoint found for packet radio")
@@ -134,6 +142,8 @@ class _EndpointMixin:
             'callsign': self._callsign, 'ssid': self._ssid,
             'modem': self._modem_rate, 'kiss_port': self._kiss_port,
         }
+        if mode == 'data':
+            cmd['txdelay'] = int(getattr(self._config, 'PACKET_TXDELAY', 120))
         try:
             self._gateway.link_server.send_command_to(target, cmd)
             print(f"  [Packet] Sent mode={mode} to endpoint '{target}'")

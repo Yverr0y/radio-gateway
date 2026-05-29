@@ -1542,7 +1542,7 @@ class IC7100DirewolfRunner:
         self.kiss_port = 8001
         self.modem = 1200
 
-    def start(self, callsign, ssid=0, modem=1200, kiss_port=8001):
+    def start(self, callsign, ssid=0, modem=1200, kiss_port=8001, txdelay=120):
         if not os.path.exists(self._direwolf_path):
             print(f"[IC7100-Direwolf] not found at {self._direwolf_path}",
                   flush=True)
@@ -1564,7 +1564,7 @@ class IC7100DirewolfRunner:
             f"CHANNEL 0\n"
             f"MYCALL {full}\n"
             f"MODEM {int(modem)}\n"
-            f"TXDELAY 80\n"
+            f"TXDELAY {int(txdelay)}\n"
             f"DWAIT 0\n\n"
             f"PTT RIG 2 127.0.0.1:{int(self._rigctld_port)}\n"
             f"FIX_BITS 1\n\n"
@@ -1708,6 +1708,8 @@ class IC7100Plugin(RadioPlugin):
         self._tnc_ssid = 0
         self._tnc_modem = 1200
         self._tnc_kiss_port = 8001
+        self._tnc_txdelay = 120  # Direwolf TXDELAY (10ms units); overrideable
+                                  # via the gateway's 'mode=data' command.
         # Saved op-mode/filter so we can restore on exit from data mode.
         # 1200 baud AFSK packet requires FM-D on the radio; if we naively
         # toggle data mode while the radio is on USB/LSB we get USB-D/LSB-D
@@ -2264,10 +2266,15 @@ class IC7100Plugin(RadioPlugin):
                     self._tnc_kiss_port = int(cmd['kiss_port'])
                 except (TypeError, ValueError):
                     pass
+            if 'txdelay' in cmd:
+                try:
+                    self._tnc_txdelay = int(cmd['txdelay'])
+                except (TypeError, ValueError):
+                    pass
 
             print(f"[IC7100] TNC mode {self._tnc_mode} -> {new_mode} "
                   f"(call={self._tnc_callsign} modem={self._tnc_modem} "
-                  f"KISS={self._tnc_kiss_port})", flush=True)
+                  f"KISS={self._tnc_kiss_port} TXDELAY={self._tnc_txdelay})", flush=True)
 
             if new_mode == 'data':
                 if not self._audio_device:
@@ -2312,7 +2319,8 @@ class IC7100Plugin(RadioPlugin):
                     rigctld_port=self._rigctld._port)
                 if not runner.start(self._tnc_callsign, ssid=self._tnc_ssid,
                                     modem=self._tnc_modem,
-                                    kiss_port=self._tnc_kiss_port):
+                                    kiss_port=self._tnc_kiss_port,
+                                    txdelay=self._tnc_txdelay):
                     # Restore audio on failure so we don't leave the radio dead.
                     self._capture = IC7100AudioCapture(self._audio_device,
                                                       self._rx_queue)
