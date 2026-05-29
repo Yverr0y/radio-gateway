@@ -437,7 +437,8 @@ class _RoutingCmdsMixin:
         if not self._ROUTING_CONFIG_PATH:
             import os
             self._ROUTING_CONFIG_PATH = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), 'routing_config.json')
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'routing_config.json')
         return self._ROUTING_CONFIG_PATH
 
     def _load_routing_config(self):
@@ -449,8 +450,10 @@ class _RoutingCmdsMixin:
                 with open(path) as f:
                     data = json.load(f)
                 return data.get('busses', []), data.get('connections', []), data.get('layout')
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [Routing] Failed to load config from {path}: {e}")
+        else:
+            print(f"  [Routing] Config not found at {path} — returning empty routing")
         return [], [], None
 
     def _save_routing_config(self, busses, connections, layout=None):
