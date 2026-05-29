@@ -23,12 +23,26 @@ from packet.pat import _PatMixin
 from packet.mode import _ModeMixin
 from packet.kiss import _KISSMixin
 from packet.state import _PacketStateMixin
+from plugins._base import CAPABILITY_PACKET, CAPABILITY_STATUS
 
 
 class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin,
                         _ModeMixin, _KISSMixin, _PacketStateMixin):
-    """Software TNC (Direwolf) plugin for the gateway routing system."""
+    """Software TNC (Direwolf) plugin for the gateway routing system.
 
+    Migrated to ``plugins/`` in Phase 2.D.relocate. Audio is owned by
+    Direwolf on the endpoint or on the gateway box — the plugin itself
+    is control plane only, hence ``audio_rx``/``audio_tx`` are False on
+    both contract surfaces.
+    """
+
+    # ── New plugin contract metadata ────────────────────────────────
+    PLUGIN_ID = 'packet'
+    PLUGIN_NAME = 'Packet TNC'
+    CAPABILITIES = {CAPABILITY_PACKET, CAPABILITY_STATUS}
+
+    # Backward-compat surface for code that still reads ``name`` or
+    # lowercase ``capabilities`` (Mixer v2 UI, status JSON consumers).
     name = "tnc"
     capabilities = {
         "audio_rx": False,
@@ -147,6 +161,11 @@ class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin,
         self._disconnect_kiss()
         self._stop_pat()
         print("  [Packet] Teardown complete")
+
+    # Plugin contract alias — the new RadioPlugin Protocol calls the
+    # shutdown hook ``cleanup``; legacy callers (gateway_setup, MCP) still
+    # call ``teardown``. Same body, two names.
+    cleanup = teardown
 
     # ── Audio interface (stubs — audio handled by endpoint) ──────────
 

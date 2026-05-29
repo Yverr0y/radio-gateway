@@ -228,6 +228,15 @@
       <span><span class="pkt-label">Direwolf:</span> <span id="st-dw" class="pkt-val red">stopped</span></span>
       <span><span class="pkt-label">KISS:</span> <span id="st-kiss" class="pkt-val red">no</span></span>
     </div>
+    <!-- State machine surfacing (Phase 2.D.cleanup.2). Hidden while
+         phase=='steady' since the existing Mode/KISS pills are sufficient
+         in that case; shown during transitions and errors. -->
+    <div class="pkt-row" id="st-sm-row" style="display:none;">
+      <span><span class="pkt-label">Phase:</span> <span id="st-sm-phase" class="pkt-val">steady</span></span>
+      <span id="st-sm-step-wrap" style="display:none;"><span class="pkt-label">Step:</span> <span id="st-sm-step" class="pkt-val">—</span></span>
+      <span id="st-sm-error-wrap" style="display:none;"><span class="pkt-label">Error:</span> <span id="st-sm-error" class="pkt-val red">—</span></span>
+      <span id="st-sm-age-wrap" style="display:none;"><span class="pkt-label">For:</span> <span id="st-sm-age" class="pkt-val">0s</span></span>
+    </div>
     <div class="pkt-row">
       <span><span class="pkt-label">Packets:</span> <span id="st-pkts" class="pkt-val">0</span></span>
       <span><span class="pkt-label">Stations:</span> <span id="st-stns" class="pkt-val">0</span></span>
@@ -470,6 +479,42 @@ function pollStatus() {
     document.getElementById('st-mode').className = 'pkt-val ' + (s.mode === 'idle' ? 'yellow' : 'cyan');
     document.getElementById('st-call').textContent = s.callsign || '—';
     document.getElementById('st-modem').textContent = (s.modem || 1200) + ' bps';
+
+    // State machine surfacing. Shows the row only when phase ≠ steady so
+    // operators see what's happening during transitions or when something
+    // has gone wrong, but the panel stays uncluttered in normal operation.
+    var sm = s.state || {};
+    var smRow = document.getElementById('st-sm-row');
+    if (sm.phase && sm.phase !== 'steady') {
+      smRow.style.display = '';
+      var phaseEl = document.getElementById('st-sm-phase');
+      phaseEl.textContent = sm.phase;
+      phaseEl.className = 'pkt-val ' + (
+        sm.phase === 'error'   ? 'red'    :
+        sm.phase === 'starting' ? 'yellow' :
+        sm.phase === 'stopping' ? 'yellow' : 'cyan'
+      );
+      var stepWrap = document.getElementById('st-sm-step-wrap');
+      if (sm.step) {
+        stepWrap.style.display = '';
+        document.getElementById('st-sm-step').textContent = sm.step;
+      } else {
+        stepWrap.style.display = 'none';
+      }
+      var errWrap = document.getElementById('st-sm-error-wrap');
+      if (sm.last_error) {
+        errWrap.style.display = '';
+        document.getElementById('st-sm-error').textContent = sm.last_error;
+      } else {
+        errWrap.style.display = 'none';
+      }
+      var ageWrap = document.getElementById('st-sm-age-wrap');
+      ageWrap.style.display = '';
+      document.getElementById('st-sm-age').textContent = (sm.phase_age_secs || 0) + 's';
+    } else {
+      smRow.style.display = 'none';
+    }
+
     // Direwolf health — for AIOC endpoints this is the gateway-side TNC;
     // for local-TNC endpoints (IC-7100) it lives on the endpoint, so fall
     // back to the endpoint's direwolf_running so the top line still tracks

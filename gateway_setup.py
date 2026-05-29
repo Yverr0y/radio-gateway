@@ -323,7 +323,7 @@ def setup_packet(gw):
     if not getattr(gw.config, 'ENABLE_PACKET', False):
         return
     try:
-        from packet_radio import PacketRadioPlugin
+        from plugins.packet import PacketRadioPlugin
         print("Initializing Packet Radio plugin...")
         gw.packet_plugin = PacketRadioPlugin()
         if gw.packet_plugin.setup(gw.config, gateway=gw):

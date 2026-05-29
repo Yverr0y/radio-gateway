@@ -240,6 +240,18 @@ explicitly instead of disappearing into the journal.
 - ✅ Pre-existing regression fixed: `plugins/sdr.py` setup signature didn't accept `gateway=None`; the discover_plugins loader was crashing trying to load it. SDR setup now accepts the kwarg and ignores it; the loader also gained a guard that skips plugin IDs already loaded by `gateway_setup` (belt + suspenders).
 - ✅ **Live verified:** `curl /status` returns `state = {'target': 'idle', 'phase': 'steady', 'step': None, 'last_error': None, 'phase_age_secs': 16.6}`. SDR/TH-9800/Packet all loaded clean; AGWPE proxy up.
 
+## 2.D.cleanup.3 — surface state in /packet UI + relocate to plugins/
+Both follow-ups in one commit since they're independent and small.
+
+- ✅ `web_pages/packet.html` gained a state-machine row that only renders when phase ≠ 'steady' (keeps the UI uncluttered in normal operation). Shows phase pill (steady→cyan, starting/stopping→yellow, error→red), current step, last_error, and phase_age in seconds. JS polls `s.state` from the existing /packet/status response.
+- ✅ `git mv packet_radio.py → plugins/packet.py` — last gateway-resident radio relocated to `plugins/`. All four (TH-9800, SDR, packet) now share the same folder.
+- ✅ `PLUGIN_ID = 'packet'`, `PLUGIN_NAME = 'Packet TNC'`, `CAPABILITIES = {CAPABILITY_PACKET, CAPABILITY_STATUS}`. Legacy `name = "tnc"` + lowercase `capabilities` dict kept for back-compat.
+- ✅ Plugin contract gap: packet uses `teardown` (legacy convention); Protocol expects `cleanup`. Added `cleanup = teardown` class-level alias — both names work, body is identical.
+- ✅ `gateway_setup.py` updated to import `from plugins.packet import PacketRadioPlugin`.
+- ✅ **Live verified:** Plugin initialized from new path, AGWPE proxy up, state machine returns 'steady', packet UI shows mode without the state row.
+
+Phase 2 plugin migration complete. Plugin contract is formalised, the four gateway-resident radios (TH-9800, SDR, packet) live under `plugins/`, KV4P stays as a remote endpoint per its actual architecture.
+
 **Phase 2 acceptance:** all four radios under `plugins/`, adding a fifth requires zero core edits.
 
 ---
