@@ -1382,7 +1382,8 @@ class IC7100Rigctld:
         "0x0\n0x0\n0x0\n0x0\n0x0\n0\n"
     )
 
-    def __init__(self, civ_provider, host='127.0.0.1', port=4532):
+    def __init__(self, civ_provider, host='127.0.0.1', port=4532,
+                 ptt_settle_ms=200):
         self._get_civ = civ_provider
         self._host = host
         self._port = port
@@ -1390,6 +1391,22 @@ class IC7100Rigctld:
         self._thread = None
         self._running = False
         self._stats = {'connects': 0, 'ptt_set': 0, 'unknown': 0, 'errors': 0}
+        # After CI-V acknowledges PTT-on, we hold the rigctld response back
+        # by this many milliseconds before letting Direwolf proceed. The
+        # rigctld 'RPRT 0' is what gates Direwolf's first audio sample —
+        # delaying it gives the radio's TX stage time to fully come up so
+        # the start of the leading HDLC flag tones isn't lost to PA
+        # warm-up. Default 200 ms; overrideable via the data-mode payload.
+        self._ptt_settle_ms = int(ptt_settle_ms)
+
+    def set_ptt_settle_ms(self, ms):
+        """Update the per-key PTT settle delay (called when entering data
+        mode so the gateway-side config can tune it without restarting
+        the rigctld TCP server)."""
+        try:
+            self._ptt_settle_ms = max(0, int(ms))
+        except (TypeError, ValueError):
+            pass
 
     def start(self):
         try:
@@ -1504,8 +1521,17 @@ class IC7100Rigctld:
                 return 'RPRT -6\n'
             ok = civ.set_ptt(state)
             self._stats['ptt_set'] += 1
+            # Hold the OK back for ptt_settle_ms on the way up so Direwolf
+            # doesn't start sending audio until the radio's TX stage is
+            # solidly transmitting. Direwolf's TXDELAY governs the leading
+            # HDLC flag tones AFTER audio starts — it doesn't add quiet
+            # time between PTT-up and first sample. This delay does.
+            # Skipped on PTT-off so unkeying is still snappy.
+            if ok and state and self._ptt_settle_ms > 0:
+                time.sleep(self._ptt_settle_ms / 1000.0)
             print(f"[IC7100-Rigctld] {op} PTT={'ON' if state else 'off'} "
-                  f"ok={ok}", flush=True)
+                  f"ok={ok} settle_ms={self._ptt_settle_ms if state else 0}",
+                  flush=True)
             return 'RPRT 0\n' if ok else 'RPRT -9\n'
         if op in ('t', 'get_ptt'):
             civ = self._get_civ()
@@ -2271,10 +2297,14 @@ class IC7100Plugin(RadioPlugin):
                     self._tnc_txdelay = int(cmd['txdelay'])
                 except (TypeError, ValueError):
                     pass
+            if 'ptt_settle_ms' in cmd and self._rigctld is not None:
+                self._rigctld.set_ptt_settle_ms(cmd['ptt_settle_ms'])
 
             print(f"[IC7100] TNC mode {self._tnc_mode} -> {new_mode} "
                   f"(call={self._tnc_callsign} modem={self._tnc_modem} "
-                  f"KISS={self._tnc_kiss_port} TXDELAY={self._tnc_txdelay})", flush=True)
+                  f"KISS={self._tnc_kiss_port} TXDELAY={self._tnc_txdelay} "
+                  f"PTT_SETTLE={getattr(self._rigctld, '_ptt_settle_ms', '?')}ms)",
+                  flush=True)
 
             if new_mode == 'data':
                 if not self._audio_device:

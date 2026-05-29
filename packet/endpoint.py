@@ -144,6 +144,11 @@ class _EndpointMixin:
         }
         if mode == 'data':
             cmd['txdelay'] = int(getattr(self._config, 'PACKET_TXDELAY', 120))
+            # PTT-up settle delay: holds back the rigctld response so
+            # Direwolf doesn't start sending audio until the radio's TX
+            # stage is fully up. Defaults to 200 ms; tune via
+            # PACKET_PTT_SETTLE_MS in gateway_config.txt.
+            cmd['ptt_settle_ms'] = int(getattr(self._config, 'PACKET_PTT_SETTLE_MS', 200))
         try:
             self._gateway.link_server.send_command_to(target, cmd)
             print(f"  [Packet] Sent mode={mode} to endpoint '{target}'")
