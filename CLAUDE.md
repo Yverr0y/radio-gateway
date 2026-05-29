@@ -13,18 +13,26 @@ is found, update the memory files:
 - `<auto-memory-path>/MEMORY.md` — concise project overview (keep under 200 lines)
 - `<auto-memory-path>/bugs.md` — bug history
 
-Also mirror the updated files into `.claude/memory/` inside this
-project directory so they travel with the repo.
+Also mirror the updated files into `.claude/memory/` inside this project
+directory. IMPORTANT: this repo is PUBLIC, so `.claude/memory/` is gitignored
+and is NOT committed here. The memory is version-controlled in the PRIVATE repo
+`ukbodypilot/claude-notes` (folder `radio-gateway/`). Never put secrets
+(passwords, keys, tokens) in memory files regardless.
 
 ### Moving to a new machine
 Clone wherever you like (this repo is path-agnostic; the installer
-substitutes paths at install time). After cloning, seed the auto-memory
-from the mirrored copy inside the repo:
+substitutes paths at install time). Memory lives in the PRIVATE repo
+`ukbodypilot/claude-notes` (folder `radio-gateway/`), NOT in this public repo.
+Seed both the gitignored mirror and the auto-memory path from there:
 ```bash
+git clone git@github.com:ukbodypilot/claude-notes.git ~/claude-notes
 MEM_DIR="$HOME/.claude/projects/$(pwd | sed 's|/|-|g')/memory"
-mkdir -p "$MEM_DIR"
-cp .claude/memory/* "$MEM_DIR/"
+mkdir -p .claude/memory "$MEM_DIR"
+cp ~/claude-notes/radio-gateway/* .claude/memory/
+cp ~/claude-notes/radio-gateway/* "$MEM_DIR/"
 ```
+To push memory changes back: copy `.claude/memory/*` into
+`~/claude-notes/radio-gateway/` and commit/push that private repo.
 
 ### Syncing gateway_config.txt between machines
 `gateway_config.txt` is NOT in the repo. If missing, ask the user for the source machine's
