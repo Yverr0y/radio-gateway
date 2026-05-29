@@ -60,3 +60,12 @@ onnxruntime
 # pyrnnoise bundles librnnoise.so; we bind via ctypes and skip the
 # package __init__ so audiolab/matplotlib are not required.
 pyrnnoise
+
+# ── Windows audio client (optional) ──────────────────────────
+# Only needed for windows_audio_client.py, not the gateway itself.
+#   * keyboard — true hold-to-talk PTT (key press/release). Windows: no admin;
+#     Linux: needs root. Without it, the mic transmit key falls back to a toggle.
+# Voice effects (n/m) are in-process DSP using numpy + scipy (already required
+# above); a few effects (telephone/megaphone/underwater) use scipy filters and
+# degrade gracefully to clean mic if scipy is missing.
+keyboard ; sys_platform == "win32"
