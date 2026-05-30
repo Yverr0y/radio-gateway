@@ -185,11 +185,9 @@ class FilePlaybackSource(AudioSource):
                 # All slots 1-9 are full
                 break
         
-        # Step 3: Fill empty slots with random online sound effects
-        if getattr(self.config, 'ENABLE_SOUNDBOARD', True):
-            self._fill_soundboard_slots(file_map)
-
-        # Step 4: Update file_status with found files
+        # Step 4: Update file_status with found files (local files only here —
+        # soundboard downloads complete asynchronously and update file_status
+        # themselves as each file lands).
         for key in '0123456789':
             if key in file_map:
                 filepath, filename = file_map[key]
@@ -199,6 +197,17 @@ class FilePlaybackSource(AudioSource):
 
         # Step 5: Print file mapping (will be displayed before status bar)
         self.file_mapping_display = self._generate_file_mapping_display(file_map, station_id_found)
+
+        # Step 6: Kick off soundboard prefetch in the background. Must NOT
+        # block startup — the original synchronous call wedged the entire
+        # gateway init pipeline for 18+ minutes on a stuck mixkit.co socket
+        # (no timeout on urlretrieve), so broadcastify and everything after
+        # setup_playback never came up. Background thread + per-request
+        # timeout keeps soundboard slot population best-effort.
+        if getattr(self.config, 'ENABLE_SOUNDBOARD', True):
+            import threading
+            threading.Thread(target=self._fill_soundboard_slots, args=(file_map,),
+                             daemon=True, name="Soundboard-prefetch").start()
 
     # Curated pool of 429 free sound effects from Mixkit (royalty-free, no attribution)
     # URL pattern: https://assets.mixkit.co/active_storage/sfx/{id}/{id}-preview.mp3
@@ -428,11 +437,19 @@ class FilePlaybackSource(AudioSource):
             filename = f"{category}_{sfx_id}.mp3"
             filepath = os.path.join(cache_dir, filename)
 
-            # Download if not already cached
+            # Download if not already cached. Bounded timeout is essential:
+            # this runs in a background thread, but a leaked stuck socket
+            # would still pin file descriptors and leave a permanently-empty
+            # slot. 10s per request → ≤90s worst case for all 9 slots.
             if not os.path.exists(filepath):
                 url = f"https://assets.mixkit.co/active_storage/sfx/{sfx_id}/{sfx_id}-preview.mp3"
                 try:
-                    urllib.request.urlretrieve(url, filepath)
+                    with urllib.request.urlopen(url, timeout=10) as resp:
+                        data = resp.read()
+                    tmp_path = filepath + '.partial'
+                    with open(tmp_path, 'wb') as f:
+                        f.write(data)
+                    os.replace(tmp_path, filepath)
                     print(f"  [Soundboard] Downloaded: {filename}")
                 except Exception as e:
                     print(f"  [Soundboard] Failed to download {filename}: {e}")
@@ -440,6 +457,13 @@ class FilePlaybackSource(AudioSource):
 
             if os.path.exists(filepath):
                 file_map[slot] = (filepath, filename)
+                # Background-mode: update file_status so the slot becomes
+                # playable as soon as the download lands. Step 4 in
+                # check_file_availability only sees local files because
+                # this runs asynchronously.
+                self.file_status[slot]['exists'] = True
+                self.file_status[slot]['path'] = filepath
+                self.file_status[slot]['filename'] = filename
     
     def _generate_file_mapping_display(self, file_map, station_id_found):
         """Generate the file mapping display string"""
@@ -2646,7 +2670,21 @@ class StreamOutputSource:
                             print(f"  [Broadcastify] Reconnect failed (attempt #{count})")
                     finally:
                         self._reconnecting = False
-                threading.Thread(target=_auto_reconnect, daemon=True).start()
+                worker = threading.Thread(target=_auto_reconnect, daemon=True,
+                                          name="Broadcastify-reconnect")
+                worker.start()
+                # Watchdog: if the reconnect worker hangs (e.g. close() wedged
+                # on a half-dead pipe), force-release the _reconnecting flag
+                # after 30s so subsequent keepalive ticks can spawn a fresh
+                # attempt. The wedged worker may leak its encoder/socket, but
+                # the stream as a whole recovers instead of staying dark.
+                def _watchdog():
+                    worker.join(timeout=30)
+                    if worker.is_alive():
+                        print(f"  [Broadcastify] Reconnect attempt #{count} wedged >30s — releasing flag")
+                        self._reconnecting = False
+                threading.Thread(target=_watchdog, daemon=True,
+                                 name="Broadcastify-reconnect-wd").start()
             return
         try:
             with self._encoder_lock:
@@ -2699,12 +2737,20 @@ class StreamOutputSource:
         """Clean shutdown."""
         self.connected = False
         if self._encoder:
+            # Kill the process FIRST. stdin.close() can block indefinitely
+            # if the read end is in a half-dead state with buffered bytes
+            # — observed wedging the reconnect path for 11+ hours after a
+            # Broadcastify socket reset. SIGKILL guarantees the pipe is
+            # torn down so the subsequent stdin.close() returns immediately.
+            try:
+                self._encoder.kill()
+            except Exception:
+                pass
             try:
                 self._encoder.stdin.close()
             except Exception:
                 pass
             try:
-                self._encoder.kill()
                 self._encoder.wait(timeout=3)
             except Exception:
                 pass
