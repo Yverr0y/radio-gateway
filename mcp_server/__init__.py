@@ -21,6 +21,11 @@ def _register_all_tools():
         radios,
         routing,
         fleet,
+        transcription,
+        link,
+        loop_recorder,
+        cloud,
+        repeaters,
     )
 
 

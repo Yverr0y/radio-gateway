@@ -708,3 +708,30 @@ def process_control(service: str, action: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# TH-D75 memory scan — moved from tools/routing.py 2026-05-30
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def d75_memscan() -> str:
+    """
+    Scan TH-D75 memory channels. Returns a list of programmed channels
+    with frequency, name, tone, mode, shift, offset, and power.
+    Takes ~10-30 seconds depending on how many channels are programmed.
+    """
+    result = _get('/d75memlist')
+    if isinstance(result, list):
+        if not result:
+            return "No programmed channels found"
+        lines = [f"{len(result)} channels:"]
+        for ch in result[:50]:
+            tone = ch.get('tone', '')
+            lines.append(f"  CH{ch['ch']} {ch['freq']:.4f} MHz {ch.get('name','')} "
+                        f"{ch.get('mode','')} {ch.get('shift','')}{ch.get('offset','')} "
+                        f"tone={tone}")
+        if len(result) > 50:
+            lines.append(f"  ... and {len(result)-50} more")
+        return '\n'.join(lines)
+    return f"Error: {result.get('error', 'scan failed')}" if isinstance(result, dict) else "Scan failed"
+
+
+# ---------------------------------------------------------------------------

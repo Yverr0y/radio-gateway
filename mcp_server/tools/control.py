@@ -559,3 +559,39 @@ def telegram_reply(message: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Speaker output + gateway lifecycle — moved from tools/routing.py 2026-05-30
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def speaker_mode(mode: str) -> str:
+    """
+    Set the speaker output mode.
+
+    Args:
+        mode: 'virtual' (metering only, no audio device),
+              'auto' (use default output),
+              'real' (use specific ALSA device)
+    """
+    result = _post('/routing/cmd', {'cmd': 'speaker_mode', 'mode': mode})
+    if result.get('ok'):
+        return f"Speaker mode: {result.get('mode', mode)}"
+    return f"Error: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def gateway_restart() -> str:
+    """
+    Restart the radio gateway service via systemd.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(['sudo', '-n', 'systemctl', 'restart', 'radio-gateway.service'],
+                          capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return "Gateway restart initiated"
+        return f"Restart failed: {r.stderr.strip()}"
+    except Exception as e:
+        return f"Restart error: {e}"
+
+
+# ---------------------------------------------------------------------------
