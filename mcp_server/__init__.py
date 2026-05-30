@@ -26,6 +26,7 @@ def _register_all_tools():
         loop_recorder,
         cloud,
         repeaters,
+        metrics,
     )
 
 
