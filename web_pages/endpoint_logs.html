@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Endpoint Logs</title>
+<link rel="stylesheet" href="/pages/common.css">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; padding: var(--s-3); }
+
+  .ep-toolbar { margin-bottom: var(--s-2); display: flex; gap: var(--s-3);
+                align-items: center; flex-wrap: wrap; flex-shrink: 0; }
+  .ep-toolbar label { color: var(--t-text-dim); font-size: var(--f-sm); }
+  .ep-status { color: var(--t-text-dim); font-size: var(--f-xs); margin-left: auto; }
+
+  .ep-tabs { display: flex; gap: 0; border-bottom: 2px solid var(--t-border);
+             margin-bottom: var(--s-2); flex-wrap: wrap; flex-shrink: 0; }
+  .ep-tab {
+    padding: var(--s-1) var(--s-3); cursor: pointer; color: var(--t-text-dim);
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+    font-size: var(--f-sm); letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .ep-tab:hover  { color: var(--t-text); }
+  .ep-tab.active { color: var(--t-accent); border-bottom-color: var(--t-accent); font-weight: 600; }
+  .ep-tab.empty  { color: var(--t-text-dim); font-style: italic; }
+
+  .ep-box { background: var(--t-bg); border: 1px solid var(--t-border);
+            border-radius: var(--r-md); padding: var(--s-2);
+            flex: 1 1 auto; min-height: 0; overflow-y: auto;
+            font-family: monospace; font-size: var(--f-xs); line-height: 1.5;
+            white-space: pre-wrap; word-break: break-all; color: var(--t-text); }
+  .ep-box .err   { color: var(--t-err-soft); }
+  .ep-box .warn  { color: var(--t-warn-soft); }
+  .ep-box .stderr-line { color: var(--t-warn-soft); }
+  .ep-empty { color: var(--t-text-dim); font-style: italic; padding: var(--s-3); }
+</style>
+</head>
+<body>
+
+<div class="ep-toolbar">
+  <label><input type="checkbox" id="auto-scroll" checked> Auto-scroll</label>
+  <label>Lines:
+    <select id="line-count" class="rb rb-sm">
+      <option value="100">100</option>
+      <option value="500" selected>500</option>
+      <option value="2000">2000</option>
+    </select>
+  </label>
+  <label>Filter: <input type="text" id="filter" placeholder="substring..." class="rb rb-sm" style="width:200px"></label>
+  <button class="rb rb-sm" onclick="document.getElementById('log-box').innerHTML=''">Clear view</button>
+  <span id="status" class="ep-status">loading endpoints…</span>
+</div>
+
+<div id="tabs" class="ep-tabs"></div>
+<div id="log-box" class="ep-box"><div class="ep-empty">Select an endpoint above.</div></div>
+
+<script src="/pages/common.js"></script>
+<script>
+var _selected = null;
+var _endpoints = [];
+var _lastFetchTs = 0;
+var _fetchInFlight = false;
+var POLL_INTERVAL_MS = 2000;
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function renderTabs() {
+  var tabs = document.getElementById('tabs');
+  tabs.innerHTML = '';
+  if (!_endpoints.length) {
+    tabs.innerHTML = '<span class="ep-tab empty">no endpoints with logs yet</span>';
+    return;
+  }
+  _endpoints.forEach(function(name) {
+    var t = document.createElement('div');
+    t.className = 'ep-tab' + (name === _selected ? ' active' : '');
+    t.textContent = name;
+    t.onclick = function() { selectEndpoint(name); };
+    tabs.appendChild(t);
+  });
+}
+
+function selectEndpoint(name) {
+  _selected = name;
+  renderTabs();
+  document.getElementById('log-box').innerHTML = '<div class="ep-empty">loading…</div>';
+  pollLogs(true);
+}
+
+function classify(line) {
+  if (line.indexOf('[stderr]') >= 0) return 'stderr-line';
+  if (line.indexOf('error') >= 0 || line.indexOf('Error') >= 0 || line.indexOf('ERROR') >= 0) return 'err';
+  if (line.indexOf('Warning') >= 0 || line.indexOf('warning') >= 0 || line.indexOf('WARN') >= 0) return 'warn';
+  return '';
+}
+
+function renderLog(content) {
+  var box = document.getElementById('log-box');
+  var filterStr = (document.getElementById('filter').value || '').toLowerCase();
+  var lines = content.split('\n');
+  if (filterStr) {
+    lines = lines.filter(function(l) { return l.toLowerCase().indexOf(filterStr) >= 0; });
+  }
+  if (!lines.length || (lines.length === 1 && !lines[0])) {
+    box.innerHTML = '<div class="ep-empty">no lines match</div>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < lines.length; i++) {
+    var cls = classify(lines[i]);
+    var escaped = lines[i]
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html += '<div' + (cls ? ' class="' + cls + '"' : '') + '>' + escaped + '</div>';
+  }
+  box.innerHTML = html;
+  if (document.getElementById('auto-scroll').checked) {
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+function fetchEndpoints() {
+  return fetch('/api/endpoint_logs').then(function(r) { return r.json(); })
+    .then(function(data) {
+      var fresh = data.endpoints || [];
+      // Preserve order; only re-render if list changed
+      if (fresh.join('|') !== _endpoints.join('|')) {
+        _endpoints = fresh;
+        if (!_selected && _endpoints.length) {
+          _selected = _endpoints[0];
+        }
+        renderTabs();
+      }
+    })
+    .catch(function(e) { setStatus('endpoint list error: ' + e); });
+}
+
+function pollLogs(force) {
+  if (_fetchInFlight && !force) return;
+  if (!_selected) return;
+  _fetchInFlight = true;
+  var lines = document.getElementById('line-count').value || '500';
+  fetch('/api/endpoint_logs?name=' + encodeURIComponent(_selected) + '&lines=' + lines)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      renderLog(data.content || '');
+      var now = new Date();
+      setStatus(_selected + ' · refreshed ' + now.toLocaleTimeString());
+    })
+    .catch(function(e) { setStatus('fetch error: ' + e); })
+    .then(function() { _fetchInFlight = false; });
+}
+
+document.getElementById('line-count').addEventListener('change', function() { pollLogs(true); });
+document.getElementById('filter').addEventListener('input', function() { pollLogs(true); });
+
+fetchEndpoints().then(function() {
+  if (_selected) pollLogs(true);
+});
+
+setInterval(function() {
+  fetchEndpoints();
+  pollLogs();
+}, POLL_INTERVAL_MS);
+</script>
+</body>
+</html>

@@ -325,6 +325,7 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
         self.web_mic_source = None        # WebMicSource (browser mic → radio TX)
         self.web_monitor_source = None    # WebMonitorSource (room monitor, no PTT)
         self.link_server = None           # GatewayLinkServer (multi-endpoint)
+        self.endpoint_log_store = None    # EndpointLogStore — per-endpoint log files
         self.link_endpoints = {}          # {name: LinkAudioSource}
         self.link_endpoint_settings = {}  # {name: {rx_muted, tx_muted}} — persisted
         self._link_ptt_active = {}        # {name: bool}

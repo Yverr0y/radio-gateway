@@ -523,12 +523,19 @@ def setup_gateway_link(gw):
 
         on_register, on_disconnect, on_ack, on_endpoint_status = _make_link_callbacks(gw)
 
+        # Per-endpoint log store — endpoints ship stdout/stderr over the
+        # link as P.LOG frames; the store appends to rotating files under
+        # logs/endpoints/. See docs/endpoint_logs_design.md.
+        from core.endpoint_logs import EndpointLogStore
+        gw.endpoint_log_store = EndpointLogStore()
+
         gw.link_server = GatewayLinkServer(
             port=link_port,
             on_register=on_register,
             on_disconnect=on_disconnect,
             on_ack=on_ack,
             on_endpoint_status=on_endpoint_status,
+            on_log_lines=gw.endpoint_log_store.append,
             supervisor=gw.process_supervisor,
         )
         gw.link_server.start()

@@ -708,6 +708,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 '/gdrive': 'gdrive.html',
                 '/manager': 'manager.html',
                 '/grafana': 'grafana.html',
+                '/endpoints/logs': 'endpoint_logs.html',
                 '/test': 'test.html',
             }
 
@@ -839,6 +840,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                     _rg.handle_packet_log(self, parent)
                 elif self.path.startswith('/loop/'):
                     _rg.handle_loop_api(self, parent)
+                elif self.path.startswith('/api/endpoint_logs'):
+                    _rg.handle_endpoint_logs(self, parent)
                 elif self.path == '/api/endpoint/version':
                     _rg.handle_endpoint_version(self, parent)
                 elif self.path == '/api/endpoint/files':

@@ -1367,6 +1367,7 @@ from web_routes_loop import handle_loop_api, handle_loop_post
 _ENDPOINT_FILES = [
     'gateway_link.py',
     'link_endpoint.py',
+    'log_shipper.py',
     'd75_link_plugin.py',
     'remote_bt_proxy.py',
 ]
@@ -1710,3 +1711,48 @@ document.addEventListener('keydown', function(e) {{
         handler.wfile.write(body)
     except BrokenPipeError:
         pass
+
+
+def handle_endpoint_logs(handler, parent):
+    """GET /api/endpoint_logs[?name=X&lines=N]
+
+    No params → JSON list of endpoint names that have logs on disk.
+    With ?name=X → JSON {name, lines, content} where content is the tail.
+    See docs/endpoint_logs_design.md.
+    """
+    import urllib.parse as _up
+    store = parent.gateway.endpoint_log_store if parent.gateway else None
+    if store is None:
+        try:
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'application/json')
+            handler.end_headers()
+            handler.wfile.write(b'{"error":"endpoint log store not enabled"}')
+        except BrokenPipeError:
+            pass
+        return
+    qs = _up.urlparse(handler.path).query
+    params = _up.parse_qs(qs)
+    name = (params.get('name') or [''])[0]
+    try:
+        n_lines = max(1, min(2000, int((params.get('lines') or ['200'])[0])))
+    except ValueError:
+        n_lines = 200
+    if not name:
+        data = {'endpoints': store.endpoint_names()}
+    else:
+        data = {
+            'name': name,
+            'lines': n_lines,
+            'content': store.tail(name, lines=n_lines),
+        }
+    try:
+        handler.send_response(200)
+        handler.send_header('Content-Type', 'application/json')
+        handler.send_header('Cache-Control', 'no-cache')
+        handler.end_headers()
+        handler.wfile.write(json_mod.dumps(data).encode('utf-8'))
+    except BrokenPipeError:
+        pass
+
+

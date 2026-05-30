@@ -116,6 +116,35 @@ def endpoint_ping(endpoint: str) -> str:
         return f"Ping error: {e}"
 
 
+@mcp.tool()
+def endpoint_logs(endpoint: str = '', lines: int = 50) -> str:
+    """
+    Read recent stdout/stderr lines from a link endpoint, captured at the
+    gateway via the in-protocol log shipper.
+
+    Persists across endpoint reboots — useful for "why did the BT serial
+    drop overnight?" investigations that the endpoint's local journal
+    would have lost. See docs/endpoint_logs_design.md.
+
+    Args:
+        endpoint: Endpoint name (e.g. 'D75'). Omit to list endpoint names
+                  that have logs available.
+        lines:    How many recent lines to return (default 50, max 2000).
+    """
+    if not endpoint:
+        data = _get('/api/endpoint_logs')
+        names = data.get('endpoints', [])
+        if not names:
+            return "No endpoint logs yet — log shipper not yet running, or no endpoints connected since startup."
+        return "Endpoints with logs:\n  " + "\n  ".join(names)
+    n = max(1, min(2000, int(lines)))
+    data = _get(f'/api/endpoint_logs?name={endpoint}&lines={n}')
+    content = data.get('content', '')
+    if not content:
+        return f"No log content for endpoint '{endpoint}' (file empty or missing)."
+    return content
+
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Tools — Packet Radio

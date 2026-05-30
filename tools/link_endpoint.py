@@ -370,6 +370,21 @@ def main():
         list_audio_devices()
         sys.exit(0)
 
+    # Install the log shipper RIGHT NOW so plugin setup logs and update
+    # messages get captured in the ring buffer. It's attached to the
+    # link client further down (after the client is constructed) — until
+    # then lines accumulate in the deque, capped at buf_max so a long
+    # update can't run RAM away. Import is best-effort: if log_shipper.py
+    # didn't make it through a partial deploy (e.g. an older gateway that
+    # doesn't ship it in the endpoint files bundle), continue without
+    # log shipping — never crash the endpoint over a logging-only feature.
+    try:
+        from log_shipper import LogShipper
+        _log_shipper = LogShipper()
+    except ImportError as _e:
+        print(f"[LogShipper] not available, continuing without log shipping: {_e}")
+        _log_shipper = None
+
     # Self-update check — try LAN gateway first, then tunnel URL
     if not args.no_update:
         _update_url = None
@@ -610,6 +625,13 @@ def main():
 
     threading.Thread(target=_periodic_update_checker, daemon=True,
                      name="update-check").start()
+
+    # Attach the log shipper now that we have a client. The flush thread
+    # starts here; lines collected during plugin setup + update checks
+    # ship on the next link reconnect. Skipped if the shipper module
+    # wasn't available at import time.
+    if _log_shipper is not None:
+        _log_shipper.attach(client)
 
     # Start client (connects in background, auto-reconnect)
     client.start()
