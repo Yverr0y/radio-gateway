@@ -15,7 +15,7 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
 # Create the session with claude running inside it
 tmux new-session -d -s "$SESSION" -c "$WORKDIR" \
     -e TERM=xterm-256color -e HOME=/home/user -e PATH="/home/user/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-    "$CLAUDE_BIN --dangerously-skip-permissions"
+    "$CLAUDE_BIN --dangerously-skip-permissions --model sonnet --effort medium"
 if [ $? -ne 0 ]; then
     echo "Failed to create tmux session" >&2
     exit 1

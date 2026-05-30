@@ -64,7 +64,7 @@ def handle_voice_session(handler, parent):
             result = {'ok': True, 'msg': 'session already exists'}
         else:
             subprocess.run(['tmux', 'new-session', '-d', '-s', tmux_target, '-c', '/home/user'])
-            subprocess.run(['tmux', 'send-keys', '-t', tmux_target, '-l', 'claude --dangerously-skip-permissions'])
+            subprocess.run(['tmux', 'send-keys', '-t', tmux_target, '-l', 'claude --dangerously-skip-permissions --model sonnet --effort medium'])
             subprocess.run(['tmux', 'send-keys', '-t', tmux_target, 'Enter'])
             # Auto-confirm workspace trust prompt after startup
             import time; time.sleep(3)
@@ -86,7 +86,7 @@ def handle_voice_session(handler, parent):
             subprocess.run(['tmux', 'send-keys', '-t', tmux_target, '-l', 'clear'])
             subprocess.run(['tmux', 'send-keys', '-t', tmux_target, 'Enter'])
             import time; time.sleep(0.3)
-        subprocess.run(['tmux', 'send-keys', '-t', tmux_target, '-l', 'claude --dangerously-skip-permissions'])
+        subprocess.run(['tmux', 'send-keys', '-t', tmux_target, '-l', 'claude --dangerously-skip-permissions --model sonnet --effort medium'])
         subprocess.run(['tmux', 'send-keys', '-t', tmux_target, 'Enter'])
         # Auto-confirm workspace trust prompt after startup
         import time; time.sleep(3)

@@ -30,7 +30,7 @@ Setup:
     4. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in gateway_config.txt
     5. Start Claude Code in a named tmux session:
            tmux new-session -s claude-gateway
-           claude --dangerously-skip-permissions
+           claude --dangerously-skip-permissions --model sonnet --effort medium
     6. Run this script (or enable the systemd service):
            python3 tools/telegram_bot.py
 
@@ -436,7 +436,7 @@ def run():
                 if not tmux_ok:
                     _send_message(token, chat_id,
                         f'⚠️ Claude tmux session `{session}` not found.\n'
-                        f'Start it with:\n```\ntmux new-session -s {session}\nclaude --dangerously-skip-permissions\n```'
+                        f'Start it with:\n```\ntmux new-session -s {session}\nclaude --dangerously-skip-permissions --model sonnet --effort medium\n```'
                     )
 
         except KeyboardInterrupt:
