@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import collections
 import json
+import os
 import socket
 import struct
 import threading
@@ -128,6 +129,10 @@ _PANEL_HTML = """<!DOCTYPE html>
 <div class="card">
   <div class="row">
     <input type="text" id="node" inputmode="numeric" placeholder="node #">
+    <select id="recent" title="recent nodes"
+            onchange="if(this.value){document.getElementById('node').value=this.value;} this.selectedIndex=0;">
+      <option value="">recent ▾</option>
+    </select>
     <button class="b-conn" onclick="act('connect','transceive')">Connect</button>
     <button class="b-mon" onclick="act('connect','monitor')">Monitor</button>
     <button class="b-all" onclick="act('disconnect_all')">Disconnect all</button>
@@ -211,6 +216,14 @@ async function poll(){
     $('amiline').textContent = 'via USRP bridge — AMI ' +
         (s.ami_ready ? ('ready ('+s.ami+')') : 'NOT configured');
     if(s.links_age!=null) $('age').textContent = 'updated '+s.links_age+'s ago';
+    if(Array.isArray(s.recent)){
+      const sel=$('recent'), sig=s.recent.join(',');
+      if(sel.dataset.sig!==sig){
+        sel.innerHTML='<option value="">recent ▾</option>'+
+          s.recent.map(n=>'<option value="'+n+'">'+n+'</option>').join('');
+        sel.dataset.sig=sig;
+      }
+    }
   }catch(e){}
 }
 refreshLinks(); poll();
@@ -276,6 +289,8 @@ class UsrpPlugin:
         self._last_ctrl = ''           # last control result text (for the panel)
         self._links_cache = []         # last-known connected nodes (panel display)
         self._links_cache_mono = 0.0
+        self._recent = []              # last 10 connected node numbers (dropdown)
+        self._recent_path = None       # JSON persistence path (set in setup)
 
         self._sock = None
         self._stop = threading.Event()
@@ -322,6 +337,10 @@ class UsrpPlugin:
         self.ami_port = int(getattr(config, 'USRP_AMI_PORT', 5038))
         self.ami_user = str(getattr(config, 'USRP_AMI_USER', ''))
         self.ami_secret = str(getattr(config, 'USRP_AMI_SECRET', ''))
+        self._recent_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'usrp_recent.json')
+        self._recent = self._load_recent()
 
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -580,11 +599,43 @@ class UsrpPlugin:
                 break
         return ''.join(chunks)
 
+    def _load_recent(self):
+        """Load the recent-nodes list from disk (best-effort)."""
+        try:
+            with open(self._recent_path) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [str(x) for x in data if str(x).isdigit()][:10]
+        except (OSError, ValueError):
+            pass
+        return []
+
+    def _save_recent(self):
+        if not self._recent_path:
+            return
+        try:
+            with open(self._recent_path, 'w') as f:
+                json.dump(self._recent, f)
+        except OSError:
+            pass
+
+    def _remember(self, node):
+        """Push a node to the front of the recent list (dedup, cap 10, persist)."""
+        node = str(node).strip()
+        if not node.isdigit():
+            return
+        if node in self._recent:
+            self._recent.remove(node)
+        self._recent.insert(0, node)
+        del self._recent[10:]
+        self._save_recent()
+
     def connect_node(self, target, mode=ILINK_TRANSCEIVE):
         """Tell the bridge node to link to ``target`` (transceive by default)."""
         target = str(target).strip()
         if not target.isdigit():
             return {'ok': False, 'error': f'invalid node: {target!r}'}
+        self._remember(target)
         ok, out = self._ami_command(f'rpt cmd {self.node} ilink {mode} {target}')
         self._last_ctrl = (f"connect {target} (mode {mode}): "
                            f"{'ok' if ok else out}")
@@ -697,6 +748,7 @@ class UsrpPlugin:
             'links': list(self._links_cache),
             'links_age': (round(time.monotonic() - self._links_cache_mono, 1)
                           if self._links_cache_mono else None),
+            'recent': list(self._recent),
         }
 
     # ── web control panel (web_routes hook) ────────────────────────

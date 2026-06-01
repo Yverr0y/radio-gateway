@@ -4,6 +4,12 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Fixed
+- **AllStar TX was dead (`pkts_tx=0`)** — buses are built *before* plugin discovery, so a solo/duplex bus whose TX radio is an external plugin (e.g. `grunge → usrp_tx`) resolved to `None` at creation and never attached its radio, so `put_audio` was never called. `core/lifecycle.py` now calls `bus_manager.reload()` after discovery (same mechanism endpoint registration uses) so external-plugin radios attach.
+
+### Added
+- **`/usrp` recent-nodes dropdown** — the panel remembers the last 10 connected nodes (persisted to `usrp_recent.json`), so you can pick from a list instead of retyping.
+
 ## [4.0.0] -- 2026-05-31
 
 AllStarLink integration. The gateway can now bridge into the AllStar network as a first-class audio source/sink and connect to any node on demand — without running a radio node on the gateway box. A headless ASL3 "bridge node" (no RF hardware) speaks the USRP (DVSwitch) protocol to a new in-gateway plugin; everything else (Mumble, web player, other radios) routes to/from AllStar like any other bus endpoint. Bringing this up also turned the plugin system from "auto-discovered but only half-wired" into genuinely generic over discovered plugins.

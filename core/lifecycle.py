@@ -603,9 +603,15 @@ class _LifecycleMixin:
             self._external_plugins = discover_plugins(self.config, self)
             if self._external_plugins:
                 print(f"✓ Loaded {len(self._external_plugins)} external plugin(s)")
-                # Re-sync listen bus to pick up new sources
+                # Buses are built BEFORE plugin discovery, so a solo/duplex bus
+                # whose radio is an external plugin (e.g. AllStar usrp_tx sink)
+                # resolved to None at creation and never got its TX radio →
+                # put_audio was never called. Rebuild now that _external_plugins
+                # is populated — same mechanism endpoint registration uses
+                # (gateway_setup → bus_manager.reload()). reload() re-syncs the
+                # listen bus too, so it supersedes sync_listen_bus() here.
                 if self.bus_manager:
-                    self.bus_manager.sync_listen_bus()
+                    self.bus_manager.reload()
         except Exception as e:
             print(f"  [Plugins] Discovery failed: {e}")
 

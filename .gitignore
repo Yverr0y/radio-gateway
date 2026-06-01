@@ -102,3 +102,6 @@ audio/farts/
 
 # Project memory — synced via a separate PRIVATE repo, never in this public one
 .claude/memory/
+
+# AllStar USRP recent-nodes list (runtime state)
+usrp_recent.json
