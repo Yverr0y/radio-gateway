@@ -209,7 +209,7 @@ class FilePlaybackSource(AudioSource):
             threading.Thread(target=self._fill_soundboard_slots, args=(file_map,),
                              daemon=True, name="Soundboard-prefetch").start()
 
-    # Curated pool of 429 free sound effects from Mixkit (royalty-free, no attribution)
+    # Curated pool of 433 free sound effects from Mixkit (royalty-free, no attribution)
     # URL pattern: https://assets.mixkit.co/active_storage/sfx/{id}/{id}-preview.mp3
     # Categories: animals, applause, arcade, bells, boing, buzzer, cartoon, crowd,
     #             drums, explosion, funny, game, horns, impact, sirens, transition,
@@ -384,9 +384,10 @@ class FilePlaybackSource(AudioSource):
         ('whoosh', 2651), ('whoosh', 2903), ('whoosh', 2918), ('whoosh', 3005), ('whoosh', 3024),
         ('whoosh', 1487), ('whoosh', 1488), ('whoosh', 1494), ('whoosh', 1715), ('whoosh', 1716),
         ('whoosh', 1717), ('whoosh', 1718), ('whoosh', 1719), ('whoosh', 1720), ('whoosh', 2351),
-        # Fart (8)
+        # Fart (12) — full free-tier Mixkit fart category
         ('fart', 3041), ('fart', 3043), ('fart', 3051), ('fart', 3052),
         ('fart', 3053), ('fart', 3054), ('fart', 3055), ('fart', 3056),
+        ('fart', 2889), ('fart', 2890), ('fart', 2891), ('fart', 3050),
         # Laugh (19)
         ('laugh', 409), ('laugh', 410), ('laugh', 411), ('laugh', 416), ('laugh', 417),
         ('laugh', 418), ('laugh', 420), ('laugh', 421), ('laugh', 426), ('laugh', 427),
@@ -561,6 +562,18 @@ class FilePlaybackSource(AudioSource):
         self.playlist.append((full_path, pcm_bytes))
         if self.gateway.config.VERBOSE_LOGGING:
             print(f"\n[Playback] ✓ Queued: {os.path.basename(full_path)} ({len(self.playlist)} in queue)")
+        return True
+
+    def queue_pcm(self, pcm_bytes, name="synth"):
+        """Queue already-decoded int16 PCM (AUDIO_RATE, mono) for playback.
+
+        Used by the fart synthesizer to push generated audio through the
+        same priority-0, PTT-keying path as soundboard files — no file on
+        disk, no decode. `name` is a display label only (matches no slot,
+        so no 0-9 button lights up)."""
+        if not pcm_bytes:
+            return False
+        self.playlist.append((name, pcm_bytes))
         return True
 
     def load_next_file(self):

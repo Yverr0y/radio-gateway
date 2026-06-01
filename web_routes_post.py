@@ -21,6 +21,7 @@ from web_routes_audio  import (
     handle_recordingsdelete,
 )
 from web_routes_text  import handle_aitext, handle_cw, handle_tts
+from web_routes_fart  import handle_fart_preview, handle_fart_send
 from web_routes_automation  import handle_automationcmd, handle_refreshsounds
 from web_routes_system  import (
     handle_key, handle_gpscmd, handle_reboothost,

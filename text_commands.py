@@ -576,6 +576,63 @@ def on_text_message(gw, text_message):
 # Keyboard / web-key command dispatcher
 # ---------------------------------------------------------------------------
 
+def trigger_playback(gw, queue_fn, label="playback", volume=None):
+    """Shared playback trigger used by soundboard keys and the fart synth.
+
+    Handles the RTS-to-Radio-Controlled routing (AIOC PTT), the play-sequence
+    counter that lets a newer press supersede an in-flight one, the immediate
+    stop, and the background enqueue. `queue_fn(pb) -> bool` does the actual
+    enqueue (e.g. ``pb.queue_file(path)`` or ``pb.queue_pcm(bytes)``). `volume`
+    overrides the playback gain for this clip (None = leave as-is)."""
+    pb = gw.playback_source
+    if not pb:
+        return
+
+    # Auto-set RTS to Radio Controlled for TX playback — RTS relay must route
+    # mic wiring through the front panel for AIOC PTT. No CAT commands while
+    # Radio Controlled (serial disconnected). Software PTT and D75 TX don't
+    # need RTS switching.
+    _ptt_method = str(getattr(gw.config, 'PTT_METHOD', 'aioc')).lower()
+    _tx_radio = str(getattr(gw.config, 'TX_RADIO', 'th9800')).lower()
+    if _ptt_method != 'software' and _tx_radio != 'd75':
+        _cat = gw.cat_client
+        if _cat and not getattr(gw, '_playback_rts_saved', None):
+            gw._playback_rts_saved = _cat.get_rts()
+            if gw._playback_rts_saved is None or gw._playback_rts_saved is True:
+                try:
+                    _cat._pause_drain()
+                    try:
+                        _cat.set_rts(False)  # Radio Controlled
+                        time.sleep(0.3)
+                        _cat._drain(0.5)
+                    finally:
+                        _cat._drain_paused = False
+                    print(f"\n[Playback] RTS → Radio Controlled")
+                except Exception:
+                    pass
+
+    # Stop current playback immediately, then enqueue in a background thread so
+    # the HTTP/keyboard caller returns fast. The lock serializes concurrent
+    # enqueues; the sequence counter discards earlier in-flight ones.
+    pb._play_seq += 1
+    my_seq = pb._play_seq
+    pb.stop_playback()
+
+    def _bg_play(_pb=pb, _seq=my_seq, _gw=gw, _fn=queue_fn, _label=label, _vol=volume):
+        try:
+            with _pb._play_lock:
+                if _pb._play_seq != _seq:
+                    return  # A newer press superseded this one
+                if _vol is not None:
+                    _pb.volume = _vol
+                if not _fn(_pb):
+                    _gw.notify(f"Playback failed: {_label}")
+        except Exception as e:
+            print(f"\n[Playback] Error in background playback enqueue: {e}")
+            _gw.notify(f"Playback error: {e}")
+    threading.Thread(target=_bg_play, daemon=True, name="Playback-Queue").start()
+
+
 def handle_key(gw, char):
     """Process a key command (called by keyboard loop and web UI)."""
     char = char.lower()
@@ -697,47 +754,13 @@ def handle_key(gw, char):
         if gw.playback_source:
             stored_path = gw.playback_source.file_status[char]['path']
             if stored_path:
-                # Auto-set RTS to Radio Controlled for TX playback — RTS relay
-                # must route mic wiring through front panel for AIOC PTT.
-                # No CAT commands while Radio Controlled (serial disconnected).
-                # Software PTT and D75 TX don't need RTS switching.
-                _ptt_method = str(getattr(gw.config, 'PTT_METHOD', 'aioc')).lower()
-                _tx_radio = str(getattr(gw.config, 'TX_RADIO', 'th9800')).lower()
-                if _ptt_method != 'software' and _tx_radio != 'd75':
-                    _cat = gw.cat_client
-                    if _cat and not getattr(gw, '_playback_rts_saved', None):
-                        gw._playback_rts_saved = _cat.get_rts()
-                        if gw._playback_rts_saved is None or gw._playback_rts_saved is True:
-                            try:
-                                _cat._pause_drain()
-                                try:
-                                    _cat.set_rts(False)  # Radio Controlled
-                                    time.sleep(0.3)
-                                    _cat._drain(0.5)
-                                finally:
-                                    _cat._drain_paused = False
-                                print(f"\n[Playback] RTS → Radio Controlled")
-                            except Exception:
-                                pass
-                # Stop current playback immediately, then decode+queue
-                # in a background thread so the HTTP handler returns fast.
-                # The lock serializes concurrent decodes; the sequence
-                # counter lets later presses discard earlier in-flight decodes.
-                pb = gw.playback_source
-                pb._play_seq += 1
-                my_seq = pb._play_seq
-                pb.stop_playback()
-                def _bg_play(_pb=pb, _path=stored_path, _seq=my_seq, _gw=gw):
-                    try:
-                        with _pb._play_lock:
-                            if _pb._play_seq != _seq:
-                                return  # A newer button press superseded this one
-                            if not _pb.queue_file(_path):
-                                _gw.notify(f"Playback failed: {os.path.basename(_path)}")
-                    except Exception as e:
-                        print(f"\n[Playback] Error in background decode: {e}")
-                        _gw.notify(f"Playback error: {e}")
-                threading.Thread(target=_bg_play, daemon=True, name="Playback-Queue").start()
+                _vol = getattr(gw.config, 'PLAYBACK_VOLUME', 4.0)
+                trigger_playback(
+                    gw,
+                    lambda pb, _p=stored_path: pb.queue_file(_p),
+                    label=os.path.basename(stored_path),
+                    volume=_vol,
+                )
     elif char == '-':
         if gw.playback_source:
             gw.playback_source.stop_playback()

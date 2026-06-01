@@ -97,5 +97,8 @@ tools/room-monitor-app/build/
 tools/room-monitor-app/local.properties
 gateway_mcp.py.legacy
 
+# Real fart samples — fetched by fart_player.py / setup (not committed)
+audio/farts/
+
 # Project memory — synced via a separate PRIVATE repo, never in this public one
 .claude/memory/
