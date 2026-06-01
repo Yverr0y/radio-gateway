@@ -983,6 +983,12 @@ class BusManager:
         gw = self.gateway
         if sink_id in ('aioc_tx', 'aioc') and getattr(gw, 'th9800_plugin', None):
             return gw.th9800_plugin
+        # External plugins (auto-discovered): TX sink is '<pid>_tx', RX is '<pid>'.
+        _ext = getattr(gw, '_external_plugins', {})
+        if sink_id.endswith('_tx') and sink_id[:-3] in _ext:
+            return _ext[sink_id[:-3]]
+        if sink_id in _ext:
+            return _ext[sink_id]
         # Link endpoint lookup by source_id or sink_id (covers all kv4p
         # endpoints as kv4p_vhf / kv4p_vhf_tx / kv4p_uhf / kv4p_uhf_tx)
         for name, src in gw.link_endpoints.items():

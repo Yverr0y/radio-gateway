@@ -478,6 +478,10 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
         speaker_level = getattr(self, 'speaker_audio_level', 0)
         an_level = self.announce_input_source.audio_level if self.announce_input_source and hasattr(self.announce_input_source, 'audio_level') else 0
         cl_level = self.remote_audio_source.audio_level if self.remote_audio_source and hasattr(self.remote_audio_source, 'audio_level') else 0
+        # AllStar (USRP) plugin — discovered, lives in _external_plugins
+        _usrp = getattr(self, '_external_plugins', {}).get('usrp')
+        usrp_rx = getattr(_usrp, 'audio_level', 0) if _usrp else 0
+        usrp_tx = getattr(_usrp, 'tx_audio_level', 0) if _usrp else 0
 
         # PTT method tag
         _ptt_m = str(getattr(self.config, 'PTT_METHOD', 'aioc')).lower()
@@ -562,6 +566,9 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             'speaker_muted': getattr(self, 'speaker_muted', True),
             'radio_rx': radio_rx,
             'radio_tx': radio_tx,
+            'usrp_enabled': bool(_usrp and getattr(_usrp, 'enabled', False)),
+            'usrp_level': usrp_rx,
+            'usrp_tx_level': usrp_tx,
             'sdr1_level': sdr1_level,
             'sdr2_level': sdr2_level,
             'sdr1_ducked': getattr(self, 'sdr_ducked', False),

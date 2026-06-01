@@ -19,6 +19,7 @@ Pick the path that matches what you're trying to do.
 | [transcription-pool.md](transcription-pool.md) | Multi-machine ASR (Moonshine + Whisper) |
 | [audio-routing.md](audio-routing.md) | Bus mixer, processing chain, streaming, speaker modes |
 | [radio-plugins.md](radio-plugins.md) | TH-9800 / TH-D75 / KV4P / SDR / link endpoints (FTM-150, IC-7100) |
+| [allstar_bridge.md](allstar_bridge.md) | AllStarLink bridge node + in-gateway USRP plugin + `/usrp` panel |
 | [packet-radio.md](packet-radio.md) | Packet TNC + APRS + Winlink email |
 | [loop-recorder.md](loop-recorder.md) | Per-bus rolling buffer + scrubback |
 | [mcp.md](mcp.md) | 95+ MCP tools for AI control + the tools the bots use |

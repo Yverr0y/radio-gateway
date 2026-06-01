@@ -864,6 +864,12 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                     _rg.handle_manager_view(self, parent)
                 elif self.path.startswith('/manager/edit'):
                     _rg.handle_manager_edit(self, parent)
+                elif (getattr(parent.gateway, '_plugin_web_routes', None) and
+                      self.path.split('?', 1)[0] in parent.gateway._plugin_web_routes):
+                    # Plugin-contributed routes (web_routes() hook). Handler
+                    # signature: handler(request_handler, parent).
+                    parent.gateway._plugin_web_routes[
+                        self.path.split('?', 1)[0]](self, parent)
                 else:
                     # Unmatched GET — send 404 so the browser doesn't hang
                     # waiting for a response that never comes. Most route
@@ -890,6 +896,10 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
 
                 if self.path == '/key':
                     _rp.handle_key(self, parent)
+                elif self.path == '/fart/preview':
+                    _rp.handle_fart_preview(self, parent)
+                elif self.path == '/fart/send':
+                    _rp.handle_fart_send(self, parent)
                 elif self.path == '/transcription/query':
                     _rp.handle_transcription_query(self, parent)
                 elif self.path == '/transcribe_config':
@@ -982,6 +992,12 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                     _rp.handle_manager_run(self, parent)
                 elif self.path == '/manager/ack':
                     _rp.handle_manager_ack(self, parent)
+                elif (getattr(parent.gateway, '_plugin_web_routes', None) and
+                      self.path.split('?', 1)[0] in parent.gateway._plugin_web_routes):
+                    # Plugin-contributed routes (web_routes() hook). Same path
+                    # map serves GET + POST; the handler inspects self.command.
+                    parent.gateway._plugin_web_routes[
+                        self.path.split('?', 1)[0]](self, parent)
                 else:
                     # Config form submission (fallback for /config POST)
                     _rp.handle_config_form(self, parent)
@@ -1409,6 +1425,14 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 _ep_label = _ep_name.replace('-', ' ').replace('_', ' ').title()
                 sources.append({**{'id': _ep_id, 'name': f'{_ep_label} [RX]', 'enabled': True,
                                 'can_rx': True, 'can_tx': False, 'can_ptt': False}, **_src_info(_ep_src)})
+            # External plugins (auto-discovered from plugins/) — RX source node
+            # for anything declaring the audio_rx capability.
+            for _pid, _plg in getattr(gw, '_external_plugins', {}).items():
+                _caps = getattr(_plg, 'CAPABILITIES', None) or set()
+                if 'audio_rx' in _caps:
+                    _label = getattr(_plg, 'PLUGIN_NAME', _pid)
+                    sources.append({**{'id': _pid, 'name': f'{_label} [RX]', 'enabled': True,
+                                    'can_rx': True, 'can_tx': False, 'can_ptt': False}, **_src_info(_plg)})
 
         # Build sink list (passive consumers + TX-capable radios)
         sinks = []
@@ -1449,6 +1473,15 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                     _tx_gain = int(getattr(_ep_src, 'tx_audio_boost', 1.0) * 100)
                     sinks.append({'id': _sink_id, 'name': f'{_ep_label} [TX]', 'type': 'Radio TX',
                                   'enabled': True, 'muted': getattr(_ep_src, 'muted', False), 'gain': _tx_gain})
+            # External plugins (auto-discovered) — TX sink node for anything
+            # declaring the audio_tx capability ('<pid>_tx', resolved by
+            # bus_manager._get_radio_plugin).
+            for _pid, _plg in getattr(gw, '_external_plugins', {}).items():
+                _caps = getattr(_plg, 'CAPABILITIES', None) or set()
+                if 'audio_tx' in _caps:
+                    _label = getattr(_plg, 'PLUGIN_NAME', _pid)
+                    sinks.append({**{'id': f'{_pid}_tx', 'name': f'{_label} [TX]',
+                                  'type': 'Radio TX', 'enabled': True}, **_tx_sink_info(_plg)})
 
         # Load bus config
         busses, connections, saved_layout = self._load_routing_config()

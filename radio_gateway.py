@@ -257,6 +257,21 @@ class Config:
             'ECHOLINK_TO_RADIO': True,
             'RADIO_TO_ECHOLINK': True,
             'MUMBLE_TO_ECHOLINK': True,
+            # AllStarLink bridge via USRP (DVSwitch) channel — see plugins/usrp.py.
+            # The gateway listens on USRP_LISTEN_PORT and sends to the bridge
+            # node's USRP_REMOTE_HOST:USRP_REMOTE_PORT. On the ASL3 bridge node:
+            #   rxchannel = USRP/<gateway_ip>:34001:32001  (and enable chan_usrp)
+            'ENABLE_USRP': False,
+            'USRP_REMOTE_HOST': '127.0.0.1',  # bridge node (ASL3) address
+            'USRP_REMOTE_PORT': 32001,        # port the bridge node listens on
+            'USRP_LISTEN_PORT': 34001,        # port the gateway listens on
+            # Runtime node control via the bridge node's Asterisk Manager
+            # Interface — drives the /usrp control panel (connect/disconnect).
+            'USRP_NODE': '0',                 # our local node number, e.g. 68397
+            'USRP_AMI_HOST': '',              # blank = same host as USRP_REMOTE_HOST
+            'USRP_AMI_PORT': 5038,
+            'USRP_AMI_USER': '',              # AMI user (manager.conf on the node)
+            'USRP_AMI_SECRET': '',            # AMI secret — gateway_config.txt only
             # Streaming Output (Phase 3A)
             'ENABLE_STREAM_OUTPUT': False,
             'STREAM_SERVER': 'localhost',

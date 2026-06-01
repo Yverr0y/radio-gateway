@@ -32,6 +32,8 @@ More screenshots in `docs/screenshots/`.
 
 **Packet radio + Winlink** — Direwolf TNC on an FTM-150 link endpoint, automatic audio/data mode switching. APRS decode + Leaflet map. Winlink email via [Pat](https://getpat.io). BBS terminal.
 
+**AllStarLink** — bridge into the AllStar network without running a radio node on the gateway. An in-gateway USRP (DVSwitch) plugin talks to a headless ASL3 bridge node; a `/usrp` panel connects to any node on demand (per-node disconnect, conference view), and AllStar audio routes to/from any bus like another radio. See [docs/allstar_bridge.md](docs/allstar_bridge.md).
+
 **Streaming** — Broadcastify / Icecast via internal ffmpeg pipe (no DarkIce, no ALSA loopback). Auto-reconnect. Cloudflare quick-tunnel for free public HTTPS with URL discovery via Google Drive.
 
 **Control surfaces** — 20+ page web UI, 95+ MCP tools, Telegram bot (text routes through Claude Code + MCP; voice notes stream straight to radio TX), Mumble chat commands (`!speak`, `!cw`), web mic + Android room monitor.
@@ -46,6 +48,7 @@ More screenshots in `docs/screenshots/`.
 
 See [CHANGELOG.md](CHANGELOG.md) for the detailed release history. Highlights:
 
+- **v4.0** (2026-05-31) — AllStarLink integration: in-gateway USRP bridge to a headless ASL3 node, `/usrp` connect/disconnect panel + top-frame meter, and the plugin platform made generic over discovered plugins (routing UI, meters, bus radio resolution, `web_routes` dispatch).
 - **v3.7** (2026-05-18) — distributed transcription pool, audio meter unification (RG.vu), Fleet Manager docs, 6-hourly gdrive backup of operational docs, install.sh package-manager detection fix (#3).
 - **v3.6** (2026-05-08) — Fleet Manager: document-driven autonomous monitoring with scheduled Claude-driven checks, manifest-based fleet topology, Telegram escalation.
 - **v3.5** (2026-05-03) — persistent transcription log with FTS5 + plain-English search; tabbed dashboard; bus tick refactor with per-sink drain threads.
@@ -82,6 +85,7 @@ A few that are likely the most useful:
 - [docs/transcription-pool.md](docs/transcription-pool.md) — distributed ASR architecture + deploying a remote worker
 - [docs/fleet-manager.md](docs/fleet-manager.md) — document-driven monitoring with worked English-task examples
 - [docs/gateway_link.md](docs/gateway_link.md) — link endpoint protocol for remote radios
+- [docs/allstar_bridge.md](docs/allstar_bridge.md) — AllStarLink bridge node + in-gateway USRP plugin + `/usrp` panel
 - [docs/plugin-development.md](docs/plugin-development.md) — writing a new radio plugin
 - [docs/config-reference.md](docs/config-reference.md) — every `gateway_config.txt` key, grouped by feature
 

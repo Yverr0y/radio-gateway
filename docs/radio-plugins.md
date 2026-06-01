@@ -70,6 +70,15 @@ SDRplay RSPduo via the SDRplay API + `rtl_airband` for AM/NBFM/WBFM demod and au
 
 **Source**: [`sdr_plugin.py`](../sdr_plugin.py) · **Config**: `[sdr]` in `gateway_config.txt`.
 
+## AllStar (USRP)
+
+Not a radio — a bridge into the AllStarLink network. `plugins/usrp.py` is an in-gateway plugin that speaks the USRP (DVSwitch) protocol over UDP to a **headless ASL3 bridge node** (no RF hardware) running elsewhere (a container on the gateway box by default, or any reachable host). It appears in the routing UI as an RX source (`usrp`) and a TX sink (`usrp_tx`) like a full-duplex radio.
+
+- **Audio** — full-duplex 8 kHz↔48 kHz resample; RX = audio from the linked node(s), TX = audio the gateway sends out.
+- **Control** — the `/usrp` panel connects/disconnects nodes at runtime via the bridge node's AMI (`rpt ilink`), with per-node disconnect on your direct links and a read-only view of conference members reached through a hub.
+- **Setup** — the bridge node (ASL3 container, node registration, USRP `rxchannel`, AMI) is documented in [allstar_bridge.md](allstar_bridge.md). Config keys: `ENABLE_USRP`, `USRP_REMOTE_HOST/PORT`, `USRP_LISTEN_PORT`, `USRP_NODE`, `USRP_AMI_*`.
+- **Note** — half-duplex link behavior (`duplex = 0` on the node) is intentional and correct for an AllStar link. Reaches the whole ASL3 network; nodes on older/HamVOIP-style app_rpt may not hold the link (a remote-side `newkey` interop issue).
+
 ## Link endpoints (FTM-150, IC-7100, future)
 
 Two radios in our fleet talk to the gateway over the [Gateway Link protocol](gateway_link.md):

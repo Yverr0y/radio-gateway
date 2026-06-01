@@ -50,6 +50,7 @@ The installer copies the example to `gateway_config.txt` if one doesn't exist. T
 | `[speaker]` | Local speaker output mode (virtual/auto/real) |
 | `[streaming]` | Broadcastify / Icecast feed |
 | `[echolink]` | EchoLink integration (legacy, TheLinkBox) |
+| `[allstar]` | AllStarLink bridge via USRP — `ENABLE_USRP`, `USRP_REMOTE_HOST/PORT`, `USRP_LISTEN_PORT`, `USRP_NODE`, `USRP_AMI_*` (see [allstar_bridge.md](allstar_bridge.md)) |
 | `[relay]` | USB relay control (radio power, antenna switches) |
 | `[smart]` | AI-generated smart announcements |
 | `[telegram]` | Telegram bot for remote control |

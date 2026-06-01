@@ -1256,6 +1256,13 @@ def handle_routing_levels(handler, parent):
             data['kv4p_tx'] = getattr(gw.kv4p_plugin, 'tx_audio_level', 0)
         if getattr(gw, 'th9800_plugin', None):
             data['aioc_tx'] = getattr(gw.th9800_plugin, 'tx_audio_level', 0)
+        # External plugins (auto-discovered) — RX ('<pid>') + TX ('<pid>_tx') meters
+        for _pid, _plg in getattr(gw, '_external_plugins', {}).items():
+            _caps = getattr(_plg, 'CAPABILITIES', None) or set()
+            if 'audio_rx' in _caps:
+                data[_pid] = getattr(_plg, 'audio_level', 0)
+            if 'audio_tx' in _caps:
+                data[f'{_pid}_tx'] = getattr(_plg, 'tx_audio_level', 0)
         # Passive sinks — only show level if connected to a bus
         _all_sinks = getattr(gw, '_bus_sinks', {})
         _all_connected = set()

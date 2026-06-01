@@ -68,3 +68,9 @@ The v2.0 architecture uses bus-based audio routing with all radios as plugins:
 - MVP: single endpoint, duplex audio, generic AudioPlugin
 - Vision: all radios as plugins, gateway as mixer + protocol hub
 - Config: `ENABLE_GATEWAY_LINK`, `LINK_PORT` (default 9700)
+
+## AllStarLink (USRP bridge) — v4.0
+- See `docs/allstar_bridge.md` for the bridge-node (ASL3 container) setup + gateway-side usage
+- `plugins/usrp.py` — in-gateway USRP/DVSwitch plugin; `/usrp` panel for runtime node connect/disconnect via the bridge node's AMI
+- Routing UI, `/routing/levels`, `_get_radio_plugin`, and `web_routes` dispatch are now generic over `_external_plugins` — discovered plugins become routable sources/sinks automatically
+- Config: `ENABLE_USRP`, `USRP_REMOTE_HOST/PORT`, `USRP_LISTEN_PORT`, `USRP_NODE`, `USRP_AMI_*`
