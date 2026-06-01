@@ -7,8 +7,12 @@ All notable changes to Radio Gateway.
 ### Fixed
 - **AllStar TX was dead (`pkts_tx=0`)** — buses are built *before* plugin discovery, so a solo/duplex bus whose TX radio is an external plugin (e.g. `grunge → usrp_tx`) resolved to `None` at creation and never attached its radio, so `put_audio` was never called. `core/lifecycle.py` now calls `bus_manager.reload()` after discovery (same mechanism endpoint registration uses) so external-plugin radios attach.
 
+- **RX audio crackle eliminated** — the USRP RX upsampler ran `resample_poly` per 20 ms frame, leaving ~7% edge-taper glitches at every frame boundary (~50 Hz crackle). Now a continuous resampler carries filter context across frames (matches a full-stream resample within 1 count; ~8 ms added latency).
+
 ### Added
 - **`/usrp` recent-nodes dropdown** — the panel remembers the last 10 connected nodes (persisted to `usrp_recent.json`), so you can pick from a list instead of retyping.
+
+- **AllStar dashboard section** — `/usrp` status (node, bridge AMI, RX/TX, packets, connected nodes) in the dashboard service panel next to USB/IP and Telegram.
 
 ## [4.0.0] -- 2026-05-31
 

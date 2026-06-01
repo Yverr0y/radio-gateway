@@ -241,6 +241,9 @@ BUS_CHUNK_BYTES = BUS_CHUNK_SAMPLES * 2
 
 # Tuning
 RX_QUEUE_MAX = 6                       # ~300 ms of 48 kHz chunks before dropping oldest
+RX_RESAMPLE_PAD = 32                   # 8 kHz input samples of filter context carried
+                                       # across frames so the upsampler doesn't click
+                                       # at every 20 ms boundary (~8 ms added latency)
 TX_BUF_MAX_8K = USRP_RATE             # cap TX backlog at ~1 s of 8 kHz audio
 TX_HANG_S = 0.20                       # auto-unkey if no put_audio for this long
 
@@ -299,6 +302,10 @@ class UsrpPlugin:
 
         # RX: 48 kHz accumulator feeding a bounded chunk queue
         self._rx48k = np.zeros(0, dtype=np.int16)
+        # 8 kHz input buffer for the continuous resampler, primed with PAD zeros
+        # that act as "already-emitted history" so the bookkeeping is uniform
+        # from the first frame.
+        self._rx_in8k = np.zeros(RX_RESAMPLE_PAD, dtype=np.float32)
         self._rx_queue = collections.deque(maxlen=RX_QUEUE_MAX)
         self._rx_queue_primed = False
 
@@ -404,14 +411,26 @@ class UsrpPlugin:
             self._feed_rx(s8k)
 
     def _feed_rx(self, s8k):
-        """Upsample one 8 kHz frame to 48 kHz and emit full bus chunks.
+        """Continuous (click-free) upsample 8 kHz -> 48 kHz, emitting bus chunks.
 
-        NOTE: resample_poly is applied per UDP frame (20 ms). For voice this
-        is fine; if boundary artifacts ever matter, swap in an overlap-save
-        resampler that carries filter state across frames.
+        resample_poly is stateless, so resampling each 20 ms UDP frame on its own
+        leaves the anti-alias FIR's edge transients at every frame boundary —
+        audible crackle. Instead we keep PAD input samples of context on each
+        side: the leading PAD is already-emitted history, and we hold back the
+        trailing PAD (which has no look-ahead yet) until the next frame. Both
+        edges of every emitted block then sit on real filter context.
         """
-        up = resample_poly(s8k.astype(np.float32), RATE_RATIO, 1)
-        up = np.clip(up, -32768, 32767).astype(np.int16)
+        PAD = RX_RESAMPLE_PAD
+        self._rx_in8k = np.concatenate((self._rx_in8k, s8k.astype(np.float32)))
+        n = len(self._rx_in8k)
+        if n < 3 * PAD:
+            return                              # not enough context yet
+        y = resample_poly(self._rx_in8k, RATE_RATIO, 1)
+        # Skip the leading PAD (history, already emitted) and trailing PAD
+        # (held back for next call's look-ahead). Steady state: 160 in -> 960 out.
+        out = y[PAD * RATE_RATIO:(n - PAD) * RATE_RATIO]
+        self._rx_in8k = self._rx_in8k[-2 * PAD:]    # PAD history + PAD held-back
+        up = np.clip(out, -32768, 32767).astype(np.int16)
         self._rx48k = np.concatenate((self._rx48k, up))
         while len(self._rx48k) >= BUS_CHUNK_SAMPLES:
             chunk = self._rx48k[:BUS_CHUNK_SAMPLES]

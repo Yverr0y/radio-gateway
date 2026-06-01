@@ -251,6 +251,7 @@
     <button class="panel-tab tab-dim"  id="tab-gps"    onclick="switchPanelTab('svc','gps',this)">GPS</button>
     <button class="panel-tab tab-dim"  id="tab-usbip"  onclick="switchPanelTab('svc','usbip',this)">USB/IP</button>
     <button class="panel-tab tab-dim"  id="tab-tg"     onclick="switchPanelTab('svc','tg',this)">Telegram</button>
+    <button class="panel-tab tab-dim"  id="tab-asl"    onclick="switchPanelTab('svc','asl',this)">AllStar</button>
   </div>
 
   <div id="svc-stream" class="panel-pane active">
@@ -337,6 +338,20 @@
       <div class="st-item"><span class="st-label">Last out:</span><span id="tg-last-out" class="st-val green">--</span></div>
     </div>
     <div id="tg-last-text" class="trunc"></div>
+  </div>
+
+  <div id="svc-asl" class="panel-pane">
+    <div class="panel-head" style="margin-bottom:var(--s-2)">
+      <span class="panel-title" style="font-size:var(--f-sm)">AllStar (USRP)</span>
+      <span id="asl-node-label" class="panel-meta"></span>
+    </div>
+    <div class="st-row">
+      <div class="st-item"><span class="st-label">Bridge AMI:</span><span id="asl-dot-ami" class="st-val dot">&#x25cf;</span></div>
+      <div class="st-item"><span class="st-label">RX:</span><span id="asl-dot-rx" class="st-val dot">&#x25cf;</span></div>
+      <div class="st-item"><span class="st-label">TX:</span><span id="asl-dot-tx" class="st-val dot">&#x25cf;</span></div>
+      <div class="st-item"><span class="st-label">Pkts:</span><span id="asl-pkts" class="st-val cyan">--</span></div>
+    </div>
+    <div id="asl-links-list" class="usbip-list">No nodes connected</div>
   </div>
 </div><!-- #services-panel -->
 
@@ -872,6 +887,26 @@ createPoller('/telegramstatus',5000,function(d){
   setFlash(document.getElementById('tg-last-in'),fmtTimestamp(d.last_message_time));
   document.getElementById('tg-last-out').textContent=fmtTimestamp(d.last_reply_time);
   document.getElementById('tg-last-text').textContent=d.last_message_text?'» '+d.last_message_text:'';
+});
+
+// ── AllStar (USRP) ──
+createPoller('/usrp/status',5000,function(d){
+  setTabDim('tab-asl',!d.enabled);
+  if(!d.enabled)return;
+  // AMI = green/red (configured or not); RX/TX = green when active, dim when idle.
+  var ami=document.getElementById('asl-dot-ami');
+  flashDotOnChange(ami,!!d.ami_ready); ami.textContent='●';
+  ami.classList.toggle('ok',!!d.ami_ready); ami.classList.toggle('err',!d.ami_ready);
+  ami.title=d.ami_ready?('AMI '+(d.ami||'')):'AMI not configured';
+  function act(id,on,title){var el=document.getElementById(id);el.textContent='●';el.classList.toggle('ok',!!on);el.classList.remove('err');el.title=title;}
+  act('asl-dot-rx',d.rx_keyed,d.rx_keyed?'receiving':'idle');
+  act('asl-dot-tx',d.tx_keyed,d.tx_keyed?'transmitting':'idle');
+  document.getElementById('asl-node-label').textContent=(d.node&&d.node!=='0')?('node '+d.node):'';
+  setFlash(document.getElementById('asl-pkts'),(d.pkts_rx||0)+' / '+(d.pkts_tx||0));
+  var list=document.getElementById('asl-links-list');
+  var nodes=d.links||[];
+  if(!nodes.length){list.innerHTML='<div class="empty"><span class="empty-glyph">&#9675;</span>No nodes connected</div>';}
+  else{list.innerHTML='<span class="dot ok">&#x25cf;</span> Connected: <b>'+nodes.join('</b>, <b>')+'</b>';}
 });
 
 // ── GPS ──
