@@ -523,7 +523,14 @@ def handle_kv4pstatus(handler, parent):
         ep = find_endpoint(gw, instance) if instance else find_endpoint(gw, None)
         data['kv4p_enabled'] = bool(list_endpoints(gw))
         if ep is not None:
-            ep_name = (f'kv4p-{instance}' if instance else first_endpoint_name(gw))
+            # Resolve the actual registered name by matching the source object,
+            # since find_endpoint strips trailing 'hf' (vhf→v) but the caller
+            # passes the full instance string ('vhf'), so f'kv4p-{instance}'
+            # would be 'kv4p-vhf' while the key is 'kv4p-v'.
+            eps = getattr(gw, 'link_endpoints', {}) or {}
+            ep_name = next((n for n, s in eps.items() if s is ep), None)
+            if ep_name is None:
+                ep_name = first_endpoint_name(gw)
             cached = (getattr(gw, '_link_last_status', {}) or {}).get(ep_name, {})
             data.update(cached)
             data['connected'] = bool(getattr(ep, 'server_connected', False))
