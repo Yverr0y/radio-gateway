@@ -744,8 +744,8 @@ createPoller('/status', 1000, function(s) {
     // Dual-lane bars: each full-duplex radio gets its own RX+TX compound bar.
     _sbUpdateDual('aioc', 'AIOC', s.radio_rx, s.radio_tx, false);
     // AllStar (USRP) — one bar per instance; label = ASL + node number
-    if(s.usrp_enabled) _sbUpdateDual('usrp', 'ASL'+(s.usrp_node?(' '+s.usrp_node):''), s.usrp_level, s.usrp_tx_level, false);
-    if(s.usrp2_enabled) _sbUpdateDual('usrp2', 'ASL'+(s.usrp2_node?(' '+s.usrp2_node):''), s.usrp2_level, s.usrp2_tx_level, false);
+    if(s.usrp_enabled) _sbUpdateDual('usrp', 'ASL1', s.usrp_level, s.usrp_tx_level, false);
+    if(s.usrp2_enabled) _sbUpdateDual('usrp2', 'ASL2', s.usrp2_level, s.usrp2_tx_level, false);
     // KV4P used to render a bare 'KV4P' bar here from the legacy
     // aggregate status keys (kv4p_enabled / kv4p_level / kv4p_tx_level /
     // kv4p_muted). Since kv4p moved to a link endpoint per [kv4p.*]
