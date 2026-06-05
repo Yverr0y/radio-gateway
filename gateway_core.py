@@ -478,10 +478,13 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
         speaker_level = getattr(self, 'speaker_audio_level', 0)
         an_level = self.announce_input_source.audio_level if self.announce_input_source and hasattr(self.announce_input_source, 'audio_level') else 0
         cl_level = self.remote_audio_source.audio_level if self.remote_audio_source and hasattr(self.remote_audio_source, 'audio_level') else 0
-        # AllStar (USRP) plugin — discovered, lives in _external_plugins
+        # AllStar (USRP) plugins — discovered, live in _external_plugins
         _usrp = getattr(self, '_external_plugins', {}).get('usrp')
         usrp_rx = getattr(_usrp, 'audio_level', 0) if _usrp else 0
         usrp_tx = getattr(_usrp, 'tx_audio_level', 0) if _usrp else 0
+        _usrp2 = getattr(self, '_external_plugins', {}).get('usrp2')
+        usrp2_rx = getattr(_usrp2, 'audio_level', 0) if _usrp2 else 0
+        usrp2_tx = getattr(_usrp2, 'tx_audio_level', 0) if _usrp2 else 0
 
         # PTT method tag
         _ptt_m = str(getattr(self.config, 'PTT_METHOD', 'aioc')).lower()
@@ -569,6 +572,11 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             'usrp_enabled': bool(_usrp and getattr(_usrp, 'enabled', False)),
             'usrp_level': usrp_rx,
             'usrp_tx_level': usrp_tx,
+            'usrp_node': getattr(_usrp, 'node', '') if _usrp else '',
+            'usrp2_enabled': bool(_usrp2 and getattr(_usrp2, 'enabled', False)),
+            'usrp2_level': usrp2_rx,
+            'usrp2_tx_level': usrp2_tx,
+            'usrp2_node': getattr(_usrp2, 'node', '') if _usrp2 else '',
             'sdr1_level': sdr1_level,
             'sdr2_level': sdr2_level,
             'sdr1_ducked': getattr(self, 'sdr_ducked', False),

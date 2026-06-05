@@ -274,7 +274,8 @@
       <a href="/ic7100" target="content" onclick="setActive(this)" id="nav-ic7100">IC-7100</a>
       <a href="/kv4p" target="content" onclick="setActive(this)" id="nav-kv4p">KV4P</a>
       <a href="/sdr" target="content" onclick="setActive(this)" id="nav-sdr">SDR</a>
-      <a href="/usrp" target="content" onclick="setActive(this)" id="nav-usrp">AllStar</a>
+      <a href="/usrp" target="content" onclick="setActive(this)" id="nav-usrp">AllStar 1</a>
+      <a href="/usrp2" target="content" onclick="setActive(this)" id="nav-usrp2">AllStar 2</a>
     </div></div><div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Data</span><div class="nav-drop">
       <a href="/gps" target="content" onclick="setActive(this)" id="nav-gps">GPS</a>
       <a href="/repeaters" target="content" onclick="setActive(this)" id="nav-repeaters">Repeaters</a>
@@ -742,9 +743,9 @@ createPoller('/status', 1000, function(s) {
     _sbOrder = [];
     // Dual-lane bars: each full-duplex radio gets its own RX+TX compound bar.
     _sbUpdateDual('aioc', 'AIOC', s.radio_rx, s.radio_tx, false);
-    // AllStar (USRP) — full-duplex: RX = audio from the linked node(s),
-    // TX = audio the gateway sends out. Short label keeps the fixed-width column.
-    if(s.usrp_enabled) _sbUpdateDual('usrp', 'ASL', s.usrp_level, s.usrp_tx_level, false);
+    // AllStar (USRP) — one bar per instance; label = ASL + node number
+    if(s.usrp_enabled) _sbUpdateDual('usrp', 'ASL'+(s.usrp_node?(' '+s.usrp_node):''), s.usrp_level, s.usrp_tx_level, false);
+    if(s.usrp2_enabled) _sbUpdateDual('usrp2', 'ASL'+(s.usrp2_node?(' '+s.usrp2_node):''), s.usrp2_level, s.usrp2_tx_level, false);
     // KV4P used to render a bare 'KV4P' bar here from the legacy
     // aggregate status keys (kv4p_enabled / kv4p_level / kv4p_tx_level /
     // kv4p_muted). Since kv4p moved to a link endpoint per [kv4p.*]
@@ -788,6 +789,7 @@ function _updateNav() {
       'nav-kv4p': s.kv4p_enabled !== false,
       'nav-sdr': s.sdr1_enabled !== false,
       'nav-usrp': s.usrp_enabled !== false,
+      'nav-usrp2': s.usrp2_enabled !== false,
       'nav-gps': s.gps_enabled !== false,
       'nav-repeaters': s.repeater_db_enabled !== false,
       'nav-adsb': s.adsb_enabled !== false,

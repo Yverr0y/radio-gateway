@@ -343,15 +343,8 @@
   <div id="svc-asl" class="panel-pane">
     <div class="panel-head" style="margin-bottom:var(--s-2)">
       <span class="panel-title" style="font-size:var(--f-sm)">AllStar (USRP)</span>
-      <span id="asl-node-label" class="panel-meta"></span>
     </div>
-    <div class="st-row">
-      <div class="st-item"><span class="st-label">Bridge AMI:</span><span id="asl-dot-ami" class="st-val dot">&#x25cf;</span></div>
-      <div class="st-item"><span class="st-label">RX:</span><span id="asl-dot-rx" class="st-val dot">&#x25cf;</span></div>
-      <div class="st-item"><span class="st-label">TX:</span><span id="asl-dot-tx" class="st-val dot">&#x25cf;</span></div>
-      <div class="st-item"><span class="st-label">Pkts:</span><span id="asl-pkts" class="st-val cyan">--</span></div>
-    </div>
-    <div id="asl-links-list" class="usbip-list">No nodes connected</div>
+    <div id="asl-nodes-container"></div>
   </div>
 </div><!-- #services-panel -->
 
@@ -889,25 +882,57 @@ createPoller('/telegramstatus',5000,function(d){
   document.getElementById('tg-last-text').textContent=d.last_message_text?'» '+d.last_message_text:'';
 });
 
-// ── AllStar (USRP) ──
-createPoller('/usrp/status',5000,function(d){
-  setTabDim('tab-asl',!d.enabled);
-  if(!d.enabled)return;
-  // AMI = green/red (configured or not); RX/TX = green when active, dim when idle.
-  var ami=document.getElementById('asl-dot-ami');
-  flashDotOnChange(ami,!!d.ami_ready); ami.textContent='●';
-  ami.classList.toggle('ok',!!d.ami_ready); ami.classList.toggle('err',!d.ami_ready);
-  ami.title=d.ami_ready?('AMI '+(d.ami||'')):'AMI not configured';
-  function act(id,on,title){var el=document.getElementById(id);el.textContent='●';el.classList.toggle('ok',!!on);el.classList.remove('err');el.title=title;}
-  act('asl-dot-rx',d.rx_keyed,d.rx_keyed?'receiving':'idle');
-  act('asl-dot-tx',d.tx_keyed,d.tx_keyed?'transmitting':'idle');
-  document.getElementById('asl-node-label').textContent=(d.node&&d.node!=='0')?('node '+d.node):'';
-  setFlash(document.getElementById('asl-pkts'),(d.pkts_rx||0)+' / '+(d.pkts_tx||0));
-  var list=document.getElementById('asl-links-list');
-  var nodes=d.links||[];
-  if(!nodes.length){list.innerHTML='<div class="empty"><span class="empty-glyph">&#9675;</span>No nodes connected</div>';}
-  else{list.innerHTML='<span class="dot ok">&#x25cf;</span> Connected: <b>'+nodes.join('</b>, <b>')+'</b>';}
-});
+// ── AllStar (USRP) — dynamic multi-node ──
+var _aslPollers = {};
+function _aslNodeCard(inst) {
+  return '<div class="asl-node-card" id="asl-card-'+inst.id+'" style="margin-bottom:var(--s-3)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--s-1)">'
+    +'<span style="font-weight:600;font-size:var(--f-sm)">'+inst.name+'</span>'
+    +'<span id="asl-nodelbl-'+inst.id+'" class="panel-meta" style="font-size:var(--f-xs)"></span>'
+    +'<a href="'+inst.panel_url+'" target="content" style="font-size:var(--f-xs);color:var(--c-link)">Panel &#x2197;</a>'
+    +'</div>'
+    +'<div class="st-row">'
+    +'<div class="st-item"><span class="st-label">AMI:</span><span id="asl-ami-'+inst.id+'" class="st-val dot">&#x25cf;</span></div>'
+    +'<div class="st-item"><span class="st-label">RX:</span><span id="asl-rx-'+inst.id+'" class="st-val dot">&#x25cf;</span></div>'
+    +'<div class="st-item"><span class="st-label">TX:</span><span id="asl-tx-'+inst.id+'" class="st-val dot">&#x25cf;</span></div>'
+    +'<div class="st-item"><span class="st-label">Pkts:</span><span id="asl-pkts-'+inst.id+'" class="st-val cyan">--</span></div>'
+    +'</div>'
+    +'<div id="asl-links-'+inst.id+'" class="usbip-list" style="margin-top:var(--s-1)">--</div>'
+    +'</div>';
+}
+function _aslStartPoller(inst) {
+  if (_aslPollers[inst.id]) return;
+  _aslPollers[inst.id] = createPoller(inst.status_url, 5000, function(d) {
+    var card = document.getElementById('asl-card-'+inst.id);
+    if (!card) return;
+    var lbl = document.getElementById('asl-nodelbl-'+inst.id);
+    if (lbl) lbl.textContent = (d.node && d.node !== '0') ? 'node '+d.node : '';
+    var ami = document.getElementById('asl-ami-'+inst.id);
+    if (ami) { flashDotOnChange(ami, !!d.ami_ready); ami.textContent='●'; ami.classList.toggle('ok',!!d.ami_ready); ami.classList.toggle('err',!d.ami_ready); ami.title=d.ami_ready?('AMI '+(d.ami||'')):'AMI not configured'; }
+    function act(id,on,title){var el=document.getElementById(id);if(!el)return;el.textContent='●';el.classList.toggle('ok',!!on);el.classList.remove('err');el.title=title;}
+    act('asl-rx-'+inst.id, d.rx_keyed, d.rx_keyed?'receiving':'idle');
+    act('asl-tx-'+inst.id, d.tx_keyed, d.tx_keyed?'transmitting':'idle');
+    var pkts = document.getElementById('asl-pkts-'+inst.id);
+    if (pkts) setFlash(pkts, (d.pkts_rx||0)+' / '+(d.pkts_tx||0));
+    var list = document.getElementById('asl-links-'+inst.id);
+    if (list) { var ns=d.links||[]; list.innerHTML=ns.length?('<span class="dot ok">&#x25cf;</span> Connected: <b>'+ns.join('</b>, <b>')+'</b>'):'<div class="empty"><span class="empty-glyph">&#9675;</span>No nodes connected</div>'; }
+  });
+}
+function _aslRefresh() {
+  fetch('/usrp/nodes').then(function(r){return r.json();}).then(function(insts){
+    setTabDim('tab-asl', !insts || !insts.length || !insts.some(function(i){return i.enabled;}));
+    var container = document.getElementById('asl-nodes-container');
+    if (!container) return;
+    insts.forEach(function(inst) {
+      if (!document.getElementById('asl-card-'+inst.id)) {
+        container.insertAdjacentHTML('beforeend', _aslNodeCard(inst));
+      }
+      _aslStartPoller(inst);
+    });
+  }).catch(function(){});
+}
+_aslRefresh();
+setInterval(_aslRefresh, 15000);
 
 // ── GPS ──
 var _lastGpsSatHTML='';

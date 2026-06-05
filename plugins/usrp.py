@@ -778,7 +778,32 @@ class UsrpPlugin:
             ('/usrp', self._http_panel),
             ('/usrp/status', self._http_status),
             ('/usrp/control', self._http_control),
+            ('/usrp/nodes', self._http_nodes),
         ]
+
+    def _http_nodes(self, req, parent):
+        """GET /usrp/nodes — list all loaded USRP plugin instances.
+
+        Returns [{id, node, name, status_url, control_url, panel_url}] so the
+        dashboard can discover instances without hardcoding their IDs.
+        """
+        gw = parent.gateway if parent else None
+        ext = getattr(gw, '_external_plugins', {}) if gw else {}
+        nodes = []
+        for pid, plg in sorted(ext.items()):
+            if not pid.startswith('usrp'):
+                continue
+            base = f'/{pid}'
+            nodes.append({
+                'id': pid,
+                'node': getattr(plg, 'node', '0'),
+                'name': getattr(plg, 'PLUGIN_NAME', pid),
+                'enabled': getattr(plg, 'enabled', False),
+                'panel_url': base,
+                'status_url': f'{base}/status',
+                'control_url': f'{base}/control',
+            })
+        self._send_json(req, nodes)
 
     @staticmethod
     def _send_json(req, obj, code=200):
