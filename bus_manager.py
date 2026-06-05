@@ -1083,6 +1083,7 @@ class BusManager:
             self._meters['stream_audio'] = max(0, int(self._meters['stream_audio'] * 0.7))
             self._meters['mumble_tx'] = max(0, int(self._meters['mumble_tx'] * 0.7))
             self._meters['transcription'] = max(0, int(self._meters['transcription'] * 0.7))
+            self._meters['nul'] = max(0, int(self._meters['nul'] * 0.7))
 
         for sink_id, audio in bus_output.audio.items():
             if audio is None:
@@ -1532,6 +1533,7 @@ class BusManager:
             # Ensures link/radio TX bars clear after playback even when
             # the routing page is not open (routing/levels is not polled).
             if _tick_num % 4 == 0:
+                self._meters['nul'] = max(0, int(self._meters['nul'] * 0.8))
                 for _ln in list(self._link_tx_meters):
                     self._link_tx_meters[_ln] = max(0, int(self._link_tx_meters[_ln] * 0.8))
                 # Decay each link endpoint's own tx_audio_level (covers all
