@@ -284,15 +284,26 @@ def handle_kv4pcmd(handler, parent):
 
             # Map web UI command format to plugin execute format
             if cmd == 'freq':
-                result = _send({'cmd': 'freq',
-                                'frequency': _as_float(args, 'frequency')})
+                try:
+                    freq_val = _as_float(args, 'frequency')
+                    result = _send({'cmd': 'freq', 'frequency': freq_val})
+                except ValueError as ve:
+                    result = {'ok': False, 'error': str(ve)}
             elif cmd == 'txfreq':
                 try:
-                    current_rx = float(cached_status.get('frequency', 0))
-                except (TypeError, ValueError):
-                    current_rx = 0.0
-                result = _send({'cmd': 'freq', 'frequency': current_rx,
-                                'tx_frequency': _as_float(args, 'tx_frequency')})
+                    tx_freq_val = _as_float(args, 'tx_frequency')
+                    # Only include RX frequency if we have a valid cached value.
+                    # Otherwise let the plugin use its current RX freq.
+                    cmd_dict = {'cmd': 'freq', 'tx_frequency': tx_freq_val}
+                    try:
+                        current_rx = float(cached_status.get('frequency', 0))
+                        if current_rx > 0:
+                            cmd_dict['frequency'] = current_rx
+                    except (TypeError, ValueError):
+                        pass
+                    result = _send(cmd_dict)
+                except ValueError as ve:
+                    result = {'ok': False, 'error': str(ve)}
             elif cmd == 'squelch':
                 result = _send({'cmd': 'squelch',
                                 'level': _as_int(args, 'squelch level')})

@@ -105,7 +105,7 @@ class TH9800Plugin:
 
         # Bus compat
         self.enabled = True
-        self.ptt_control = False
+        self.ptt_control = True
         self.priority = 1
         self.volume = 1.0
         self.duck = False  # not duckable — it's the primary radio
@@ -249,7 +249,7 @@ class TH9800Plugin:
         if _st:
             _st.record('aioc_rx', 'queue_get', data, _qd)
 
-        return data, False
+        return data, data is not None
 
     def put_audio(self, pcm):
         """Queue TX audio for non-blocking write to AIOC output stream."""

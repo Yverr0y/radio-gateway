@@ -62,7 +62,7 @@ class PacketRadioPlugin(_AGWPEProxyMixin, _EndpointMixin, _PatMixin,
     def __init__(self):
         # Plugin contract attributes
         self.enabled = True
-        self.ptt_control = False
+        self.ptt_control = True
         self.priority = 5
         self.sdr_priority = 5
         self.volume = 1.0

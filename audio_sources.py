@@ -47,7 +47,7 @@ class AudioSource:
         self.enabled = True
         self.priority = 0  # Lower = higher priority
         self.volume = 1.0
-        self.ptt_control = False  # Can this source trigger PTT?
+        self.ptt_control = True  # Can this source trigger PTT?
         
     def initialize(self):
         """Initialize the audio source. Return True on success."""
@@ -1368,7 +1368,7 @@ class EchoLinkSource(AudioSource):
         super().__init__("EchoLink", config)
         self.gateway = gateway
         self.priority = 2  # After Radio (1), before Files (0)
-        self.ptt_control = False  # EchoLink doesn't trigger radio PTT
+        self.ptt_control = True  # EchoLink doesn't trigger radio PTT
         self.volume = 1.0
         
         # IPC state
@@ -1635,7 +1635,7 @@ class RemoteAudioSource(AudioSource):
         self.gateway = gateway
         self.priority = 2  # Same as SDR sources in the mixer
         self.sdr_priority = int(config.REMOTE_AUDIO_PRIORITY)
-        self.ptt_control = False
+        self.ptt_control = True
         self.volume = 1.0
         self.mix_ratio = 1.0
         self.duck = config.REMOTE_AUDIO_DUCK
@@ -1869,7 +1869,7 @@ class LinkAudioSource(AudioSource):
         self.endpoint_name = endpoint_name
         self.priority = int(getattr(config, 'LINK_AUDIO_PRIORITY', 3))
         self.sdr_priority = self.priority
-        self.ptt_control = False
+        self.ptt_control = True
         self.volume = 1.0
         self.mix_ratio = 1.0
         self.duck = getattr(config, 'LINK_AUDIO_DUCK', False)

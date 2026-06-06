@@ -271,7 +271,7 @@ class UsrpPlugin:
         # Routing/UI metadata read via getattr by bus_manager + the routing UI.
         self.priority = 5            # network source priority (lower = higher)
         self.duck = True             # duck under higher-priority sources on a bus
-        self.ptt_control = False     # RX audio does not itself key a TX radio
+        self.ptt_control = True     # RX audio does not itself key a TX radio
         self.audio_boost = 1.0       # RX gain (routing slider, 100 = 1.0)
         self.tx_audio_boost = 1.0    # TX gain (independent of RX)
         self.tx_audio_level = 0      # TX meter, updated by the bus on send

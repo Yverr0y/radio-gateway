@@ -47,7 +47,7 @@ class _TunerCapture:
         self.muted = False
         self.enabled = True
         # Bus compat — allows direct registration as a source node
-        self.ptt_control = False
+        self.ptt_control = True
         self.duck = getattr(config, 'SDR_DUCK', True)
         self.priority = 2
         self.sdr_priority = 1
@@ -341,8 +341,9 @@ class _TunerCapture:
         self.audio_level = 0
 
     def get_audio(self, chunk_size=None):
-        """Bus-compatible audio interface. Returns (pcm_bytes_or_none, False)."""
-        return self.get_chunk(), False
+        """Bus-compatible audio interface. Returns (pcm_bytes_or_none, ptt_flag)."""
+        chunk = self.get_chunk()
+        return chunk, chunk is not None
 
     @property
     def active(self):
@@ -468,7 +469,7 @@ class SDRPlugin:
 
         # Bus compat attributes
         self.enabled = True
-        self.ptt_control = False
+        self.ptt_control = True
         self.priority = 2
         self.volume = 1.0
         self.duck = True  # can be ducked by higher-priority sources
@@ -714,7 +715,7 @@ class SDRPlugin:
     def get_audio(self, chunk_size=None):
         """Get one chunk of mixed/ducked audio from both tuners.
 
-        Returns (pcm_bytes_or_none, False). SDR never triggers PTT.
+        Returns (pcm_bytes_or_none, ptt_flag). ptt_flag is True when audio is present.
         """
         if not self.enabled:
             return None, False
@@ -727,7 +728,7 @@ class SDRPlugin:
             _st = getattr(self, '_stream_trace_plugin', None) or (self._tuner1._stream_trace if self._tuner1 else None)
             if _st and audio is None and self._tuner1:
                 _st.record('sdr_single', 'get_audio_empty', b'', self._tuner1._chunk_queue.qsize() if self._tuner1 else -1)
-            return audio, False
+            return audio, audio is not None
 
         current_time = time.monotonic()
 
@@ -773,7 +774,7 @@ class SDRPlugin:
         elif self._tuner2:
             self.audio_level = self._tuner2.audio_level
 
-        return output, False
+        return output, output is not None
 
     def execute(self, cmd):
         """Handle commands: tune, restart, stop, mute, status, and single-mode operations."""

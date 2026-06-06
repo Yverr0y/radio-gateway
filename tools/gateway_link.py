@@ -46,6 +46,7 @@ class GatewayLinkProtocol:
     STATUS   = 0x03
     REGISTER = 0x04
     ACK      = 0x05
+    LOG      = 0x06
 
     _HEADER = struct.Struct('>BH')  # type (1) + length (2) = 3 bytes
 
@@ -114,6 +115,17 @@ class GatewayLinkProtocol:
         payload = {"cmd_id": cmd_id}
         payload.update(result_dict)
         cls.send_frame(sock, cls.ACK, json.dumps(payload).encode('utf-8'))
+
+    @classmethod
+    def send_log(cls, sock, lines):
+        """Send a batch of log lines (endpoint → server).
+
+        *lines* is a list of dicts ``{'ts': float, 'stream': 'stdout'|'stderr',
+        'text': str}``. The server appends them to the per-endpoint rotating
+        log file under ``logs/endpoints/``. See ``docs/endpoint_logs_design.md``.
+        """
+        payload = {'type': 'log', 'lines': lines}
+        cls.send_frame(sock, cls.LOG, json.dumps(payload).encode('utf-8'))
 
 
 # ---------------------------------------------------------------------------
@@ -206,13 +218,18 @@ class GatewayLinkServer:
 
     def __init__(self, port=9700, on_command=None,
                  on_register=None, on_disconnect=None, on_ack=None,
-                 on_endpoint_status=None, supervisor=None):
+                 on_endpoint_status=None, on_log_lines=None,
+                 supervisor=None):
         self._port = port
         self._on_command = on_command
         self._on_register = on_register
         self._on_disconnect = on_disconnect
         self._on_ack = on_ack
         self._on_endpoint_status = on_endpoint_status
+        # on_log_lines(endpoint_name: str, lines: list[dict]) — invoked from
+        # the reader thread when an endpoint ships a P.LOG batch. See
+        # docs/endpoint_logs_design.md.
+        self._on_log_lines = on_log_lines
         self._supervisor = supervisor
 
         self._server_sock = None
@@ -586,6 +603,20 @@ class GatewayLinkServer:
                     elif ftype == P.REGISTER:
                         # Re-registration not allowed; ignore
                         print(f"  [Link] Ignoring duplicate REGISTER from {ep_name}")
+                    elif ftype == P.LOG:
+                        # Endpoint stdout/stderr line batch — append to the
+                        # per-endpoint rotating log file. Failure here must
+                        # not kill the link reader.
+                        if self._on_log_lines:
+                            try:
+                                msg = json.loads(payload)
+                                _lines = msg.get('lines') or []
+                                if _lines:
+                                    self._on_log_lines(ep_name, _lines)
+                            except json.JSONDecodeError as e:
+                                print(f"  [Link] Bad JSON in LOG from {ep_name}: {e}")
+                            except Exception as e:
+                                print(f"  [Link] LOG handler error for {ep_name}: {e}")
                 except json.JSONDecodeError as e:
                     print(f"  [Link] Bad JSON from {ep_name}: {e}")
                 except Exception as e:

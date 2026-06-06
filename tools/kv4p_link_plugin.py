@@ -117,7 +117,7 @@ class KV4PPlugin(RadioPlugin):
 
         # Bus compat (used by RadioPlugin base; harmless on endpoint)
         self.enabled = True
-        self.ptt_control = False
+        self.ptt_control = True
         self.priority = 2
         self.volume = 1.0
         self.duck = True

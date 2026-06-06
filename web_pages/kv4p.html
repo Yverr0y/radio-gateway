@@ -423,6 +423,8 @@ Kv4pCtrl.prototype._update = function(d) {
       var el = this._q(sel);
       if (el && !skip(el)) el.value = val;
     }.bind(this);
+    set('.kv-freq-input', parseFloat(d.frequency).toFixed(3));
+    set('.kv-txfreq-input', d.tx_frequency && d.tx_frequency !== d.frequency ? parseFloat(d.tx_frequency).toFixed(3) : '0');
     set('.kv-squelch', d.squelch || 4);
     this._q('.kv-sq-val').textContent = d.squelch || 4;
     set('.kv-power', d.high_power ? 'high' : 'low');
