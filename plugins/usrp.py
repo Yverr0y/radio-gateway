@@ -152,11 +152,22 @@ _PANEL_HTML = """<!DOCTYPE html>
   <div class="stat">
     <span>RX (incoming COS)</span><b id="rx">—</b>
     <span>TX (keyed)</span><b id="tx">—</b>
+  </div>
+  <div style="margin-top:.5rem;font-size:.75rem;color:#888;text-transform:uppercase;letter-spacing:.05em">Local link (ASL node → gateway)</div>
+  <div class="stat" style="margin-top:.25rem">
     <span>Packets in / out</span><b id="pk">—</b>
-    <span>RX queue</span><b id="q">—</b>
+    <span>RX queue depth</span><b id="q">—</b>
     <span>RX rate</span><b id="pps">—</b>
     <span>Packet loss</span><b id="loss">—</b>
   </div>
+  <div style="margin-top:.5rem;font-size:.75rem;color:#888;text-transform:uppercase;letter-spacing:.05em">Remote node stats (via ASL)</div>
+  <div class="stat" style="margin-top:.25rem">
+    <span>Node uptime</span><b id="nd-uptime">—</b>
+    <span>Keyups today</span><b id="nd-keyups">—</b>
+    <span>TX time today</span><b id="nd-txtime">—</b>
+    <span>Timeouts</span><b id="nd-timeouts">—</b>
+  </div>
+  <div id="nd-links-stats" style="margin-top:.25rem"></div>
 </div>
 
 <script>
@@ -231,9 +242,33 @@ async function poll(){
     }
   }catch(e){}
 }
-refreshLinks(); poll();
+async function pollNodeStats(){
+  try{
+    const r = await post('node_stats');
+    if(r.ok){
+      $('nd-uptime').textContent   = r.uptime || '—';
+      $('nd-keyups').textContent   = r.keyups_today || '—';
+      $('nd-txtime').textContent   = r.tx_time_today || '—';
+      $('nd-timeouts').textContent = r.timeouts || '0';
+    }
+  }catch(e){}
+  try{
+    const r = await post('links');
+    if(r.ok && Array.isArray(r.direct) && r.direct.length){
+      $('nd-links-stats').innerHTML = '<div style="font-size:.75rem;color:#888;margin-top:.25rem">Direct link reconnects</div>' +
+        r.direct.map(d => {
+          const warn = d.reconnects > 5 ? 'color:var(--t-err)' : d.reconnects > 0 ? 'color:var(--t-warn)' : '';
+          return `<div class="stat" style="margin-top:.15rem"><span>Node ${d.node} (${d.peer})</span><b style="${warn}">${d.reconnects} reconnects — ${d.state}</b></div>`;
+        }).join('');
+    } else {
+      $('nd-links-stats').innerHTML = '';
+    }
+  }catch(e){}
+}
+refreshLinks(); poll(); pollNodeStats();
 setInterval(poll, 1500);
 setInterval(refreshLinks, 6000);
+setInterval(pollNodeStats, 15000);
 </script>
 </body></html>"""
 
@@ -715,7 +750,9 @@ class UsrpPlugin:
                 p = line.split()
                 if len(p) >= 4 and p[0].isdigit() and p[0] != self.node:
                     # NODE PEER RECONNECTS DIRECTION CONNECT_TIME CONNECT_STATE
-                    direct.append({'node': p[0], 'dir': p[3],
+                    direct.append({'node': p[0], 'peer': p[1] if len(p) >= 2 else '',
+                                   'reconnects': int(p[2]) if len(p) >= 3 and p[2].isdigit() else 0,
+                                   'dir': p[3],
                                    'ctime': p[4] if len(p) >= 5 else '',
                                    'state': p[-1] if len(p) >= 6 else ''})
 
@@ -742,6 +779,26 @@ class UsrpPlugin:
             self._links_cache_mono = time.monotonic()
         return {'ok': ok_l or ok_n, 'direct': direct, 'indirect': indirect,
                 'nodes': direct_nodes, 'raw': out_n}
+
+    def node_stats(self):
+        """Pull rpt stats for this node — keyups, TX time, uptime."""
+        import re as _re
+        ok, out = self._ami_command(f'rpt stats {self.node}')
+        if not ok:
+            return {'ok': False, 'error': out}
+        def _val(key):
+            m = _re.search(r'%s\.+:\s*(.+)' % _re.escape(key), out)
+            return m.group(1).strip() if m else ''
+        return {
+            'ok': True,
+            'uptime':        _val('Uptime'),
+            'keyups_today':  _val('Keyups today'),
+            'keyups_total':  _val('Keyups since system initialization'),
+            'tx_time_today': _val('TX time today'),
+            'tx_time_total': _val('TX time since system initialization'),
+            'timeouts':      _val('Time outs since system initialization'),
+            'kerchunks_today': _val('Kerchunks today'),
+        }
 
     # ── control surface ────────────────────────────────────────────
     def execute(self, cmd):
@@ -880,6 +937,8 @@ class UsrpPlugin:
             self.link_status()
         elif action == 'links':
             res = self.link_status()
+        elif action == 'node_stats':
+            res = self.node_stats()
         else:
             return self._send_json(req, {'ok': False, 'error': f'bad action: {action}'}, 400)
         self._send_json(req, res)
