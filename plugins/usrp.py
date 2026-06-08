@@ -141,14 +141,6 @@ _PANEL_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="card">
-  <div class="row" style="justify-content:space-between">
-    <strong>Connected nodes</strong>
-    <span class="sub" id="age"></span>
-  </div>
-  <ul class="links" id="links"></ul>
-</div>
-
-<div class="card">
   <div class="stat">
     <span>RX (incoming COS)</span><b id="rx">—</b>
     <span>TX (keyed)</span><b id="tx">—</b>
@@ -168,6 +160,14 @@ _PANEL_HTML = """<!DOCTYPE html>
     <span>Timeouts</span><b id="nd-timeouts">—</b>
   </div>
   <div id="nd-links-stats" style="margin-top:.25rem"></div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <strong>Connected nodes</strong>
+    <span class="sub" id="age"></span>
+  </div>
+  <ul class="links" id="links"></ul>
 </div>
 
 <script>
