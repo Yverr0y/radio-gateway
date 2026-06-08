@@ -154,6 +154,8 @@ _PANEL_HTML = """<!DOCTYPE html>
     <span>TX (keyed)</span><b id="tx">—</b>
     <span>Packets in / out</span><b id="pk">—</b>
     <span>RX queue</span><b id="q">—</b>
+    <span>RX rate</span><b id="pps">—</b>
+    <span>Packet loss</span><b id="loss">—</b>
   </div>
 </div>
 
@@ -213,6 +215,9 @@ async function poll(){
     $('tx').innerHTML = pill(s.tx_keyed);
     $('pk').textContent = s.pkts_rx + ' / ' + s.pkts_tx;
     $('q').textContent = s.rx_queue;
+    $('pps').textContent = s.pps_rx != null ? s.pps_rx + ' pps' : '—';
+    $('loss').textContent = s.loss_pct != null ? s.loss_pct + '% loss (' + s.pkts_dropped + ' dropped)' : '—';
+    $('loss').style.color = (s.loss_pct > 5) ? 'var(--t-err)' : (s.loss_pct > 1) ? 'var(--t-warn)' : '';
     $('amiline').textContent = 'via USRP bridge — AMI ' +
         (s.ami_ready ? ('ready ('+s.ami+')') : 'NOT configured');
     if(s.links_age!=null) $('age').textContent = 'updated '+s.links_age+'s ago';
@@ -320,8 +325,13 @@ class UsrpPlugin:
         self._seq = 0
         self.pkts_rx = 0
         self.pkts_tx = 0
+        self.pkts_dropped = 0                     # sequence gaps (lost UDP packets)
         self.rx_keyed = False                     # last incoming COS (remote keyup)
         self._last_rx_mono = 0.0
+        self._rx_seq_last = None                  # last seen RX seq (None = first pkt)
+        # Rolling pps window: list of monotonic timestamps for received voice pkts
+        self._pps_window = collections.deque()
+        self._PPS_WINDOW_SEC = 5.0
 
     # ── lifecycle ──────────────────────────────────────────────────
     def setup(self, config, gateway=None):
@@ -401,10 +411,24 @@ class UsrpPlugin:
                 data[:USRP_HEADER_LEN])
             self.pkts_rx += 1
             self.rx_keyed = bool(keyup)
-            self._last_rx_mono = time.monotonic()
+            now = time.monotonic()
+            self._last_rx_mono = now
+
+            # Sequence-gap loss detection (32-bit wraparound safe)
+            if self._rx_seq_last is not None:
+                gap = (seq - self._rx_seq_last - 1) & 0xFFFFFFFF
+                if 0 < gap < 1000:            # ignore huge jumps (reconnects)
+                    self.pkts_dropped += gap
+            self._rx_seq_last = seq
 
             if ptype != USRP_TYPE_VOICE:
                 continue  # ignore text/ping for now
+
+            # Rolling pps window (voice packets only)
+            self._pps_window.append(now)
+            cutoff = now - self._PPS_WINDOW_SEC
+            while self._pps_window and self._pps_window[0] < cutoff:
+                self._pps_window.popleft()
             payload = data[USRP_HEADER_LEN:USRP_HEADER_LEN + USRP_VOICE_BYTES]
             if len(payload) < 2:
                 continue
@@ -757,6 +781,9 @@ class UsrpPlugin:
             'tx_buf_8k': tx_buf,
             'pkts_rx': self.pkts_rx,
             'pkts_tx': self.pkts_tx,
+            'pkts_dropped': self.pkts_dropped,
+            'pps_rx': round(len(self._pps_window) / self._PPS_WINDOW_SEC, 1),
+            'loss_pct': round(self.pkts_dropped * 100 / max(1, self.pkts_rx + self.pkts_dropped), 1),
             'audio_level': self.audio_level,
             'node': self.node,
             'ami': f'{self.ami_host}:{self.ami_port}',
