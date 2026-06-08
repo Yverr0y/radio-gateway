@@ -387,9 +387,10 @@ class UsrpPlugin:
             try:
                 data, _ = self._sock.recvfrom(2048)
             except socket.timeout:
-                # No traffic: decay COS so status reflects an idle link.
+                # No traffic: decay COS and level so status reflects an idle link.
                 if self.rx_keyed and (time.monotonic() - self._last_rx_mono) > 0.5:
                     self.rx_keyed = False
+                self.audio_level = max(0, int(self.audio_level * 0.7))
                 continue
             except OSError:
                 break
@@ -435,7 +436,9 @@ class UsrpPlugin:
         while len(self._rx48k) >= BUS_CHUNK_SAMPLES:
             chunk = self._rx48k[:BUS_CHUNK_SAMPLES]
             self._rx48k = self._rx48k[BUS_CHUNK_SAMPLES:]
-            self._rx_queue.append(chunk.tobytes())  # deque drops oldest at maxlen
+            chunk_bytes = chunk.tobytes()
+            self._rx_queue.append(chunk_bytes)  # deque drops oldest at maxlen
+            self.audio_level = pcm_level(chunk_bytes, self.audio_level)
 
     def get_audio(self, chunk_size=None):
         """Return one 48 kHz bus chunk of RX audio, or (None, False)."""
@@ -452,14 +455,9 @@ class UsrpPlugin:
         try:
             data = self._rx_queue.popleft()
         except IndexError:
-            self.audio_level = max(0, int(self.audio_level * 0.7))
             return None, False
 
-        try:
-            self.audio_level = pcm_level(data, self.audio_level)
-        except Exception:
-            pass
-        return data, False
+        return data, True
 
     # ── TX path: 48 kHz bus chunks → USRP UDP ──────────────────────
     def put_audio(self, pcm):
