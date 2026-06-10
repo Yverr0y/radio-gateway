@@ -1891,6 +1891,7 @@ class LinkAudioSource(AudioSource):
         self._sub_buffer = b''
         self._link_server = None  # Set by gateway_core after init
         self._jitter_prefill = 4  # wait for N chunks before draining (absorbs endpoint jitter)
+        self._last_push_mono = time.monotonic()  # track last audio arrival for underrun timeout
         # Device identity — set by _link_on_register, used by all consumers
         self.source_id = None      # routing source ID, e.g. "d75", "ftm_150"
         self.sink_id = None        # routing TX sink ID, e.g. "d75_tx", "ftm_150_tx"
@@ -1905,6 +1906,7 @@ class LinkAudioSource(AudioSource):
         self._chunk_queue.clear()
         self._sub_buffer = b''
         self._jitter_primed = False
+        self._last_push_mono = time.monotonic()
 
     def push_audio(self, pcm):
         """Called by GatewayLinkServer reader thread when AUDIO frame arrives."""
@@ -1919,6 +1921,7 @@ class LinkAudioSource(AudioSource):
         try:
             self.audio_level = pcm_level(pcm, self.audio_level)
             self._audio_level_last_mono = time.monotonic()
+            self._last_push_mono = time.monotonic()
         except Exception:
             pass
 
@@ -1952,6 +1955,13 @@ class LinkAudioSource(AudioSource):
                 self._sub_buffer += blob
             except IndexError:
                 self.audio_level = max(0, int(self.audio_level * 0.7))
+                # If no audio has arrived for >2s, the source went legitimately
+                # quiet (e.g. squelch gating). Drop the primed flag so we stop
+                # counting underruns until audio resumes and re-primes.
+                if time.monotonic() - self._last_push_mono > 2.0:
+                    self._jitter_primed = False
+                    self._sub_buffer = b''
+                    return None, False
                 if _st and _st.active:
                     _st.record(f'{self.endpoint_name}_rx', 'get_audio', None,
                                0, 'UNDERRUN')
