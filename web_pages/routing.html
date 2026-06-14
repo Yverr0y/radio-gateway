@@ -839,6 +839,18 @@ function rebuildEditor() {
             + '</span>'
             + '</div>';
         })()
+      + (b.type === 'solo' ? (function() {
+          var dms = (proc.delay_ms !== undefined) ? proc.delay_ms : 0;
+          return '<div class="dfn-mix-row" id="delay-row-' + b.id + '">'
+            + '<span class="dfn-mix-label">delay</span>'
+            + '<input type="range" class="dfn-mix-slider" min="0" max="5000" step="50" value="' + dms + '" '
+            +   'id="bus-delay-' + b.id + '" '
+            +   'oninput="setBusDelay(\'' + b.id + '\', this.value, true)" '
+            +   'onchange="setBusDelay(\'' + b.id + '\', this.value, false)" '
+            +   'ondblclick="this.value=0;setBusDelay(\'' + b.id + '\', 0, false)">'
+            + '<span class="dfn-mix-val" id="bus-delay-val-' + b.id + '">' + dms + ' ms</span>'
+            + '</div>';
+        })() : '')
       + '<div class="level-bar" id="level-bus_' + b.id + '"><div class="level-fill"></div></div>'
       + '</div>';
     var pos = savedPositions['bus-' + b.id] || {x: xBus, y: yBus};
@@ -1262,6 +1274,21 @@ function setDfnAtten(busId, value) {
         setStatus('atten cap failed: ' + (d.error || 'unknown'), true);
       }
     });
+}
+
+var _busDelayTimers = {};
+function setBusDelay(busId, value, live) {
+  var v = Math.round(parseFloat(value));
+  var el = document.getElementById('bus-delay-val-' + busId);
+  if (el) el.textContent = v + ' ms';
+  clearTimeout(_busDelayTimers[busId]);
+  _busDelayTimers[busId] = setTimeout(function() {
+    fetch('/routing/cmd', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd: 'set_bus_delay', bus: busId, delay_ms: v})
+    });
+  }, live ? 120 : 0);
 }
 
 // Speaker mode selector

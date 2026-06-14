@@ -73,6 +73,7 @@ class BusManager:
         self._busses = {}          # id → AudioBus instance
         self._bus_processors = {}  # id → AudioProcessor instance
         self._bus_config = {}      # id → bus config dict (processing, pcm, mp3, vad)
+        self._bus_delay_bufs = {}  # id → deque of np.int16 arrays (post-processed output delay)
         self._running = False
         self._thread = None
         self._config_path = os.path.join(
@@ -1077,6 +1078,30 @@ class BusManager:
             for sink_id in list(bus_output.audio):
                 if bus_output.audio[sink_id] is not None:
                     bus_output.audio[sink_id] = _processed_audio
+
+        # Output delay buffer — delays post-processed audio before sink delivery.
+        # delay_ms is stored in bus_cfg and updated live by the routing UI slider.
+        delay_ms = bus_cfg.get('delay_ms', 0)
+        if delay_ms > 0 and _processed_audio is not None:
+            delay_samples = int(delay_ms * 48)  # 48 000 Hz → 48 samples per ms
+            buf = self._bus_delay_bufs.setdefault(bus_id, collections.deque())
+            buf.append(_processed_audio.copy())
+            buffered = sum(len(c) for c in buf)
+            if buffered > delay_samples:
+                # Drain excess chunks when slider is moved left at runtime
+                while len(buf) > 1 and buffered - len(buf[0]) > delay_samples:
+                    buffered -= len(buf.popleft())
+                _delayed = buf.popleft()
+            else:
+                # Buffer still filling — send silence to sinks
+                _delayed = np.zeros(len(_processed_audio), dtype=np.int16)
+            _processed_audio = _delayed
+            for sink_id in list(bus_output.audio):
+                if bus_output.audio[sink_id] is not None:
+                    bus_output.audio[sink_id] = _delayed
+        else:
+            # Delay disabled — clear any stale buffer so it doesn't replay on re-enable
+            self._bus_delay_bufs.pop(bus_id, None)
 
         # Listen bus: decay sink levels when no audio
         if _is_listen and bus_output.mixed_audio is None:

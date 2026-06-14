@@ -247,8 +247,110 @@ class ManagerEngine:
                 self._state['running'] = False
                 self._save_state()
 
+    def _collect_snapshot(self) -> str:
+        """Pre-collect hourly system metrics so Claude receives data, not commands to run."""
+
+        def _sh(cmd, timeout=5):
+            try:
+                r = subprocess.run(cmd, shell=True, capture_output=True,
+                                   text=True, timeout=timeout)
+                return r.stdout.strip() or r.stderr.strip() or '(empty)'
+            except Exception as e:
+                return f'error: {e}'
+
+        def _curl(url, timeout=5):
+            try:
+                r = subprocess.run(
+                    ['curl', '-s', '--max-time', str(timeout), url],
+                    capture_output=True, text=True, timeout=timeout + 2)
+                return r.stdout.strip()
+            except Exception as e:
+                return f'error: {e}'
+
+        def _prom(query, timeout=5):
+            try:
+                r = subprocess.run(
+                    ['curl', '-s', '--max-time', str(timeout),
+                     '--data-urlencode', f'query={query}',
+                     'http://localhost:8080/prometheus/api/v1/query'],
+                    capture_output=True, text=True, timeout=timeout + 2)
+                d = json.loads(r.stdout)
+                return [(x['metric'], x['value'][1]) for x in d['data']['result']]
+            except Exception as e:
+                return f'error: {e}'
+
+        out = []
+
+        # Service states
+        for svc in ['radio-gateway', 'mumble-server-gw1']:
+            out.append(f'{svc}: {_sh(f"systemctl is-active {svc}")}')
+
+        # SDR watchdog
+        out.append(f'rtl_airband_procs: {_sh("pgrep -c rtl_airband")}')
+
+        # Disk / load / memory
+        out.append(f'disk: {_sh("df -h / | tail -1")}')
+        out.append(f'uptime: {_sh("uptime")}')
+        out.append(f'memory:\n{_sh("free -m")}')
+
+        # Gateway HTTP status (stream connected, sdr_running, etc.)
+        raw = _curl('http://localhost:8080/status')
+        try:
+            d = json.loads(raw)
+            out.append(f'stream_connected: {d.get("stream_connected", "?")}')
+            out.append(f'sdr_running: {d.get("sdr_running", "?")}')
+        except Exception:
+            out.append(f'gateway_status_raw: {raw[:300]}')
+
+        # Transcription pool
+        raw = _curl('http://localhost:8080/transcriptions?since=0')
+        try:
+            d = json.loads(raw)
+            s = d.get('status', {})
+            summary = {k: s.get(k) for k in
+                       ('enabled', 'mode', 'model_loaded', 'pending',
+                        'inflight', 'pending_audio_secs')}
+            out.append(f'transcription: {json.dumps(summary)}')
+            for w in (s.get('workers') or []):
+                wsum = {k: w.get(k) for k in
+                        ('type', 'engine', 'reachable', 'model_loaded', 'inflight',
+                         'avg_ratio', 'cpu_temp_c', 'last_switch_error')}
+                out.append(f'  worker: {json.dumps(wsum)}')
+        except Exception:
+            out.append(f'transcription_raw: {raw[:300]}')
+
+        # Prometheus signals
+        out.append('--- prometheus ---')
+        prom_queries = [
+            ('bus_levels_stuck_1h',       'max_over_time(rg_bus_audio_level[1h]) == 0'),
+            ('ptt_activity_1h',           'sum(increase(rg_bus_ptt_active[1h]))'),
+            ('transcription_inflight_10m','max_over_time(rg_transcription_inflight[10m])'),
+            ('stream_throughput_kbps',    'rate(rg_stream_bytes_sent_total[5m]) * 8 / 1000'),
+            ('link_flapping_1h',          'changes(rg_link_endpoint_up[1h])'),
+            ('link_underruns_per_min',    'rate(rg_link_audio_underruns_total[10m]) * 60'),
+            ('cpu_temp_c',                'rg_cpu_temp_c'),
+            ('denoise_p99_ms',            'histogram_quantile(0.99, sum by (le, bus, engine)'
+                                          ' (rate(rg_denoise_apply_ms_bucket[10m])))'),
+        ]
+        for label, q in prom_queries:
+            out.append(f'{label}: {_prom(q)}')
+
+        return '\n'.join(out)
+
     def _build_prompt(self, task_type: str, run_id: str, task_content: str) -> str:
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if task_type == 'hourly':
+            snapshot = self._collect_snapshot()
+            return (
+                f"[MANAGER TASK — HOURLY] Run ID: {run_id} | Time: {now}\n\n"
+                f"{task_content}\n\n"
+                f"<pre_collected_snapshot>\n{snapshot}\n</pre_collected_snapshot>\n\n"
+                f"The snapshot above was collected by the manager engine immediately before "
+                f"this prompt. Do NOT run any data-collection commands — all the values you "
+                f"need are already in the snapshot. Read it, apply the thresholds from the "
+                f"task description, and write the JSON report now.\n\n"
+                f"Your run_id for the report is: {run_id}"
+            )
         return (
             f"[MANAGER TASK — {task_type.upper()}] Run ID: {run_id} | Time: {now}\n\n"
             f"{task_content}\n\n"
