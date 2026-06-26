@@ -2,23 +2,67 @@
 
 All notable changes to Radio Gateway.
 
-## [Unreleased]
+## [4.0.0] -- 2026-06-26
+
+AllStar integration, Kokoro offline TTS, USRP2 dual-node support, IC-7100 squelch fix, and a complete MCP tool overhaul. The plugin platform is now fully generic over discovered plugins — routing UI, bus radio resolution, meters, and `web_routes` dispatch all enumerate `_external_plugins` rather than hardcoded radio names. Any future plugin gets full UI and MCP coverage for free.
+
+### Added — AllStarLink (USRP) bridge
+
+The gateway can now bridge into the AllStar network as a first-class audio source/sink and connect to any node on demand — without running a radio node on the gateway box. A headless ASL3 "bridge node" (no RF hardware) speaks the USRP (DVSwitch) protocol to a new in-gateway plugin; everything else (Mumble, web player, other radios) routes to/from AllStar like any other bus endpoint.
+
+- **`plugins/usrp.py`** — in-gateway USRP/DVSwitch plugin. Full-duplex 8 kHz↔48 kHz bridge (scipy `resample_poly` ×6), paced 20 ms sender with keyup/unkey framing, bounded RX/TX queues, RX + TX level meters. Wire format: 32 B header (`USRP` + 7 big-endian int32) + 160×int16 LE @ 8 kHz.
+- **`plugins/usrp2.py`** — second USRP plugin instance for a second ASL3 bridge node. Shares the same codebase with independent config keys (`ENABLE_USRP2`, `USRP2_*`). Both appear as separate bus sources/sinks with independent `/usrp` and `/usrp2` panels.
+- **Runtime node control via AMI** — short-lived authenticated sessions to the bridge node's Asterisk Manager Interface issue `rpt cmd <node> ilink …`: connect (transceive/monitor), disconnect one, disconnect all, and `rpt lstats`/`rpt nodes` for status. The target node is chosen at runtime, not baked into config.
+- **`/usrp` control panel** — connect to any node, **per-node Disconnect** on your *direct* links, a read-only "in conference (via a hub)" list for nodes reached *through* a hub, most-recently-connected link sorted to the top, and live RX/TX/COS status. Plus a **nav link** (Radios ▸ AllStar) and a dual-lane **"ASL"** RX/TX meter in the top frame.
+- **`/usrp` recent-nodes dropdown** — the panel remembers the last 10 connected nodes (persisted to `usrp_recent.json`).
+- **AllStar dashboard section** — `/usrp` status (node, bridge AMI, RX/TX, packets, connected nodes) in the dashboard service panel next to USB/IP and Telegram.
+- **Dynamic multi-node AllStar dashboard panels** — enumerate both USRP instances dynamically; no hardcoded ASL1/ASL2 labels.
+- **Link quality stats** — pps (packets per second) and packet loss % visible per node in the panel. Local and remote stats compared.
+- **Solo bus output delay slider** — `/routing` UI gains a latency-compensation slider per solo bus output; manager snapshot pre-collects before delivery.
+- **Bridge-node recipe** — [`docs/allstar_bridge.md`](docs/allstar_bridge.md): a headless ASL3 container (`asl3-asterisk`, no DAHDI), `rxchannel = USRP/…`, registered node, AMI user, reboot-persistent. Node-to-node linking is permissionless, so it reaches the whole ASL3 network.
+- **Config** — `ENABLE_USRP`, `USRP_REMOTE_HOST/PORT`, `USRP_LISTEN_PORT`, `USRP_NODE`, `USRP_AMI_HOST/PORT/USER/SECRET`; and `ENABLE_USRP2` / `USRP2_*` equivalents.
+
+### Added — Kokoro ONNX offline TTS (new default engine)
+
+- **Kokoro ONNX TTS engine** — offline, high-quality neural TTS is now the default engine (`TTS_ENGINE = kokoro`). 54 voices across 9 languages (US/GB English, Japanese, Mandarin, Spanish, French, Hindi, Italian, Brazilian Portuguese). No internet required at runtime. Voice dropdown in `/controls` and `/dashboard` auto-populates from the active engine's voice list.
+- Per-message voice override: `!speak af_bella Hello` (Kokoro string IDs) or `!speak 2 Hello` (gTTS/Edge numeric accents).
+- New config key: `KOKORO_DEFAULT_VOICE` (default `af_heart`). Smart Announce voice fields accept Kokoro IDs.
+- Model files (~340 MB) gitignored, downloaded by `scripts/install.sh` into `tools/models/kokoro/`.
+
+### Added — MCP tool overhaul (142 tools, up from 95+)
+
+- **AllStar/USRP tools** (`mcp_server/tools/usrp.py`) — `usrp_nodes`, `usrp_status`, `usrp_connect`, `usrp_disconnect`, `usrp_disconnect_all`, `usrp_links`, `usrp_node_stats`. Cover both USRP instances via `node_id` param.
+- **Broadcastify tools** — `broadcastify_status`, `broadcastify_control` (start/stop/restart).
+- **Smart Announce tools** — `smart_announce_status` (slots, countdowns, activity), `smart_announce_trigger` (fire any slot immediately).
+- **Relay/GPIO tools** — `relay_status`, `relay_charger_toggle`.
+- **ADS-B tool** — `adsb_status` (dump1090-fa health, aircraft count, message rate, FR24 feed).
+- **Bug fixes** — `audio_trace_toggle` and `stream_trace_toggle` called `_auth_headers()` which wasn't imported (NameError on every call); fixed. `stream_trace_read` resolved to `mcp_server/tools/tools/stream_trace.txt` (wrong); now globs `{gateway_root}/tools/stream_trace_*.txt` for the most recent timestamped dump. `loop_recorder_export` and `loop_recorder_download_all` hardcoded `http://127.0.0.1:8080`; replaced with `GW_BASE_URL` + auth headers.
+
+### Changed — plugin platform is now generic over discovered plugins
+
+- **`web_routes()` dispatch is finally wired.** Registration existed since the Phase-2 refactor but `web_server` never consulted `_plugin_web_routes`; `do_GET` **and** `do_POST` now do, so any plugin can serve its own pages/endpoints.
+- **Routing UI, level meters, and bus radio resolution enumerate `_external_plugins`** (capability-driven) instead of hardcoded `sdr_plugin`/`th9800_plugin` refs — a discovered plugin with `audio_rx`/`audio_tx` now appears as an RX source and `<id>_tx` sink, gets node meters (`/routing/levels`, `/status`), and is reachable as a bus TX radio. Future in-tree plugins get all of this for free.
 
 ### Fixed
-- **AllStar TX was dead (`pkts_tx=0`)** — buses are built *before* plugin discovery, so a solo/duplex bus whose TX radio is an external plugin (e.g. `grunge → usrp_tx`) resolved to `None` at creation and never attached its radio, so `put_audio` was never called. `core/lifecycle.py` now calls `bus_manager.reload()` after discovery (same mechanism endpoint registration uses) so external-plugin radios attach.
 
-- **RX audio crackle eliminated** — the USRP RX upsampler ran `resample_poly` per 20 ms frame, leaving ~7% edge-taper glitches at every frame boundary (~50 Hz crackle). Now a continuous resampler carries filter context across frames (matches a full-stream resample within 1 count; ~8 ms added latency).
+- **AllStar TX was dead (`pkts_tx=0`)** — buses are built *before* plugin discovery; a solo/duplex bus whose TX radio is an external plugin resolved to `None` at creation and never attached its radio. `core/lifecycle.py` now calls `bus_manager.reload()` after discovery so external-plugin radios attach.
+- **USRP RX audio crackle eliminated** — the upsampler ran `resample_poly` per 20 ms frame, leaving ~7% edge-taper glitches at every boundary (~50 Hz crackle). Now a continuous resampler carries filter context across frames (~8 ms added latency, crackle gone).
+- **IC-7100 false squelch underruns** — CIV squelch-closed state gated audio and caused ~1200 false underruns/minute after the CIV connection came up (~12h runtime). Fixed with a 2 s silence timeout before downgrading the primed flag.
+- Plugin **discovery aborted** ("`'X' object has no attribute 'name'`") when an external plugin lacked a `.name` attr. Plugins now require it.
+- `/usrp` **link list parsed empty** — app_rpt prefixes nodes with a status letter (`T55553`), defeating a `\b(\d+)\b` regex. Now matches digit runs not bordered by digits.
+- **No Disconnect buttons** — AMI wraps CLI output as `Output: <line>`, so the `rpt lstats` line-parser saw `Output:` as token 0 and found zero direct links. The `Output:` envelope is now stripped in `_ami_command`.
+- **External-plugin TX meter froze** — the bus only decays built-in radios' `tx_audio_level`; the USRP plugin now self-decays its own.
 
-### Added
-- **Kokoro ONNX TTS engine** — offline, high-quality neural TTS is now the default engine (`TTS_ENGINE = kokoro`). 54 voices across 9 languages (US/GB English, Japanese, Mandarin, Spanish, French, Hindi, Italian, Brazilian Portuguese). No internet required. Selectable from the voice dropdown in `/controls` and `/dashboard`; the dropdown auto-populates with the voice list for whichever engine is active. Per-message voice override: `!speak af_bella Hello` (Kokoro string IDs) or `!speak 2 Hello` (gTTS/Edge numeric accents). New config keys: `KOKORO_DEFAULT_VOICE` (default `af_heart`). Model files vendored locally in `tools/models/kokoro/` (~340 MB, gitignored, downloaded by `scripts/install.sh`).
+### Added — soundboard
 
-- **`/usrp` recent-nodes dropdown** — the panel remembers the last 10 connected nodes (persisted to `usrp_recent.json`), so you can pick from a list instead of retyping.
+- Real-sample soundboard on `/controls`; `tools/fetch_freesound_farts.py` fetches CC0 clips via the Freesound API (key from env / `gateway_config.txt`, `audio/farts/` gitignored).
 
-- **AllStar dashboard section** — `/usrp` status (node, bridge AMI, RX/TX, packets, connected nodes) in the dashboard service panel next to USB/IP and Telegram.
+### Notes
 
-## [4.0.0] -- 2026-05-31
+- One interop limitation: nodes running older/HamVOIP-style app_rpt can drop the link (~10 s) when the app_rpt `newkey` handshake doesn't complete — a remote-node-side issue, not the bridge (verified: the bridge connects and holds to ASL3 nodes/hubs across both monitor and transceive).
+- Kokoro model files (~340 MB) are not in git — run `scripts/install.sh` or download manually into `tools/models/kokoro/`.
 
-AllStarLink integration. The gateway can now bridge into the AllStar network as a first-class audio source/sink and connect to any node on demand — without running a radio node on the gateway box. A headless ASL3 "bridge node" (no RF hardware) speaks the USRP (DVSwitch) protocol to a new in-gateway plugin; everything else (Mumble, web player, other radios) routes to/from AllStar like any other bus endpoint. Bringing this up also turned the plugin system from "auto-discovered but only half-wired" into genuinely generic over discovered plugins.
+## [3.8.5] -- 2026-05-25
 
 ### Added — AllStarLink (USRP) bridge
 
