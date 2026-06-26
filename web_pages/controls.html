@@ -286,15 +286,7 @@
         <textarea id="tts-text" class="ctrl-input" rows="3" placeholder="Enter text to speak..."></textarea>
         <div class="ctrl-field">
           <select id="tts-voice" class="ctrl-input btn-flex">
-            <option value="1">US English</option>
-            <option value="2">British</option>
-            <option value="3">Australian</option>
-            <option value="4">Indian</option>
-            <option value="5">South African</option>
-            <option value="6">Canadian</option>
-            <option value="7">Irish</option>
-            <option value="8">French</option>
-            <option value="9">German</option>
+            <option value="af_heart">Heart (US F) ★★★★</option>
           </select>
           <button onclick="sendTTS()" id="btn-tts-send" class="btn-flex">Send</button>
         </div>
@@ -340,15 +332,7 @@
               <input id="ai-secs" class="ctrl-input w-55" type="number" value="30" min="5" max="120">
               <label>Voice</label>
               <select id="ai-voice" class="ctrl-input w-voice">
-                <option value="1">US English</option>
-                <option value="2">British</option>
-                <option value="3">Australian</option>
-                <option value="4">Indian</option>
-                <option value="5">South African</option>
-                <option value="6">Canadian</option>
-                <option value="7">Irish</option>
-                <option value="8">French</option>
-                <option value="9">German</option>
+                <option value="af_heart">Heart (US F) ★★★★</option>
               </select>
             </div>
           </div>
@@ -447,7 +431,7 @@ function sendAIText() {
   var payload = {
     text: text,
     target_secs: parseInt(document.getElementById('ai-secs').value) || 30,
-    voice: parseInt(document.getElementById('ai-voice').value) || 1,
+    voice: document.getElementById('ai-voice').value || 1,
     top_text: document.getElementById('ai-top').value.trim(),
     tail_text: document.getElementById('ai-tail').value.trim(),
   };
@@ -489,7 +473,7 @@ function sendTTS() {
   var btn   = document.getElementById('btn-tts-send');
   btn.disabled = true;
   setStatus('tx-status', 'Generating...', 'working');
-  postJson('/tts', {text: text, voice: parseInt(voice)})
+  postJson('/tts', {text: text, voice: voice})
     .then(function(d) {
       if (d.ok) setStatus('tx-status', 'Sent — playing', 'ok');
       else      setStatus('tx-status', 'Error: ' + (d.error || 'failed'), 'err');
@@ -556,6 +540,23 @@ createPoller('/status', 1000, function(s) {
   showIf('playback-group', s.playback_enabled);
   showIf('smart-announce-group', s.smart_announce_enabled);
   showIf('transmit-group', s.tts_enabled);
+  // Populate voice dropdowns from server-provided list (engine-aware)
+  if (s.tts_voices && s.tts_voices.length) {
+    var voices = s.tts_voices;
+    var key = voices.map(function(v){return v.value;}).join(',');
+    if (window._ttsVoiceKey !== key) {
+      window._ttsVoiceKey = key;
+      ['tts-voice','ai-voice'].forEach(function(id) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        var cur = sel.value;
+        sel.innerHTML = voices.map(function(v) {
+          return '<option value="'+v.value+'"'+(v.value===cur?' selected':'')+'>'+v.label+'</option>';
+        }).join('');
+        if (!sel.value && voices.length) sel.value = voices[0].value;
+      });
+    }
+  }
 
   // Gateway Link panels — rendered into #link-section
   var linkSection = document.getElementById('link-section');

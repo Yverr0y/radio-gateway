@@ -46,7 +46,7 @@ The installer copies the example to `gateway_config.txt` if one doesn't exist. T
 | `[remote]` | Remote audio TX/RX link (full duplex) |
 | `[announce]` | Network announcement input (port 9601) |
 | `[playback]` | Playback source — file announcements, soundboard |
-| `[tts]` | Text-to-speech (Edge TTS / gTTS) |
+| `[tts]` | Text-to-speech — `TTS_ENGINE` (`kokoro`/`edge`/`gtts`), voice selection, volume, speed |
 | `[speaker]` | Local speaker output mode (virtual/auto/real) |
 | `[streaming]` | Broadcastify / Icecast feed |
 | `[echolink]` | EchoLink integration (legacy, TheLinkBox) |

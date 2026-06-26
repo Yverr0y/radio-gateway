@@ -22,7 +22,8 @@ def handle_aitext(handler, parent):
         data = json_mod.loads(body)
         prompt = data.get('text', '').strip()
         target_secs = int(data.get('target_secs', 30))
-        voice = int(data.get('voice', 1))
+        _v = data.get('voice', 1)
+        voice = _v if isinstance(_v, str) and not _v.isdigit() else int(_v or 1)
         top_text = data.get('top_text', 'QST').strip()
         tail_text = data.get('tail_text', 'Callsign').strip()
         if not prompt:

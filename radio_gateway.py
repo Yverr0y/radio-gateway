@@ -212,10 +212,11 @@ class Config:
             # Text-to-Speech and Text Commands (Phase 4)
             'ENABLE_TTS': True,
             'ENABLE_TEXT_COMMANDS': True,
-            'TTS_ENGINE': 'edge',  # gtts (Google, robotic) or edge (Microsoft Neural, natural)
+            'TTS_ENGINE': 'kokoro',  # kokoro (offline ONNX, default) | edge (Microsoft Neural) | gtts (Google)
+            'KOKORO_DEFAULT_VOICE': 'af_heart',  # Kokoro voice ID — see docs/TTS_TEXT_COMMANDS_GUIDE.md
             'TTS_VOLUME': 1.0,  # Volume multiplier for TTS audio (1.0 = normal, 2.0 = double, 3.0 = triple)
-            'TTS_SPEED': 1.3,   # Speech speed (1.0 = normal, 1.3 = 30% faster, 0.8 = slower, requires ffmpeg)
-            'TTS_DEFAULT_VOICE': 1, # Default voice (1=US, 2=British, 3=Australian, 4=Indian, 5=SA, 6=Canadian, 7=Irish, 8=French, 9=German)
+            'TTS_SPEED': 1.0,   # Speech speed (1.0 = normal, 1.3 = 30% faster, 0.8 = slower, requires ffmpeg)
+            'TTS_DEFAULT_VOICE': 1, # gTTS/Edge voice (1=US, 2=British, 3=Australian, 4=Indian, 5=SA, 6=Canadian, 7=Irish, 8=French, 9=German)
             'PTT_TTS_DELAY': 0.5,   # Silence padding before TTS (seconds) to prevent cutoff
             'PTT_ANNOUNCEMENT_DELAY': 0.5,  # Seconds after PTT key-up before announcement audio starts
             # SDR Integration
@@ -272,6 +273,16 @@ class Config:
             'USRP_AMI_PORT': 5038,
             'USRP_AMI_USER': '',              # AMI user (manager.conf on the node)
             'USRP_AMI_SECRET': '',            # AMI secret — gateway_config.txt only
+            # Second AllStar USRP instance (usrp2 plugin — CM5 node)
+            'ENABLE_USRP2': False,
+            'USRP2_REMOTE_HOST': '127.0.0.1',
+            'USRP2_REMOTE_PORT': 32002,
+            'USRP2_LISTEN_PORT': 34002,
+            'USRP2_NODE': '0',
+            'USRP2_AMI_HOST': '',             # blank = same host as USRP2_REMOTE_HOST
+            'USRP2_AMI_PORT': 5038,
+            'USRP2_AMI_USER': '',
+            'USRP2_AMI_SECRET': '',
             # Streaming Output (Phase 3A)
             'ENABLE_STREAM_OUTPUT': False,
             'STREAM_SERVER': 'localhost',

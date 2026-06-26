@@ -39,6 +39,10 @@ opuslib
 pymumble-py3>=1.0.0 ; python_version >= "3.8"
 
 # ── Text-to-speech ───────────────────────────────────────────
+# kokoro-onnx is the default engine (offline, high quality, 54 voices).
+# ONNX model files (~340 MB) are downloaded separately by install.sh into
+# tools/models/kokoro/ and are not stored in git.
+kokoro-onnx
 gtts
 edge-tts
 

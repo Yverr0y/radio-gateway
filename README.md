@@ -40,9 +40,9 @@ More screenshots in `docs/screenshots/`.
 
 **Fleet Manager** — document-driven autonomous monitoring. Plain-English tasks in `hourly.md` / `daily.md` are handed to a Claude session on a schedule; structured reports come back with Telegram escalation on `elevated` severity. Auto-discovers nodes that change DHCP IP. See [docs/fleet-manager.md](docs/fleet-manager.md).
 
-**Telemetry, AI, automation** — Smart Announcements (Claude CLI → Edge TTS → broadcast on schedule), scheduled automation tasks, live transcription, dashboard CPU breakdown (real-time critical / background nice / iowait / per-core load avg).
+**Telemetry, AI, automation** — Smart Announcements (Claude CLI → Kokoro/Edge TTS → broadcast on schedule), scheduled automation tasks, live transcription, dashboard CPU breakdown (real-time critical / background nice / iowait / per-core load avg).
 
-**Smaller features** — Google TTS + 9 voice accents, soundboard with 10 announcement slots, EchoLink via named pipes, optional embedded Mumble server (1 or 2 instances), GPS receiver, ARD repeater directory with proximity search and SDR auto-tune, ADS-B aircraft tracking, DDNS, Gmail notifications.
+**Smaller features** — Kokoro ONNX offline TTS (54 voices, 9 languages, default) + Edge TTS + gTTS; voice dropdown auto-populated per engine; soundboard with 10 announcement slots; EchoLink via named pipes; optional embedded Mumble server (1 or 2 instances); GPS receiver; ARD repeater directory with proximity search and SDR auto-tune; ADS-B aircraft tracking; DDNS; Gmail notifications.
 
 ## What's new
 

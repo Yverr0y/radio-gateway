@@ -458,6 +458,16 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
         # Status bar writer — wraps stdout so print() clears the bar first
         self._status_writer = None
     
+    def _get_tts_voices(self):
+        """Return voice list for the active TTS backend as [{value, label}]."""
+        backend = getattr(self, '_tts_backend', 'edge')
+        if backend == 'kokoro':
+            return [{'value': k, 'label': v} for k, v in self.KOKORO_VOICES.items()]
+        elif backend == 'edge':
+            return [{'value': str(k), 'label': v[1]} for k, v in self.EDGE_TTS_VOICES.items()]
+        else:
+            return [{'value': str(k), 'label': v[2]} for k, v in self.TTS_VOICES.items()]
+
     def get_status_dict(self):
         """Return current gateway status as a dict for the web UI."""
         import json
@@ -656,6 +666,8 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             'files': file_slots,
             'playback_enabled': bool(self.playback_source),
             'tts_enabled': bool(getattr(self, 'tts_engine', None)),
+            'tts_voices': self._get_tts_voices(),
+            'tts_backend': getattr(self, '_tts_backend', 'edge'),
             'smart_announce_enabled': bool(self.smart_announce),
             # Broadcastify / Icecast streaming
             'streaming_enabled': bool(getattr(self.config, 'ENABLE_STREAM_OUTPUT', False)),

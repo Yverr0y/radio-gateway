@@ -40,7 +40,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
     """
 
     # Keys whose values should be masked in the UI
-    _SENSITIVE_KEYS = {'TELEGRAM_BOT_TOKEN', 'STREAM_PASSWORD', 'EMAIL_APP_PASSWORD', 'WEB_CONFIG_PASSWORD'}
+    _SENSITIVE_KEYS = {'TELEGRAM_BOT_TOKEN', 'STREAM_PASSWORD', 'EMAIL_APP_PASSWORD', 'WEB_CONFIG_PASSWORD',
+                       'USRP_AMI_SECRET', 'USRP2_AMI_SECRET'}
 
     # Keys that store hex integers
     _HEX_KEYS = {'AIOC_VID', 'AIOC_PID'}
@@ -179,6 +180,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         # TTS
         'TTS_VOLUME': 'multiplier (1.0 = normal)',
         'TTS_SPEED': 'ratio (1.0 = normal, 1.3 = 30% faster)',
+        'KOKORO_DEFAULT_VOICE': 'voice ID for Kokoro engine (e.g. af_heart, bf_emma, am_puck)',
         # Speaker
         'SPEAKER_OUTPUT_DEVICE': 'device name (blank = system default)',
         'SPEAKER_VOLUME': 'multiplier',
@@ -221,6 +223,24 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         'SMART_ANNOUNCE_3_MODE': 'auto = on schedule, manual = web UI trigger only',
         'SMART_ANNOUNCE_3_TOP_TEXT': 'spoken before (blank = use global)',
         'SMART_ANNOUNCE_3_TAIL_TEXT': 'spoken after (blank = use global)',
+        # AllStar USRP (node 1)
+        'USRP_REMOTE_HOST': 'ASL bridge node IP',
+        'USRP_REMOTE_PORT': 'port ASL node listens on (default 32001)',
+        'USRP_LISTEN_PORT': 'port gateway listens on (default 34001)',
+        'USRP_NODE': 'local ASL node number (e.g. 683971)',
+        'USRP_AMI_HOST': 'AMI host — blank = same as USRP_REMOTE_HOST',
+        'USRP_AMI_PORT': 'Asterisk Manager Interface port (default 5038)',
+        'USRP_AMI_USER': 'AMI username (manager.conf on the node)',
+        'USRP_AMI_SECRET': 'AMI password',
+        # AllStar USRP2 (node 2)
+        'USRP2_REMOTE_HOST': 'ASL bridge node IP',
+        'USRP2_REMOTE_PORT': 'port ASL node listens on (default 32002)',
+        'USRP2_LISTEN_PORT': 'port gateway listens on (default 34002)',
+        'USRP2_NODE': 'local ASL node number (e.g. 683971)',
+        'USRP2_AMI_HOST': 'AMI host — blank = same as USRP2_REMOTE_HOST',
+        'USRP2_AMI_PORT': 'Asterisk Manager Interface port (default 5038)',
+        'USRP2_AMI_USER': 'AMI username (manager.conf on the node)',
+        'USRP2_AMI_SECRET': 'AMI password',
         # CAT
         'CAT_HOST': 'IP address',
         'CAT_PORT': 'port (1–65535)',
@@ -272,7 +292,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         'REMOTE_AUDIO_ROLE': [('disabled', 'disabled'), ('server', 'enabled — connect to remote client')],
         'SPEAKER_MODE': [('virtual', 'virtual — metering only'), ('auto', 'auto — try device, fallback virtual'), ('real', 'real — require audio device')],
         'RELAY_CHARGER_CONTROL': ['gpio', 'serial'],
-        'TTS_ENGINE': [('edge', 'edge — Microsoft Neural (natural)'), ('gtts', 'gtts — Google Translate (robotic)')],
+        'TTS_ENGINE': [('kokoro', 'kokoro — Kokoro ONNX (offline, high quality)'), ('edge', 'edge — Microsoft Neural (natural)'), ('gtts', 'gtts — Google Translate (robotic)')],
         'WEB_CONFIG_HTTPS': ['false', 'self-signed', 'letsencrypt'],
         'WEB_THEME': ['grey', 'blue', 'red', 'green', 'purple', 'amber', 'teal', 'pink'],
         'STREAM_FORMAT': ['mp3'],
@@ -485,7 +505,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         ]),
         ('tts', 'Text-to-Speech', [
             'ENABLE_TTS', 'TTS_ENGINE', 'ENABLE_TEXT_COMMANDS', 'TTS_VOLUME', 'TTS_SPEED',
-            'TTS_DEFAULT_VOICE',
+            'KOKORO_DEFAULT_VOICE', 'TTS_DEFAULT_VOICE',
         ]),
         ('cat', 'TH-9800 CAT Control', [
             'ENABLE_TH9800', 'CAT_STARTUP_COMMANDS',
@@ -493,6 +513,18 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             'CAT_LEFT_CHANNEL', 'CAT_RIGHT_CHANNEL',
             'CAT_LEFT_VOLUME', 'CAT_RIGHT_VOLUME',
             'CAT_LEFT_POWER', 'CAT_RIGHT_POWER',
+        ]),
+        ('usrp', 'AllStar Link (USRP node 1)', [
+            'ENABLE_USRP',
+            'USRP_REMOTE_HOST', 'USRP_REMOTE_PORT', 'USRP_LISTEN_PORT',
+            'USRP_NODE',
+            'USRP_AMI_HOST', 'USRP_AMI_PORT', 'USRP_AMI_USER', 'USRP_AMI_SECRET',
+        ]),
+        ('usrp2', 'AllStar Link (USRP node 2)', [
+            'ENABLE_USRP2',
+            'USRP2_REMOTE_HOST', 'USRP2_REMOTE_PORT', 'USRP2_LISTEN_PORT',
+            'USRP2_NODE',
+            'USRP2_AMI_HOST', 'USRP2_AMI_PORT', 'USRP2_AMI_USER', 'USRP2_AMI_SECRET',
         ]),
         ('d75', 'TH-D75 Control', [
             'ENABLE_D75',
@@ -818,7 +850,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                     _rg.handle_grafana_proxy(self, parent)
                 elif self.path.startswith('/prometheus/'):
                     _rg.handle_prometheus_proxy(self, parent)
-                elif self.path == '/config':
+                elif self.path.split('?', 1)[0] == '/config':
                     _rg.handle_config(self, parent)
                 elif self.path == '/routing/status':
                     _rg.handle_routing_status(self, parent)

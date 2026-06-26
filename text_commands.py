@@ -46,18 +46,43 @@ def speak_text(gw, text, voice=None):
         if gw.config.VERBOSE_LOGGING:
             print(f"\n[TTS] Generating speech: {text[:50]}...")
 
-        # Create temporary file
-        temp_file = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
-        temp_path = temp_file.name
-        temp_file.close()
+        temp_path = None
 
-        voice_num = voice or int(getattr(gw.config, 'TTS_DEFAULT_VOICE', 1))
+        if gw._tts_backend == 'kokoro':
+            # Kokoro ONNX — offline, high quality
+            voice_id = voice if isinstance(voice, str) else str(getattr(gw.config, 'KOKORO_DEFAULT_VOICE', 'af_heart'))
+            lang_map = {'a': 'en-us', 'b': 'en-gb', 'j': 'ja', 'z': 'zh', 'e': 'es', 'f': 'fr-fr', 'h': 'hi', 'i': 'it', 'p': 'pt-br'}
+            lang = lang_map.get(voice_id[0], 'en-us') if voice_id else 'en-us'
+            if gw.config.VERBOSE_LOGGING:
+                print(f"[TTS] Kokoro voice={voice_id} lang={lang}")
+            try:
+                import soundfile as sf
+                import numpy as np
+                samples, sample_rate = gw.tts_engine.create(text, voice=voice_id, speed=1.0, lang=lang)
+                tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False, prefix='tts_')
+                tmp.close()
+                temp_path = tmp.name
+                sf.write(temp_path, samples, sample_rate)
+                if gw.config.VERBOSE_LOGGING:
+                    print(f"[TTS] ✓ Kokoro WAV saved ({len(samples)/sample_rate:.1f}s)")
+            except Exception as tts_error:
+                print(f"[TTS] ✗ Kokoro generation failed: {tts_error}")
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except Exception:
+                        pass
+                return False
 
-        if gw._tts_backend == 'edge':
+        elif gw._tts_backend == 'edge':
             # Edge TTS — Microsoft Neural voices (natural sounding)
+            voice_num = voice if isinstance(voice, int) else int(getattr(gw.config, 'TTS_DEFAULT_VOICE', 1))
             edge_voice, voice_desc = gw.EDGE_TTS_VOICES.get(voice_num, gw.EDGE_TTS_VOICES[1])
             if gw.config.VERBOSE_LOGGING:
                 print(f"[TTS] Calling Edge TTS (voice {voice_num}: {voice_desc})...")
+            tmp = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False, prefix='tts_')
+            tmp.close()
+            temp_path = tmp.name
             try:
                 import asyncio
                 communicate = gw.tts_engine.Communicate(text, edge_voice)
@@ -71,11 +96,16 @@ def speak_text(gw, text, voice=None):
                 except Exception:
                     pass
                 return False
+
         else:
             # gTTS — Google Translate voices (robotic but reliable)
+            voice_num = voice if isinstance(voice, int) else int(getattr(gw.config, 'TTS_DEFAULT_VOICE', 1))
             lang, tld, voice_desc = gw.TTS_VOICES.get(voice_num, gw.TTS_VOICES[1])
             if gw.config.VERBOSE_LOGGING:
                 print(f"[TTS] Calling gTTS (voice {voice_num}: {voice_desc})...")
+            tmp = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False, prefix='tts_')
+            tmp.close()
+            temp_path = tmp.name
             try:
                 tts = gw.tts_engine(text, lang=lang, tld=tld, slow=False)
                 if gw.config.VERBOSE_LOGGING:
@@ -126,7 +156,7 @@ def speak_text(gw, text, voice=None):
                     pass
 
         # Verify file exists and has valid content
-        if not os.path.exists(temp_path):
+        if not temp_path or not os.path.exists(temp_path):
             print(f"[TTS] ✗ File not created!")
             return False
 
@@ -134,53 +164,32 @@ def speak_text(gw, text, voice=None):
         if gw.config.VERBOSE_LOGGING:
             print(f"[TTS] File size: {size} bytes")
 
-        # Validate it's actually an MP3 file, not an HTML error page
-        # MP3 files start with ID3 tag or MPEG frame sync
-        try:
-            with open(temp_path, 'rb') as f:
-                header = f.read(10)
-
-                # Check for ID3 tag (ID3v2)
-                is_mp3 = header.startswith(b'ID3')
-
-                # Check for MPEG frame sync (0xFF 0xFB or 0xFF 0xF3)
-                if not is_mp3 and len(header) >= 2:
-                    is_mp3 = (header[0] == 0xFF and (header[1] & 0xE0) == 0xE0)
-
-                # Check if it's HTML (error page)
-                is_html = header.startswith(b'<!DOCTYPE') or header.startswith(b'<html')
-
-                if is_html:
-                    print(f"[TTS] ✗ gTTS returned HTML error page, not MP3")
-                    print(f"[TTS] This usually means:")
-                    print(f"  - Rate limiting from Google")
-                    print(f"  - Network/firewall blocking")
-                    print(f"  - Invalid characters in text")
-                    # Read first 200 chars to show error
-                    f.seek(0)
-                    error_preview = f.read(200).decode('utf-8', errors='ignore')
-                    print(f"[TTS] Error preview: {error_preview[:100]}")
-                    os.unlink(temp_path)
-                    return False
-
-                if not is_mp3:
-                    print(f"[TTS] ✗ File doesn't appear to be valid MP3")
-                    print(f"[TTS] Header: {header.hex()}")
-                    os.unlink(temp_path)
-                    return False
-
-                if gw.config.VERBOSE_LOGGING:
-                    print(f"[TTS] ✓ Validated MP3 file format")
-
-        except Exception as val_err:
-            print(f"[TTS] ✗ Could not validate file: {val_err}")
+        # For MP3 backends (edge/gtts), validate it's actually an MP3 and not an HTML error page
+        if gw._tts_backend != 'kokoro':
             try:
-                os.unlink(temp_path)
-            except Exception:
-                pass
-            return False
+                with open(temp_path, 'rb') as f:
+                    header = f.read(10)
+                    is_mp3 = header.startswith(b'ID3') or (len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0)
+                    is_html = header.startswith(b'<!DOCTYPE') or header.startswith(b'<html')
+                    if is_html:
+                        print(f"[TTS] ✗ gTTS returned HTML error page, not MP3")
+                        print(f"  This usually means rate limiting, network block, or invalid characters")
+                        os.unlink(temp_path)
+                        return False
+                    if not is_mp3:
+                        print(f"[TTS] ✗ File doesn't appear to be valid MP3 (header: {header.hex()})")
+                        os.unlink(temp_path)
+                        return False
+                    if gw.config.VERBOSE_LOGGING:
+                        print(f"[TTS] ✓ Validated MP3 file format")
+            except Exception as val_err:
+                print(f"[TTS] ✗ Could not validate file: {val_err}")
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+                return False
 
-        # File is valid MP3
         if size < 1000:
             # Suspiciously small - probably an error
             print(f"[TTS] ✗ File too small ({size} bytes) - likely an error")
@@ -306,23 +315,31 @@ def on_text_message(gw, text_message):
         # Handle commands
         if command == '!speak':
             if args:
-                # Parse optional voice number: !speak 3 Hello world
                 voice = None
                 speak_txt = args
                 speak_parts = args.split(None, 1)
-                if len(speak_parts) == 2 and speak_parts[0].isdigit():
-                    v = int(speak_parts[0])
-                    if v in gw.TTS_VOICES:
-                        voice = v
+                if len(speak_parts) == 2:
+                    tok = speak_parts[0]
+                    if gw._tts_backend == 'kokoro' and tok in gw.KOKORO_VOICES:
+                        voice = tok
                         speak_txt = speak_parts[1]
+                    elif tok.isdigit():
+                        v = int(tok)
+                        if v in gw.TTS_VOICES:
+                            voice = v
+                            speak_txt = speak_parts[1]
                 if speak_text(gw, speak_txt, voice=voice):
                     v_info = f" (voice {voice})" if voice else ""
                     gw.send_text_message(f"Speaking{v_info}: {speak_txt[:50]}...")
                 else:
                     gw.send_text_message("TTS not available")
             else:
-                voices = " | ".join(f"{k}={v[2]}" for k, v in gw.TTS_VOICES.items())
-                gw.send_text_message(f"Usage: !speak [voice#] <text> — Voices: {voices}")
+                if gw._tts_backend == 'kokoro':
+                    voices = " | ".join(f"{k}={v}" for k, v in list(gw.KOKORO_VOICES.items())[:6])
+                    gw.send_text_message(f"Usage: !speak [voice_id] <text>\nVoices (first 6): {voices}")
+                else:
+                    voices = " | ".join(f"{k}={v[2]}" for k, v in gw.TTS_VOICES.items())
+                    gw.send_text_message(f"Usage: !speak [voice#] <text> — Voices: {voices}")
 
         elif command == '!play':
             if args and args in '0123456789':

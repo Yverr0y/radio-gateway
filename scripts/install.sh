@@ -423,6 +423,49 @@ else
         && echo "  ✓ pyrnnoise installed (DFN neural denoise)" \
         || echo "  ⚠ Could not pip install pyrnnoise — DFN denoise will not work"
 fi
+
+# Kokoro ONNX — offline TTS engine (default, 54 voices, no internet required).
+# Python package is lightweight; the ONNX model files (~340 MB) are fetched below.
+if python3 -c "import kokoro_onnx" 2>/dev/null; then
+    echo "  ✓ kokoro-onnx already installed"
+else
+    _pip kokoro-onnx 2>/dev/null \
+        && echo "  ✓ kokoro-onnx installed (offline TTS engine)" \
+        || echo "  ⚠ Could not pip install kokoro-onnx — TTS will fall back to edge-tts/gtts"
+fi
+
+# Kokoro ONNX model files — downloaded once into tools/models/kokoro/.
+# kokoro-v1.0.onnx (~311 MB) + voices-v1.0.bin (~27 MB). Gitignored.
+KOKORO_DIR="$GATEWAY_DIR/tools/models/kokoro"
+KOKORO_MODEL="$KOKORO_DIR/kokoro-v1.0.onnx"
+KOKORO_VOICES="$KOKORO_DIR/voices-v1.0.bin"
+if [ -f "$KOKORO_MODEL" ] && [ -f "$KOKORO_VOICES" ]; then
+    echo "  ✓ Kokoro model files already present"
+else
+    mkdir -p "$KOKORO_DIR"
+    echo "  Downloading Kokoro ONNX model files (~340 MB)..."
+    _BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+    if command -v wget &>/dev/null; then
+        wget -q --show-progress -O "$KOKORO_MODEL" "$_BASE/kokoro-v1.0.onnx" 2>&1 | tail -1 \
+            && echo "  ✓ kokoro-v1.0.onnx downloaded" \
+            || echo "  ⚠ Failed to download kokoro-v1.0.onnx"
+        wget -q --show-progress -O "$KOKORO_VOICES" "$_BASE/voices-v1.0.bin" 2>&1 | tail -1 \
+            && echo "  ✓ voices-v1.0.bin downloaded" \
+            || echo "  ⚠ Failed to download voices-v1.0.bin"
+    elif command -v curl &>/dev/null; then
+        curl -L --progress-bar -o "$KOKORO_MODEL" "$_BASE/kokoro-v1.0.onnx" \
+            && echo "  ✓ kokoro-v1.0.onnx downloaded" \
+            || echo "  ⚠ Failed to download kokoro-v1.0.onnx"
+        curl -L --progress-bar -o "$KOKORO_VOICES" "$_BASE/voices-v1.0.bin" \
+            && echo "  ✓ voices-v1.0.bin downloaded" \
+            || echo "  ⚠ Failed to download voices-v1.0.bin"
+    else
+        echo "  ⚠ No wget or curl found — cannot download Kokoro model files"
+        echo "    Download manually to $KOKORO_DIR:"
+        echo "      $_BASE/kokoro-v1.0.onnx"
+        echo "      $_BASE/voices-v1.0.bin"
+    fi
+fi
 set -e
 
 # UDEV rule for CP2102 (KV4P HT USB-serial chip) — stable /dev/kv4p symlink

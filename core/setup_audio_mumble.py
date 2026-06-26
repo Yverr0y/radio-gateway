@@ -262,3 +262,72 @@ class _SetupAudioMumbleMixin:
         9: ('en-US-EmmaNeural',      'US English (Emma)'),
     }
 
+    # Kokoro voices — voice_id → human label
+    # lang_code is the first char of the voice_id (a=US, b=GB, j=JA, z=ZH, e=ES, f=FR, h=HI, i=IT, p=PT)
+    KOKORO_VOICES = {
+        # American English
+        'af_heart':    'Heart (US F) ★★★★',
+        'af_bella':    'Bella (US F) ★★★½',
+        'af_nicole':   'Nicole (US F) ★★★',
+        'af_aoede':    'Aoede (US F) ★★½',
+        'af_kore':     'Kore (US F) ★★½',
+        'af_sarah':    'Sarah (US F) ★★½',
+        'af_nova':     'Nova (US F) ★★',
+        'af_alloy':    'Alloy (US F) ★★',
+        'af_isabella': 'Isabella (US F) ★★',
+        'af_jessica':  'Jessica (US F) ★',
+        'af_river':    'River (US F) ★',
+        'af_sky':      'Sky (US F) ★',
+        'am_michael':  'Michael (US M) ★★½',
+        'am_fenrir':   'Fenrir (US M) ★★½',
+        'am_puck':     'Puck (US M) ★★½',
+        'am_echo':     'Echo (US M) ★',
+        'am_eric':     'Eric (US M) ★',
+        'am_liam':     'Liam (US M) ★',
+        'am_onyx':     'Onyx (US M) ★',
+        'am_santa':    'Santa (US M) ★',
+        'am_adam':     'Adam (US M) ★',
+        # British English
+        'bf_emma':     'Emma (GB F) ★★★',
+        'bf_isabella': 'Isabella (GB F) ★★',
+        'bf_alice':    'Alice (GB F) ★',
+        'bf_lily':     'Lily (GB F) ★',
+        'bm_lewis':    'Lewis (GB M) ★½',
+        'bm_fable':    'Fable (GB M) ★★',
+        'bm_george':   'George (GB M) ★★',
+        'bm_daniel':   'Daniel (GB M) ★',
+        # Japanese
+        'jf_alpha':    'Alpha (JA F) ★★½',
+        'jf_gongitsune': 'Gongitsune (JA F) ★★',
+        'jf_tebukuro': 'Tebukuro (JA F) ★★',
+        'jf_nezumi':   'Nezumi (JA F) ★½',
+        'jm_kumo':     'Kumo (JA M) ★½',
+        # Mandarin
+        'zf_xiaobei':  'Xiaobei (ZH F) ★',
+        'zf_xiaoni':   'Xiaoni (ZH F) ★',
+        'zf_xiaoxiao': 'Xiaoxiao (ZH F) ★',
+        'zf_xiaoyi':   'Xiaoyi (ZH F) ★',
+        'zm_yunjian':  'Yunjian (ZH M) ★',
+        'zm_yunxi':    'Yunxi (ZH M) ★',
+        'zm_yunxia':   'Yunxia (ZH M) ★',
+        'zm_yunyang':  'Yunyang (ZH M) ★',
+        # Spanish
+        'ef_dora':     'Dora (ES F)',
+        'em_alex':     'Alex (ES M)',
+        'em_santa':    'Santa (ES M)',
+        # French
+        'ff_siwis':    'Siwis (FR F) ★★★',
+        # Hindi
+        'hf_alpha':    'Alpha (HI F) ★★',
+        'hf_beta':     'Beta (HI F) ★★',
+        'hm_omega':    'Omega (HI M) ★★',
+        'hm_psi':      'Psi (HI M) ★★',
+        # Italian
+        'if_sara':     'Sara (IT F) ★★',
+        'im_nicola':   'Nicola (IT M) ★★',
+        # Portuguese
+        'pf_dora':     'Dora (PT F)',
+        'pm_alex':     'Alex (PT M)',
+        'pm_santa':    'Santa (PT M)',
+    }
+

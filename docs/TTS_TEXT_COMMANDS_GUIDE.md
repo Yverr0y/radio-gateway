@@ -1,439 +1,260 @@
-# Text Commands & TTS - Quick Start Guide
+# Text Commands & TTS Guide
 
-## Installation
+## TTS Engines
+
+Three engines are available, selected via `TTS_ENGINE` in `gateway_config.txt`:
+
+| Engine | Quality | Requires | Voices |
+|--------|---------|----------|--------|
+| `kokoro` | High — offline neural (default) | ONNX models in `tools/models/kokoro/` (~340 MB, downloaded by install.sh) | 54 voices across 9 languages |
+| `edge` | High — Microsoft Neural (online) | Internet + `edge-tts` pip package | ~300 voices |
+| `gtts` | Moderate — Google Translate (online) | Internet + `gtts` pip package | 9 accents (numeric) |
+
+### Installing / upgrading
 
 ```bash
-pip3 install gtts --break-system-packages
+# Kokoro (default engine) — pip package only, model files handled by install.sh
+pip install kokoro-onnx
+
+# Download Kokoro model files manually if install.sh was not used:
+mkdir -p tools/models/kokoro
+BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+wget -O tools/models/kokoro/kokoro-v1.0.onnx "$BASE/kokoro-v1.0.onnx"
+wget -O tools/models/kokoro/voices-v1.0.bin  "$BASE/voices-v1.0.bin"
+
+# Edge / gTTS (online fallback engines)
+pip install edge-tts gtts
 ```
 
-## Configuration
+---
 
-Edit `gateway_config.txt`:
+## Configuration (`gateway_config.txt`)
 
 ```ini
+[tts]
 ENABLE_TTS = true
-ENABLE_TEXT_COMMANDS = true
+TTS_ENGINE = kokoro             # kokoro | edge | gtts
+
+# Kokoro: string voice ID from the list below
+KOKORO_DEFAULT_VOICE = af_heart
+
+# gTTS/Edge: numeric accent (1=US 2=British 3=Australian 4=Indian …)
+TTS_DEFAULT_VOICE = 1
+
+TTS_VOLUME = 1.0                # Volume multiplier (1.0 = normal)
+TTS_SPEED  = 1.0                # Speed multiplier (1.0 = normal; >1.0 faster; requires ffmpeg)
+PTT_TTS_DELAY = 0.5             # PTT pre-key settle time before audio starts
 ```
 
-## How It Works
+---
 
-1. **User sends text command in Mumble chat**
-2. **Gateway receives command**
-3. **Gateway processes command**:
-   - `!speak` → Generates TTS audio → Keys PTT → Broadcasts on radio
-   - `!cw` → Generates Morse code tone → Keys PTT → Broadcasts on radio
-   - `!play` → Plays file → Keys PTT → Broadcasts on radio
-   - `!status` → Sends text reply back to Mumble
-4. **Radio listeners hear the TTS or announcement**
+## Kokoro Voice List
 
-## Commands
+The voice dropdown in `/controls` and `/dashboard` is populated automatically from the active engine. For reference, all 54 Kokoro voices:
+
+### American English (prefix `a`)
+| Voice ID | Description |
+|----------|-------------|
+| `af_heart` | Heart (US F) ★★★★ — warm, natural |
+| `af_bella` | Bella (US F) ★★★½ |
+| `af_nicole` | Nicole (US F) ★★★ — whisper-y |
+| `af_aoede` | Aoede (US F) ★★★ |
+| `af_kore` | Kore (US F) ★★★ |
+| `af_sarah` | Sarah (US F) ★★★ |
+| `af_nova` | Nova (US F) ★★★ |
+| `af_sky` | Sky (US F) ★★½ |
+| `af_alloy` | Alloy (US F) ★★½ |
+| `af_jessica` | Jessica (US F) ★★½ |
+| `af_river` | River (US F) ★★½ |
+| `am_adam` | Adam (US M) ★★★★ |
+| `am_echo` | Echo (US M) ★★★ |
+| `am_eric` | Eric (US M) ★★★ |
+| `am_fenrir` | Fenrir (US M) ★★★ |
+| `am_liam` | Liam (US M) ★★★ |
+| `am_michael` | Michael (US M) ★★★ |
+| `am_onyx` | Onyx (US M) ★★★ |
+| `am_puck` | Puck (US M) ★★★ |
+| `am_santa` | Santa (US M) ★ |
+
+### British English (prefix `b`)
+| Voice ID | Description |
+|----------|-------------|
+| `bf_emma` | Emma (GB F) ★★★ |
+| `bf_isabella` | Isabella (GB F) ★★★ |
+| `bm_george` | George (GB M) ★★★ |
+| `bm_lewis` | Lewis (GB M) ★★★ |
+
+### Japanese (prefix `j`)
+| Voice ID | Description |
+|----------|-------------|
+| `jf_alpha` | Alpha (JP F) ★★★ |
+| `jf_gongitsune` | Gongitsune (JP F) ★★★ |
+| `jf_nezuko` | Nezuko (JP F) ★★★ |
+| `jf_tebukuro` | Tebukuro (JP F) ★★★ |
+| `jm_kumo` | Kumo (JP M) ★★★ |
+
+### Mandarin Chinese (prefix `z`)
+| Voice ID | Description |
+|----------|-------------|
+| `zf_xiaobei` | Xiaobei (ZH F) ★★★ |
+| `zm_yunjian` | Yunjian (ZH M) ★★★ |
+| `zm_yunxi` | Yunxi (ZH M) ★★★ |
+| `zm_yunxia` | Yunxia (ZH M) ★★★ |
+| `zm_yunyang` | Yunyang (ZH M) ★★★ |
+
+### Spanish (prefix `e`)
+| Voice ID | Description |
+|----------|-------------|
+| `ef_dora` | Dora (ES F) ★★★ |
+| `em_alex` | Alex (ES M) ★★★ |
+| `em_santa` | Santa (ES M) ★★★ |
+
+### French (prefix `f`)
+| Voice ID | Description |
+|----------|-------------|
+| `ff_siwis` | Siwis (FR F) ★★★ |
+| `fm_geraint` | Geraint (FR M) ★★★ |
+
+### Hindi (prefix `h`)
+| Voice ID | Description |
+|----------|-------------|
+| `hf_alpha` | Alpha (HI F) ★★★ |
+| `hm_omega` | Omega (HI M) ★★★ |
+
+### Italian (prefix `i`)
+| Voice ID | Description |
+|----------|-------------|
+| `if_sara` | Sara (IT F) ★★★ |
+| `im_nicola` | Nicola (IT M) ★★★ |
+
+### Portuguese / Brazilian (prefix `p`)
+| Voice ID | Description |
+|----------|-------------|
+| `pf_dora` | Dora (PT F) ★★★ |
+| `pm_alex` | Alex (PT M) ★★★ |
+| `pm_santa` | Santa (PT M) ★★★ |
+
+---
+
+## Mumble Chat Commands
 
 ### !speak \<text\>
-Generate text-to-speech and broadcast on radio
+Broadcast TTS on radio using the default voice.
 
-**Examples:**
 ```
-!speak Emergency traffic - all stations stand by
 !speak Net will start in 5 minutes
-!speak This is an automated weather update
+!speak Emergency traffic — all stations stand by
 ```
 
-**What happens:**
-1. Gateway generates MP3 using Google TTS
-2. Queues audio for playback
-3. Keys PTT and transmits on radio
-4. Sends confirmation to Mumble: "Speaking: Emergency traffic..."
+### !speak \<voice\> \<text\>
+Override voice for this message only.
+
+**Kokoro engine** — use a voice ID string:
+```
+!speak af_bella Good morning all stations
+!speak bm_george This is the weekly net
+!speak am_adam Attention all stations
+```
+
+**gTTS/Edge engine** — use a numeric accent:
+```
+!speak 2 Hello from British voice
+!speak 3 G'day from Australian voice
+```
+
+Voice IDs: `af_heart af_bella am_adam bm_george bf_emma` — see full list above.
 
 ### !cw \<text\>
-Generate Morse code (CW) and broadcast on radio
+Send Morse code (CW) on radio.
 
-**Examples:**
 ```
 !cw de w1aw
-!cw qst qst qst de w1aw
+!cw qst qst de n1tpv
 !cw 73
 ```
 
-**What happens:**
-1. Gateway generates CW tone audio at the configured frequency and WPM
-2. Queues audio for playback
-3. Keys PTT and transmits on radio
-4. Sends confirmation to Mumble: "CW: de w1aw"
+Config: `CW_WPM` (default 20 wpm), `CW_FREQUENCY` (default 600 Hz), `CW_VOLUME` (default 1.0).
 
-**Config:** `CW_WPM` (default 15), `CW_FREQUENCY` (default 700 Hz), `CW_VOLUME` (default 1.0)
-Unknown characters are silently skipped. Pre-delay uses `PTT_ANNOUNCEMENT_DELAY`.
+### !play \<0–9\>
+Play an announcement file by slot number.
 
-### !play \<0-9\>
-Play announcement file on radio by slot number
-
-**Examples:**
 ```
-!play 0     # Play station ID
-!play 1     # Play announcement 1
-!play 5     # Play announcement 5
+!play 0     # Station ID
+!play 1     # Announcement slot 1
 ```
-
-**What happens:**
-1. Gateway finds file assigned to that slot
-2. Queues audio for playback
-3. Keys PTT and transmits on radio
-4. Sends confirmation to Mumble: "Playing: 1_welcome.mp3"
 
 ### !files
-List all loaded announcement files with their slot numbers
-
-**Example:**
-```
-!files
-```
-
-**Response:**
-```
-=== Announcement Files ===
-  Station ID: station_id.mp3
-  Slot 1: 1_welcome.mp3
-  Slot 2: 2_net_open.mp3  [PLAYING]
-  Slot 5: 5_emergency.wav
-```
-
-Use this when you can't remember what file is in each slot.
+List loaded announcement files and their slot numbers.
 
 ### !stop
-Stop current playback immediately and clear the queue
+Stop playback and clear the queue.
 
-**Example:**
-```
-!stop
-```
-
-**Response:**
-```
-Playback stopped
-```
-
-Use this if the wrong file is playing or you need to abort queued audio.
-
-### !mute
-Mute TX — stops Mumble audio from reaching the radio
-
-**Example:**
-```
-!mute
-```
-
-**Response:**
-```
-TX muted (Mumble → Radio)
-```
-
-Use `!unmute` to restore. Equivalent to pressing `t` on the keyboard.
-
-### !unmute
-Restore TX after `!mute`
-
-**Example:**
-```
-!unmute
-```
-
-**Response:**
-```
-TX unmuted
-```
+### !mute / !unmute
+Mute/unmute Mumble → Radio TX without stopping the gateway.
 
 ### !id
-Play the station ID — shortcut for `!play 0`
-
-**Example:**
-```
-!id
-```
-
-**Response:**
-```
-Playing station ID: station_id.mp3
-```
-
-### !restart
-Restart the gateway process cleanly
-
-**Example:**
-```
-!restart
-```
-
-**Response:**
-```
-Gateway restarting...
-```
-
-**What happens:**
-1. Gateway sends confirmation to Mumble
-2. Cleanly shuts down all audio streams and Mumble connection
-3. Replaces itself with a fresh process (same PID — Darkice and FFmpeg are unaffected)
-4. Gateway reconnects to Mumble and resumes normal operation within a few seconds
-
-Use this if audio stops working, Mumble connection drops, or the gateway gets into a bad state.
+Shortcut for `!play 0` (station ID).
 
 ### !status
-Show current gateway status
-
-**Example:**
-```
-!status
-```
-
-**Response:**
-```
-╔════════════════════════════════════╗
-║     GATEWAY STATUS REPORT          ║
-╚════════════════════════════════════╝
-
-📊 SYSTEM:
-  CPU Load: 12.3%
-  Memory: 45.2% (732 MB / 1024 MB)
-  Uptime: 42 minutes
-
-📻 RADIO:
-  PTT: 🟢 Idle
-  TX Muted: NO
-  ...
-```
+Print current gateway status to Mumble chat.
 
 ### !help
-Show available commands
+Print the command list.
 
-**Example:**
-```
-!help
-```
-
-**Response:**
-```
-=== Gateway Commands ===
-!speak <text> - TTS broadcast on radio
-!cw <text>    - Send Morse code on radio
-!play <0-9>   - Play announcement by slot
-!files        - List loaded announcement files
-!stop         - Stop playback and clear queue
-!mute         - Mute TX (Mumble → Radio)
-!unmute       - Unmute TX
-!id           - Play station ID (slot 0)
-!restart      - Restart the gateway
-!status       - Show gateway status
-!help         - Show this help
-```
-
-## Use Cases
-
-### 1. Emergency Announcements
-Net control types:
-```
-!speak Emergency traffic - all stations clear frequency immediately
-```
-All radio users hear: "Emergency traffic - all stations clear frequency immediately"
-
-### 2. Remote Station ID
-Anyone in Mumble types:
-```
-!id
-```
-Radio transmits station ID (or `!play 0` for the same result)
-
-### 3. Net Management
-Net control assistant types:
-```
-!speak Check-ins are now open. Please state your call sign and location.
-```
-
-### 4. Weather Updates
-Weather watcher types:
-```
-!speak Severe thunderstorm warning issued for our area until 9 PM
-```
-
-### 5. Scheduled Announcements
-Someone monitoring Mumble types:
-```
-!speak The weekly net will begin in 10 minutes on this frequency
-```
-
-### 6. Status Checking
-User wants to know if gateway is working:
-```
-!status
-```
-Gets immediate text response without disturbing radio
-
-### 7. Finding What's Loaded
-Before playing an announcement, check what's in each slot:
-```
-!files
-```
-Lists all loaded files so you don't have to remember slot numbers
-
-### 8. Aborting Playback
-Wrong file queued or need to stop immediately:
-```
-!stop
-```
-Stops current audio and clears any queued files
-
-### 9. Remote Mute
-Gateway operator is away from the keyboard but needs to stop TX:
-```
-!mute
-```
-Stops Mumble audio from reaching the radio without physical access
-
-### 10. Recovering a Stuck Gateway
-Audio stops working or Mumble connection drops:
-```
-!restart
-```
-Gateway restarts cleanly — Darkice and FFmpeg keep running
+---
 
 ## Audio Flow
 
-**Text Commands:**
 ```
-Mumble User → Text Message → Gateway
-                              ↓
-                         Text Response (for !status, !help)
-```
-
-**TTS Broadcast:**
-```
-Mumble User → !speak → Gateway → Generate TTS → Queue Audio
-                                                     ↓
-                                                  PTT ON
-                                                     ↓
-                                              Radio Broadcast
-                                                     ↓
-                                              All Radio Users Hear
+Mumble User → !speak → Gateway → Kokoro ONNX synthesis → WAV (24kHz)
+                                                          ↓
+                                              Resample to 48kHz (resampy)
+                                                          ↓
+                                                  PTT pre-key delay
+                                                          ↓
+                                              Radio broadcast via bus routing
 ```
 
-**File Playback:**
-```
-Mumble User → !play → Gateway → Load File → Queue Audio
-                                                 ↓
-                                              PTT ON
-                                                 ↓
-                                          Radio Broadcast
-```
-
-## TTS Voice & Quality
-
-- **Voice**: Google TTS (natural sounding)
-- **Language**: English (US)
-- **Format**: MP3
-- **Sample Rate**: Converted to match gateway (48kHz default)
-- **Quality**: High (Google's neural TTS)
-
-## Limitations
-
-- **Internet required** for TTS generation (uses Google API)
-- **Rate limiting** by Google (usually not a problem for casual use)
-- **No authentication** - any Mumble user can use commands
-- **No queue management** - commands execute immediately
+---
 
 ## Troubleshooting
 
+**TTS keys radio but plays silence**
+- Check the routing page (`/routing`) — the playback source must be wired to an active radio bus. If the solo bus is connected to a disabled plugin (e.g. D75 off), audio won't reach the radio.
+
+**"Kokoro model files missing"**
+- Run `scripts/install.sh` to download them, or manually:
+  ```bash
+  BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+  mkdir -p tools/models/kokoro
+  wget -O tools/models/kokoro/kokoro-v1.0.onnx "$BASE/kokoro-v1.0.onnx"
+  wget -O tools/models/kokoro/voices-v1.0.bin  "$BASE/voices-v1.0.bin"
+  ```
+
+**Fallback to edge/gtts**
+- Set `TTS_ENGINE = edge` or `TTS_ENGINE = gtts` in `gateway_config.txt`.
+- Requires internet for both.
+
 **"TTS not available"**
-- Check `ENABLE_TTS = true` in config
-- Verify gtts installed: `pip3 list | grep gtts`
-- Check internet connection
+- `ENABLE_TTS = true` must be set.
+- Kokoro: check `tools/models/kokoro/` contains both model files.
+- edge/gtts: check internet connectivity and pip packages.
 
-**Commands not responding:**
-- Check `ENABLE_TEXT_COMMANDS = true` in config
-- Verify you're in the same Mumble channel as gateway
-- Check verbose logs for errors
+**Voice dropdown shows wrong voices after engine change**
+- The dropdown is populated from the live status API — it updates within ~2 seconds of the status poll cycle.
 
-**TTS sounds robotic:**
-- Google TTS should sound natural
-- If using older version of gtts, update: `pip3 install --upgrade gtts`
+**TTS sounds slow / words cut off**
+- Try reducing `TTS_SPEED` (e.g. `1.0`) or increasing `PTT_TTS_DELAY` (e.g. `0.75`).
 
-**Can't hear TTS on radio:**
-- Verify file playback works (press keys 1-9)
-- Check PTT is activating (LED on AIOC should light)
-- Verify radio audio output levels
+---
 
 ## Security Notes
 
-**Current implementation has NO authentication:**
-- Any Mumble user can trigger TTS
-- Any Mumble user can play files
-- Could be used to spam radio frequency
-
-**For public servers, consider:**
-- Whitelist authorized callsigns
-- Add rate limiting
-- Log all commands
-- Require admin role in Mumble
-
-## Advanced: Adding Authentication
-
-Edit the `on_text_message` method:
+Text commands have no authentication by default — any Mumble user can trigger TTS.  
+For public servers, add a user whitelist in `on_text_message()` in `text_commands.py`:
 
 ```python
-# Add this at the start of on_text_message
-AUTHORIZED_USERS = ['W1XYZ', 'K2ABC', 'N3DEF']
-
-if not any(call in sender_name for call in AUTHORIZED_USERS):
-    self.send_text_message("Unauthorized")
+AUTHORIZED = ['W1XYZ', 'K2ABC']
+if not any(call in sender_name for call in AUTHORIZED):
     return
 ```
-
-## Tips
-
-1. **Keep TTS messages short** - easier to understand on radio
-2. **Test volume** - TTS may be louder/quieter than normal audio
-3. **Use phonetics** - "Alpha Bravo" instead of "A B"
-4. **Avoid special characters** - stick to letters, numbers, basic punctuation
-5. **Monitor before transmitting** - make sure frequency is clear
-
-## Example Session
-
-```
-User1: !status
-Gateway: [full status report]
-
-User1: !files
-Gateway: === Announcement Files ===
-Gateway:   Station ID: station_id.mp3
-Gateway:   Slot 1: 1_welcome.mp3
-Gateway:   Slot 2: 2_net_open.mp3
-
-User1: !id
-Gateway: Playing station ID: station_id.mp3
-[PTT keys, station ID broadcasts]
-
-User2: !play 2
-Gateway: Playing: 2_net_open.mp3
-[PTT keys, announcement broadcasts]
-
-User2: !stop
-Gateway: Playback stopped
-
-User1: !speak This is the weekly check-in net. All stations please stand by.
-Gateway: Speaking: This is the weekly check-in net. All stations...
-[PTT keys, message broadcasts on radio]
-
-User1: !mute
-Gateway: TX muted (Mumble → Radio)
-
-User1: !unmute
-Gateway: TX unmuted
-
-User1: !restart
-Gateway: Gateway restarting...
-[Gateway disconnects, restarts, reconnects to Mumble within seconds]
-```
-
-## Future Enhancements
-
-Possible additions:
-- Save TTS to file slots: `!save 5 Emergency message text`
-- Scheduled TTS: `!schedule 19:00 !speak Net time`
-- Voice selection: `!voice male` or `!voice female`
-- Language selection: `!lang es !speak Hola`

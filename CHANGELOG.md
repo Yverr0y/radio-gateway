@@ -10,6 +10,8 @@ All notable changes to Radio Gateway.
 - **RX audio crackle eliminated** — the USRP RX upsampler ran `resample_poly` per 20 ms frame, leaving ~7% edge-taper glitches at every frame boundary (~50 Hz crackle). Now a continuous resampler carries filter context across frames (matches a full-stream resample within 1 count; ~8 ms added latency).
 
 ### Added
+- **Kokoro ONNX TTS engine** — offline, high-quality neural TTS is now the default engine (`TTS_ENGINE = kokoro`). 54 voices across 9 languages (US/GB English, Japanese, Mandarin, Spanish, French, Hindi, Italian, Brazilian Portuguese). No internet required. Selectable from the voice dropdown in `/controls` and `/dashboard`; the dropdown auto-populates with the voice list for whichever engine is active. Per-message voice override: `!speak af_bella Hello` (Kokoro string IDs) or `!speak 2 Hello` (gTTS/Edge numeric accents). New config keys: `KOKORO_DEFAULT_VOICE` (default `af_heart`). Model files vendored locally in `tools/models/kokoro/` (~340 MB, gitignored, downloaded by `scripts/install.sh`).
+
 - **`/usrp` recent-nodes dropdown** — the panel remembers the last 10 connected nodes (persisted to `usrp_recent.json`), so you can pick from a list instead of retyping.
 
 - **AllStar dashboard section** — `/usrp` status (node, bridge AMI, RX/TX, packets, connected nodes) in the dashboard service panel next to USB/IP and Telegram.

@@ -45,7 +45,8 @@ class SmartAnnouncementManager:
                 prompt = str(getattr(self.config, prompt_key, '') or '').strip()
                 if prompt:
                     interval = int(getattr(self.config, f'SMART_ANNOUNCE_{i}_INTERVAL', 3600))
-                    voice = int(getattr(self.config, f'SMART_ANNOUNCE_{i}_VOICE', 1))
+                    _sv = str(getattr(self.config, f'SMART_ANNOUNCE_{i}_VOICE', 1) or 1)
+                    voice = _sv if '_' in _sv else int(_sv)  # Kokoro IDs contain '_'; numeric = gTTS/Edge
                     target_secs = min(int(getattr(self.config, f'SMART_ANNOUNCE_{i}_TARGET_SECS', 15)), 60)
                     mode = str(getattr(self.config, f'SMART_ANNOUNCE_{i}_MODE', 'auto') or 'auto').strip().lower()
                     if mode not in ('auto', 'manual'):

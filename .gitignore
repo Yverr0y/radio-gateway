@@ -105,3 +105,7 @@ audio/farts/
 
 # AllStar USRP recent-nodes list (runtime state)
 usrp_recent.json
+usrp2_recent.json
+
+# Kokoro TTS ONNX models — large binaries (>300 MB), fetched by install.sh
+tools/models/kokoro/

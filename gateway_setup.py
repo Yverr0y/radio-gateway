@@ -124,15 +124,32 @@ def setup_playback(gw):
 # ── Phase 4: TTS engine ────────────────────────────────────────────────────
 
 def setup_tts(gw):
-    """Initialize text-to-speech (Edge TTS or gTTS)."""
+    """Initialize text-to-speech (Kokoro ONNX, Edge TTS, or gTTS)."""
     gw.tts_engine = None
-    gw._tts_backend = str(getattr(gw.config, 'TTS_ENGINE', 'edge')).lower().strip()
+    gw._tts_backend = str(getattr(gw.config, 'TTS_ENGINE', 'kokoro')).lower().strip()
+    gw._kokoro_instance = None  # lazy-initialised on first use
     if not gw.config.ENABLE_TTS:
         print("  Text-to-speech: DISABLED (set ENABLE_TTS = true to enable)")
         return
     try:
         print("Initializing text-to-speech...")
-        if gw._tts_backend == 'edge':
+        if gw._tts_backend == 'kokoro':
+            import os as _os
+            from kokoro_onnx import Kokoro
+            _base = _os.path.join(_os.path.dirname(__file__), 'tools', 'models', 'kokoro')
+            _model = _os.path.join(_base, 'kokoro-v1.0.onnx')
+            _voices = _os.path.join(_base, 'voices-v1.0.bin')
+            if not _os.path.exists(_model) or not _os.path.exists(_voices):
+                print(f"⚠ Kokoro model files missing in {_base}")
+                print(f"  Download with:")
+                print(f"  wget -P {_base} https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx")
+                print(f"  wget -P {_base} https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin")
+                gw.tts_engine = None
+                return
+            gw.tts_engine = Kokoro(_model, _voices)
+            gw._kokoro_instance = gw.tts_engine
+            print("✓ Text-to-speech (Kokoro ONNX / offline) initialized")
+        elif gw._tts_backend == 'edge':
             import edge_tts
             gw.tts_engine = edge_tts
             print("✓ Text-to-speech (Edge TTS / Microsoft Neural) initialized")
@@ -141,9 +158,14 @@ def setup_tts(gw):
             gw.tts_engine = gTTS
             print("✓ Text-to-speech (gTTS / Google) initialized")
         print("  Use !speak <text> in Mumble to generate TTS")
-    except ImportError:
-        pkg = 'edge-tts' if gw._tts_backend == 'edge' else 'gtts'
-        print(f"⚠ {pkg} not installed")
+    except ImportError as e:
+        if gw._tts_backend == 'kokoro':
+            pkg = 'kokoro-onnx'
+        elif gw._tts_backend == 'edge':
+            pkg = 'edge-tts'
+        else:
+            pkg = 'gtts'
+        print(f"⚠ {pkg} not installed: {e}")
         print(f"  Install with: pip3 install {pkg} --break-system-packages")
         gw.tts_engine = None
     except Exception as e:
