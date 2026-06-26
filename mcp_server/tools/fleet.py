@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL
+from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL, _auth_headers
 
 
 # ---------------------------------------------------------------------------
@@ -412,22 +412,27 @@ def stream_trace_toggle() -> str:
 @mcp.tool()
 def stream_trace_read(lines: int = 100) -> str:
     """
-    Read the most recent stream trace dump (tools/stream_trace.txt).
+    Read the most recent stream trace dump from tools/stream_trace_*.txt.
     Shows per-stream timing statistics, interval analysis, and anomalies.
 
     Args:
         lines: Number of lines to return from the trace file (default 100).
     """
-    trace_path = os.path.join(os.path.dirname(__file__), 'tools', 'stream_trace.txt')
-    if not os.path.isfile(trace_path):
+    import glob
+    # tools/ lives two levels above mcp_server/tools/ (i.e. at the gateway root)
+    gateway_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    tools_dir = os.path.join(gateway_root, 'tools')
+    matches = sorted(glob.glob(os.path.join(tools_dir, 'stream_trace_*.txt')))
+    if not matches:
         return "No stream trace file found — run stream_trace_toggle to capture one"
+    trace_path = matches[-1]  # most recent by filename timestamp
     try:
         with open(trace_path) as f:
             all_lines = f.readlines()
         if not all_lines:
-            return "Stream trace file is empty"
-        # Return first N lines (summary is at the top)
-        return ''.join(all_lines[:lines])
+            return f"Stream trace file is empty: {os.path.basename(trace_path)}"
+        header = f"[{os.path.basename(trace_path)}]\n"
+        return header + ''.join(all_lines[:lines])
     except Exception as e:
         return f"Error reading trace: {e}"
 

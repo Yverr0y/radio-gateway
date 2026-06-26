@@ -27,6 +27,7 @@ def _register_all_tools():
         cloud,
         repeaters,
         metrics,
+        usrp,
     )
 
 

@@ -229,24 +229,16 @@ def loop_recorder_export(bus_id: str, start_time: str, end_time: str, format: st
     if end_epoch <= start_epoch:
         return "Error: end time must be after start time."
 
-    result = _post('/loop/export', {
-        'bus': bus_id,
-        'start': start_epoch,
-        'end': end_epoch,
-        'format': format,
-    })
-
-    # The POST endpoint returns a file download, not JSON.
-    # Use the loop_recorder directly instead.
     import urllib.request
+    from mcp_server.server import GW_BASE_URL, _auth_headers
     try:
         req = urllib.request.Request(
-            f'http://127.0.0.1:8080/loop/export',
+            GW_BASE_URL + '/loop/export',
             data=json.dumps({
                 'bus': bus_id, 'start': start_epoch,
                 'end': end_epoch, 'format': format
             }).encode(),
-            headers={'Content-Type': 'application/json'},
+            headers={**_auth_headers(), 'Content-Type': 'application/json'},
         )
         resp = urllib.request.urlopen(req, timeout=120)
         if resp.status != 200:
@@ -354,11 +346,13 @@ def loop_recorder_download_all() -> str:
     """
     import urllib.request, os
     from datetime import datetime
+    from mcp_server.server import GW_BASE_URL, _auth_headers
     try:
         req = urllib.request.Request(
-            'http://127.0.0.1:8080/loop/download_all',
+            GW_BASE_URL + '/loop/download_all',
             method='POST',
             data=b'',
+            headers=_auth_headers(),
         )
         resp = urllib.request.urlopen(req, timeout=300)
         if resp.status != 200:

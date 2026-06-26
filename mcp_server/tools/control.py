@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL
+from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL, _auth_headers
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +592,160 @@ def gateway_restart() -> str:
         return f"Restart failed: {r.stderr.strip()}"
     except Exception as e:
         return f"Restart error: {e}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Broadcastify / Icecast streaming
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def broadcastify_status() -> str:
+    """
+    Get Broadcastify / Icecast streaming status: whether the stream encoder
+    is connected, the server/mount, restart counts, and audio level.
+    """
+    data = _get('/status')
+    if 'error' in data:
+        return f"Error: {data['error']}"
+    lines = [
+        f"streaming_enabled : {data.get('streaming_enabled', False)}",
+        f"stream_connected  : {data.get('stream_connected', False)}",
+        f"darkice_running   : {data.get('darkice_running', False)}",
+        f"darkice_pid       : {data.get('darkice_pid')}",
+        f"darkice_restarts  : {data.get('darkice_restarts', 0)}",
+        f"stream_restarts   : {data.get('stream_restarts', 0)}",
+        f"stream_health     : {data.get('stream_health', False)}",
+    ]
+    stats = data.get('darkice_stats') or {}
+    if stats:
+        lines.append(f"stats             : {json.dumps(stats)}")
+    return '\n'.join(lines)
+
+
+@mcp.tool()
+def broadcastify_control(action: str) -> str:
+    """
+    Start, stop, or restart the Broadcastify / DarkIce stream encoder.
+
+    Args:
+        action: 'start'   — start if not running
+                'stop'    — stop and disable auto-restart watchdog
+                'restart' — stop then start
+    """
+    action = action.lower().strip()
+    if action not in ('start', 'stop', 'restart'):
+        return "Error: action must be 'start', 'stop', or 'restart'"
+    result = _post('/darkicecmd', {'cmd': action})
+    if result.get('ok'):
+        return result.get('msg', f"Stream {action} OK")
+    return f"Failed: {result.get('msg', result.get('error', 'unknown'))}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Smart Announcements
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def smart_announce_status() -> str:
+    """
+    Get smart announcement status: enabled state, per-slot countdown to next
+    auto-fire, slot mode (auto/manual), and current activity step
+    (idle/generating/transmitting).
+    """
+    data = _get('/status')
+    if 'error' in data:
+        return f"Error: {data['error']}"
+    if not data.get('smart_announce_enabled'):
+        return "Smart announcements not enabled (ENABLE_SMART_ANNOUNCE = false)"
+    countdowns = data.get('smart_countdowns', [])
+    activity = data.get('smart_activity', {})
+    lines = ["Smart announcements ENABLED"]
+    for slot_id, secs, mode in countdowns:
+        act = activity.get(str(slot_id), {})
+        step = act.get('step', 'idle')
+        mins, s = divmod(int(secs), 60)
+        lines.append(f"  slot {slot_id} [{mode}]: next in {mins}m{s:02d}s — {step}")
+    if not countdowns:
+        lines.append("  No slots configured")
+    return '\n'.join(lines)
+
+
+@mcp.tool()
+def smart_announce_trigger(slot: int) -> str:
+    """
+    Manually trigger a smart announcement slot immediately, bypassing the schedule.
+
+    Args:
+        slot: Slot number — 1, 2, or 3.
+    """
+    if slot not in (1, 2, 3):
+        return "Error: slot must be 1, 2, or 3"
+    key_map = {1: '[', 2: ']', 3: '\\'}
+    result = _post('/key', {'key': key_map[slot]})
+    if result.get('ok'):
+        return f"Smart announce slot {slot} triggered"
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — Relay / GPIO control
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def relay_status() -> str:
+    """
+    Get relay state: charger relay on/off, radio power relay state,
+    and whether each relay is enabled in config.
+    """
+    data = _get('/status')
+    if 'error' in data:
+        return f"Error: {data['error']}"
+    lines = [
+        f"relay_charger_enabled : {data.get('relay_charger_enabled', False)}",
+        f"charger_state         : {data.get('charger', 'unknown')}",
+        f"relay_radio_enabled   : {data.get('relay_radio_enabled', False)}",
+        f"relay_radio_pressing  : {data.get('relay_pressing', False)}",
+    ]
+    return '\n'.join(lines)
+
+
+@mcp.tool()
+def relay_charger_toggle() -> str:
+    """
+    Toggle the charger relay on or off.  If charging, stops charging; if draining,
+    starts charging.  Use relay_status first to check the current state.
+    """
+    result = _post('/key', {'key': 'h'})
+    if not result.get('ok'):
+        return f"Failed: {result.get('error', 'unknown')}"
+    data = _get('/status')
+    charger = data.get('charger', 'unknown')
+    return f"Charger relay toggled — new state: {charger}"
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tools — ADS-B
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def adsb_status() -> str:
+    """
+    Get ADS-B aircraft tracking status: whether dump1090-fa is running,
+    aircraft visible in the last 60 seconds, message rate, and FR24 feed state.
+    """
+    data = _get('/adsbstatus')
+    if 'error' in data:
+        return f"Error: {data['error']}"
+    if not data.get('enabled'):
+        return "ADS-B not enabled (ENABLE_ADSB = false)"
+    lines = [
+        f"dump1090  : {'running' if data.get('dump1090') else 'STOPPED'}",
+        f"web       : {'up' if data.get('web') else 'down'}",
+        f"fr24feed  : {'running' if data.get('fr24feed') else 'stopped'}",
+        f"aircraft  : {data.get('aircraft', 0)} visible (last 60s)",
+        f"messages  : {data.get('messages', 0)} total, {data.get('messages_rate', 0):.1f}/s",
+    ]
+    return '\n'.join(lines)
 
 
 # ---------------------------------------------------------------------------
