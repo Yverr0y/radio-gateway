@@ -1991,7 +1991,7 @@ class AIOCPlugin(AudioPlugin):
                         line = line.strip()
                         if 'AllInOneCable' in line or 'All-In-One' in line:
                             card_num = line.split()[0]
-                            aioc_hw = f'hw:{card_num},0'
+                            aioc_hw = f'plughw:{card_num},0'
                             break
             except Exception:
                 pass
