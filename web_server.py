@@ -595,7 +595,9 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         self._mp3_buffer = []         # shared ring buffer of MP3 chunks
         self._mp3_seq = 0             # sequence number of next append
         self._encoder_proc = None     # shared FFmpeg process
-        self._encoder_stdin = None    # stdin pipe for encoder
+        self._encoder_stdin = None    # stdin pipe for encoder (O_NONBLOCK)
+        self._enc_backlog = b''       # unsent remainder of a partial stdin write
+        self._enc_lock = _thr.Lock()  # guards _enc_backlog (audio + silence threads)
         self._last_audio_push = 0     # monotonic time of last real audio
         self.sdr_manager = None       # RTLAirbandManager instance
         self.usbip_manager = None     # USBIPManager instance
@@ -1118,11 +1120,46 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
     def push_audio(self, pcm_data):
         """Push PCM audio to the shared MP3 encoder (called after VAD gate)."""
         if self._encoder_stdin:
+            self._enc_write(pcm_data)
+            self._last_audio_push = time.monotonic()
+
+    def _enc_write(self, data):
+        """Non-blocking write to the encoder stdin via the raw fd.
+
+        A wedged ffmpeg must never block the calling audio thread (this
+        runs on the SCHED_RR main loop). Partial writes park the remainder
+        in a bounded backlog that is flushed FIRST on the next call — the
+        remainder must be resumed, never dropped: s16le samples are 2
+        bytes, so an odd-length drop would byte-shift every subsequent
+        sample into static. While a large backlog stands (encoder stalled),
+        new data is dropped whole to keep memory bounded.
+        """
+        stdin = self._encoder_stdin
+        if stdin is None:
+            return
+        try:
+            fd = stdin.fileno()
+        except (ValueError, OSError):
+            return  # encoder shutting down
+        with self._enc_lock:
+            buf = self._enc_backlog
+            if buf:
+                if len(buf) < 65536:
+                    buf += data
+                # else: stalled — flush backlog only, drop new data whole
+            else:
+                buf = data
             try:
-                self._encoder_stdin.write(pcm_data)
-                self._last_audio_push = time.monotonic()
+                while buf:
+                    n = os.write(fd, buf)
+                    if n <= 0:
+                        break
+                    buf = buf[n:]
+            except BlockingIOError:
+                pass  # pipe full — keep remainder for next call
             except (BrokenPipeError, OSError, ValueError):
-                pass
+                buf = b''  # encoder died — reader/watchdog handles restart
+            self._enc_backlog = buf
 
     def push_ws_audio(self, pcm_data):
         """Push raw PCM to WebSocket clients via per-client send queues (non-blocking)."""
@@ -1150,6 +1187,14 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 '-f', 'mp3', 'pipe:1'
             ], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.DEVNULL)
             self._encoder_proc = proc
+            # Non-blocking stdin: a wedged encoder must never block the
+            # audio thread. All writes go through _enc_write (raw fd +
+            # bounded backlog).
+            import fcntl
+            _fd = proc.stdin.fileno()
+            _fl = fcntl.fcntl(_fd, fcntl.F_GETFL)
+            fcntl.fcntl(_fd, fcntl.F_SETFL, _fl | os.O_NONBLOCK)
+            self._enc_backlog = b''
             self._encoder_stdin = proc.stdin
             # Reader thread: reads MP3 from FFmpeg, pushes to ring buffer
             def _reader():
@@ -1168,16 +1213,16 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                             ev.set()
             t = _thr.Thread(target=_reader, daemon=True, name='mp3-reader')
             t.start()
-            # Feed silence when no real audio is arriving — keeps encoder producing output
+            # Feed silence when no real audio is arriving — keeps encoder
+            # producing output. Goes through _enc_write like push_audio:
+            # stdin is O_NONBLOCK now, and a raw .write() would die on the
+            # first BlockingIOError.
             def _silence_feed():
                 _silence = b'\x00' * (self.config.AUDIO_CHUNK_SIZE * 2)  # 50 ms
                 while proc.poll() is None:
                     time.sleep(0.05)
                     if time.monotonic() - self._last_audio_push > 0.2:
-                        try:
-                            proc.stdin.write(_silence)
-                        except (BrokenPipeError, OSError, ValueError):
-                            break
+                        self._enc_write(_silence)
             t2 = _thr.Thread(target=_silence_feed, daemon=True, name='mp3-silence')
             t2.start()
             print(f"  [Stream] MP3 encoder started (PID {proc.pid})")

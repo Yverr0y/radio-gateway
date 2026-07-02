@@ -42,8 +42,9 @@ class _TransmitMixin:
     def audio_transmit_loop(self):
         """Continuously capture audio from sources and send to Mumble via mixer"""
         # Elevate this thread to realtime scheduling so the 50ms tick isn't
-        # delayed when the terminal window loses desktop focus.  Only this
-        # thread needs it — it feeds both Mumble and the speaker callback.
+        # delayed when the terminal window loses desktop focus. This loop
+        # handles SDR-rebroadcast TX + queue drains; the BusManager tick
+        # thread (which does the actual mixing) elevates itself the same way.
         try:
             os.sched_setscheduler(0, os.SCHED_RR, os.sched_param(10))
             print("  Audio thread: SCHED_RR (realtime, priority 10)")
@@ -59,7 +60,9 @@ class _TransmitMixin:
         # ── GC control: disable automatic collection in this hot path ──
         import gc as _gc
         _gc.disable()
-        self._gc_events_main = []  # GC pause records for trace
+        # Bounded — the callback fires on every manual collect (~every 5s
+        # forever); a plain list grew without limit.
+        self._gc_events_main = collections.deque(maxlen=200)
         def _gc_cb(phase, info):
             if phase == 'start':
                 _gc_cb._t0 = time.monotonic()

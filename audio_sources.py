@@ -1508,6 +1508,12 @@ class RemoteAudioServer:
         self._connect_thread = None
         self._running = False
         self._reconnect_interval = float(getattr(config, 'REMOTE_AUDIO_RECONNECT_INTERVAL', 5.0))
+        # Unsent remainder of a partially-sent frame. The protocol is
+        # length-prefixed, so a frame must either finish or the connection
+        # must reset — dropping a half-sent frame desyncs the receiver's
+        # framing permanently (it reads PCM bytes as length headers).
+        # Bounded: always < one frame.
+        self._tx_backlog = b''
 
     def start(self):
         """Spawn connection thread that connects out to the client."""
@@ -1531,6 +1537,7 @@ class RemoteAudioServer:
                 sock.connect((self.host, self.port))
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.setblocking(False)  # non-blocking so send_audio never stalls audio loop
+                self._tx_backlog = b''   # stale partial frame belongs to the old connection
                 self._socket = sock
                 self.client_address = f"{self.host}:{self.port}"
                 self.connected = True
@@ -1567,34 +1574,51 @@ class RemoteAudioServer:
 
     def send_audio(self, pcm_data):
         """Send length-prefixed PCM to connected client.
-        Uses non-blocking send to avoid stalling the audio transmit loop
-        if the TCP buffer is full (e.g. slow client or network hiccup)."""
+
+        Non-blocking, framing-safe: a partially-sent frame is parked in
+        _tx_backlog and resumed on the next call before anything new goes
+        out. (The old code dropped the REST of a half-sent frame on
+        backpressure, which desynced the receiver's length-prefix framing
+        — every later frame decoded as garbage until reconnect.) When a
+        backlog is standing, NEW frames are dropped whole — the receiver
+        misses 50ms instead of losing the stream.
+        """
         sock = self._socket
         if not sock:
+            self._tx_backlog = b''
             return
         import struct
         try:
+            # Finish any partially-sent frame first.
+            if self._tx_backlog:
+                self._tx_backlog = self._send_some(sock, self._tx_backlog)
+                if self._tx_backlog:
+                    return  # still backed up — drop the new frame whole
             frame = struct.pack('>I', len(pcm_data)) + pcm_data
-            total = len(frame)
-            sent = 0
-            while sent < total:
-                try:
-                    n = sock.send(frame[sent:])
-                    if n == 0:
-                        raise ConnectionError("send returned 0")
-                    sent += n
-                except BlockingIOError:
-                    # Socket buffer full — drop the rest of this frame
-                    # rather than blocking the audio loop
-                    break
+            self._tx_backlog = self._send_some(sock, frame)
         except Exception:
             # Link broken — trigger reconnect
             self.connected = False
             self._socket = None
+            self._tx_backlog = b''
             try:
                 sock.close()
             except Exception:
                 pass
+
+    @staticmethod
+    def _send_some(sock, buf):
+        """Non-blocking send of *buf*; returns the unsent remainder (b'' if
+        fully sent). Raises on a broken connection."""
+        while buf:
+            try:
+                n = sock.send(buf)
+            except BlockingIOError:
+                break  # TCP buffer full — caller keeps the remainder
+            if n == 0:
+                raise ConnectionError("send returned 0")
+            buf = buf[n:]
+        return buf
 
     def reset(self):
         """Force-close the current connection so _connect_loop reconnects."""

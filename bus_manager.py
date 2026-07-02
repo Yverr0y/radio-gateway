@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-from audio_bus import SoloBus, DuplexRepeaterBus, SimplexRepeaterBus, ListenBus, mix_audio_streams
+from audio_bus import SoloBus, DuplexRepeaterBus, SimplexRepeaterBus, ListenBus, additive_mix
 from audio_util import AudioProcessor, pcm_level, update_level, apply_gain
 
 
@@ -73,7 +73,7 @@ class BusManager:
         self._busses = {}          # id → AudioBus instance
         self._bus_processors = {}  # id → AudioProcessor instance
         self._bus_config = {}      # id → bus config dict (processing, pcm, mp3, vad)
-        self._bus_delay_bufs = {}  # id → deque of np.int16 arrays (post-processed output delay)
+        self._bus_delay_bufs = {}  # id → deque of pcm bytes (post-processed output delay)
         self._running = False
         self._thread = None
         self._config_path = os.path.join(
@@ -172,10 +172,15 @@ class BusManager:
         return sinks
 
     def drain_pcm(self):
-        """Return and clear the accumulated PCM audio from non-listen busses."""
+        """Return and clear the accumulated PCM audio from non-listen busses.
+
+        Multiple queued chunks are SEQUENTIAL ticks' audio — they are
+        concatenated in order. (They used to go through additive_mix, which
+        summed them on top of each other: every clock-drift double-drain
+        overlaid two consecutive 50ms chunks and dropped 50ms of timeline.)
+        """
         if not self._pcm_queue:
             return None
-        from audio_bus import additive_mix
         # Drain deque atomically — popleft is thread-safe on CPython
         chunks = []
         while self._pcm_queue:
@@ -201,20 +206,23 @@ class BusManager:
             self._pcm_drain_count = 0
             self._pcm_drain_multi = 0
             self._pcm_drain_diag = time.time()
-        return additive_mix(chunks)
+        return b''.join(chunks)
 
     def drain_mp3(self):
-        """Return and clear the accumulated MP3 audio from non-listen busses."""
+        """Return and clear the accumulated MP3-path audio from non-listen busses.
+
+        Sequential chunks are concatenated (see drain_pcm) — this feeds the
+        live MP3 encoder, where overlaying consecutive chunks was audible.
+        """
         if not self._mp3_queue:
             return None
-        from audio_bus import additive_mix
         chunks = []
         while self._mp3_queue:
             try:
                 chunks.append(self._mp3_queue.popleft())
             except IndexError:
                 break
-        return additive_mix(chunks) if chunks else None
+        return b''.join(chunks) if chunks else None
 
     def drain_sdr_rebroadcast(self):
         """Return (sdr_only_audio, ptt_required) for SDR rebroadcast, or (None, False)."""
@@ -685,6 +693,15 @@ class BusManager:
         # Wake any sleeping sink drains so they observe _running=False
         for evt in self._sink_events.values():
             evt.set()
+        # Stop per-bus PTT workers (solo buses). Without this each routing
+        # reload leaks a worker thread, same as the denoise-worker leak
+        # handled in reload().
+        for _bus in self._busses.values():
+            if hasattr(_bus, 'shutdown'):
+                try:
+                    _bus.shutdown()
+                except Exception:
+                    pass
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
         for t in self._sink_threads.values():
@@ -1079,22 +1096,28 @@ class BusManager:
                 if bus_output.audio[sink_id] is not None:
                     bus_output.audio[sink_id] = _processed_audio
 
-        # Output delay buffer — delays post-processed audio before sink delivery.
-        # delay_ms is stored in bus_cfg and updated live by the routing UI slider.
+        # Output delay buffer — delays the bus output before sink delivery.
+        # delay_ms is stored in bus_cfg and updated live by the routing UI
+        # slider. Applies to the processed audio when a processor exists,
+        # otherwise to the raw bus mix (previously the delay silently did
+        # nothing on buses without processing, and crashed the tick on buses
+        # with it — bytes has no .copy(), and the fill threshold compared
+        # sample counts against byte counts).
         delay_ms = bus_cfg.get('delay_ms', 0)
-        if delay_ms > 0 and _processed_audio is not None:
-            delay_samples = int(delay_ms * 48)  # 48 000 Hz → 48 samples per ms
+        _delay_input = _processed_audio if _processed_audio is not None else bus_output.mixed_audio
+        if delay_ms > 0 and _delay_input is not None:
+            delay_bytes = int(delay_ms * 48) * 2  # 48 samples/ms @ 48kHz, 2 bytes/sample
             buf = self._bus_delay_bufs.setdefault(bus_id, collections.deque())
-            buf.append(_processed_audio.copy())
+            buf.append(_delay_input)
             buffered = sum(len(c) for c in buf)
-            if buffered > delay_samples:
+            if buffered > delay_bytes:
                 # Drain excess chunks when slider is moved left at runtime
-                while len(buf) > 1 and buffered - len(buf[0]) > delay_samples:
+                while len(buf) > 1 and buffered - len(buf[0]) > delay_bytes:
                     buffered -= len(buf.popleft())
                 _delayed = buf.popleft()
             else:
                 # Buffer still filling — send silence to sinks
-                _delayed = np.zeros(len(_processed_audio), dtype=np.int16)
+                _delayed = b'\x00' * len(_delay_input)
             _processed_audio = _delayed
             for sink_id in list(bus_output.audio):
                 if bus_output.audio[sink_id] is not None:
@@ -1369,10 +1392,31 @@ class BusManager:
         """
         chunk_size = getattr(self.config, 'AUDIO_CHUNK_SIZE', 2400)
 
+        # ── Thread priority ─────────────────────────────────────────────
+        # v2.0 moved ALL mixing, source reads and sink delivery onto this
+        # thread, but the SCHED_RR elevation stayed on audio_transmit_loop,
+        # which now only drains queues. Elevate here so the thread doing
+        # the actual audio work isn't starved by transcription / denoise /
+        # web threads under load.
+        try:
+            os.sched_setscheduler(0, os.SCHED_RR, os.sched_param(10))
+            print("  [BusManager] Tick thread: SCHED_RR (realtime, priority 10)")
+        except (PermissionError, OSError, AttributeError):
+            try:
+                os.nice(-10)
+                print("  [BusManager] Tick thread: nice -10")
+            except (PermissionError, OSError):
+                pass  # best-effort
+
         # ── GC control: disable automatic collection in this hot path ──
         gc.disable()
+        # Sweep startup garbage once, then freeze the survivors into the
+        # permanent generation so the periodic full collections below don't
+        # re-scan every long-lived startup object.
+        gc.collect()
+        gc.freeze()
         gc.callbacks.append(self._gc_callback)
-        print("  [BusManager] GC disabled in tick loop, manual gen-0 every 5s")
+        print("  [BusManager] GC disabled in tick loop; manual gen-0/5s, gen-1/60s, gen-2/10min")
 
         # ── Accumulative self-clock (matches gateway_core.audio_transmit_loop) ──
         _next_tick = time.monotonic()
@@ -1488,24 +1532,17 @@ class BusManager:
             # Multiple buses routed to pcm/mp3 are mixed (summed with soft
             # limiter) into one chunk per tick rather than interleaved.
             if self._pcm_tick:
-                if len(self._pcm_tick) == 1:
-                    _pcm_out = self._pcm_tick[0]
-                else:
-                    _pcm_out = self._pcm_tick[0]
-                    for _extra in self._pcm_tick[1:]:
-                        _pcm_out = mix_audio_streams(_pcm_out, _extra)
+                # Same-tick contributions from different buses ARE mixed
+                # (they're simultaneous) — additive_mix sums once and
+                # limits once instead of the old pairwise chaining.
+                _pcm_out = additive_mix(self._pcm_tick)
                 self._pcm_queue.append(_pcm_out)
                 _wcs = getattr(gw, 'web_config_server', None)
                 if _wcs and _wcs._ws_clients:
                     _wcs.push_ws_audio(_pcm_out)
                 self._pcm_tick.clear()
             if self._mp3_tick:
-                if len(self._mp3_tick) == 1:
-                    _mp3_out = self._mp3_tick[0]
-                else:
-                    _mp3_out = self._mp3_tick[0]
-                    for _extra in self._mp3_tick[1:]:
-                        _mp3_out = mix_audio_streams(_mp3_out, _extra)
+                _mp3_out = additive_mix(self._mp3_tick)
                 self._mp3_queue.append(_mp3_out)
                 self._mp3_tick.clear()
 
@@ -1583,6 +1620,17 @@ class BusManager:
                 _bus_timings,         # 5: {bus_id: (tick_ms, deliver_ms, level)}
             ))
 
-            # ── Manual GC: gen-0 only, every 100 ticks (5s) in sleep window ──
-            if _tick_num % 100 == 0:
+            # ── Manual GC ────────────────────────────────────────────────
+            # gc.disable() only stops AUTOMATIC collection. With just a
+            # gen-0 sweep, cyclic garbage promoted to gen-1/gen-2 was never
+            # freed for the life of the process (the only full collect in
+            # the codebase runs in transcriber.stop()) — unbounded RSS
+            # growth. Escalating cadence keeps every generation bounded;
+            # pauses land in the sleep window and are recorded by
+            # _gc_callback so the tick trace shows their cost.
+            if _tick_num % 12000 == 0:      # ~10 min: full collect
+                gc.collect(2)
+            elif _tick_num % 1200 == 0:     # ~60 s: gen-1
+                gc.collect(1)
+            elif _tick_num % 100 == 0:      # ~5 s: gen-0
                 gc.collect(0)

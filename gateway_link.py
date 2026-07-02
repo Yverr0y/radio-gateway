@@ -176,6 +176,32 @@ class _EndpointConn:
                 except (OSError, ConnectionError):
                     break
 
+    def queue_frame(self, frame_data, evict=False):
+        """Queue a frame for the sender thread. Never blocks the caller.
+
+        evict=False (audio): a full queue drops the NEW frame — losing
+        50ms of audio is fine. evict=True (control): displace the oldest
+        queued frame instead — the queue only fills when the socket is
+        already stalled, and dropping a PTT-off there means a stuck
+        transmitter.
+        """
+        import queue as _q
+        if not evict:
+            try:
+                self._send_queue.put_nowait(frame_data)
+            except Exception:
+                pass
+            return
+        for _ in range(self._send_queue.maxsize + 1):
+            try:
+                self._send_queue.put_nowait(frame_data)
+                return
+            except _q.Full:
+                try:
+                    self._send_queue.get_nowait()  # evict oldest frame
+                except _q.Empty:
+                    pass
+
     def stop_sender(self):
         """Stop the sender thread."""
         self._sender_running = False
@@ -400,8 +426,14 @@ class GatewayLinkServer:
     def _send_to(self, name, frame_type, payload):
         """Thread-safe send to a specific endpoint by name.
 
-        Audio frames are queued for async delivery (never blocks tick loop).
-        Control frames (command/status) are sent directly with the lock.
+        ALL frames go through the per-endpoint send queue so the caller
+        never blocks. Control frames used to be sent inline with a blocking
+        sendall — called from the BusManager tick thread for auto-PTT, a
+        wedged endpoint TCP connection could stall every bus for up to the
+        30s TCP_USER_TIMEOUT. When the queue is full (which means the
+        socket is already stalled), control frames evict the oldest queued
+        frame instead of being dropped: losing 50ms of audio is fine,
+        losing a PTT-off is a stuck transmitter.
         """
         with self._endpoints_lock:
             ep = self._endpoints.get(name)
@@ -409,19 +441,8 @@ class GatewayLinkServer:
             return
         header = GatewayLinkProtocol._HEADER.pack(frame_type, len(payload))
         frame_data = header + payload
-        if frame_type == GatewayLinkProtocol.AUDIO:
-            # Async: queue for sender thread
-            try:
-                ep._send_queue.put_nowait(frame_data)
-            except Exception:
-                pass  # queue full — drop frame rather than block
-        else:
-            # Control frames: send directly (small, infrequent)
-            with ep.send_lock:
-                try:
-                    ep.sock.sendall(frame_data)
-                except (OSError, ConnectionError):
-                    pass
+        ep.queue_frame(frame_data,
+                       evict=(frame_type != GatewayLinkProtocol.AUDIO))
 
     def _remove_endpoint(self, name, reason=""):
         """Remove an endpoint from the dict, close socket, notify callback."""
@@ -669,14 +690,18 @@ class GatewayLinkServer:
             dead = []
             _ping_payload = json.dumps({"cmd": "ping"}).encode('utf-8')
             for ep in snapshot:
-                # Send heartbeat + ping
-                with ep.send_lock:
-                    try:
-                        GatewayLinkProtocol.send_frame(ep.sock, GatewayLinkProtocol.STATUS, hb_payload)
-                        ep._ping_sent = time.monotonic()
-                        GatewayLinkProtocol.send_frame(ep.sock, GatewayLinkProtocol.COMMAND, _ping_payload)
-                    except (OSError, ConnectionError) as e:
-                        print(f"  [Link] Heartbeat send to {ep.name} failed: {e}")
+                # Send heartbeat + ping via the send queue — an inline
+                # sendall to one wedged endpoint used to block this loop
+                # (and dead-peer detection for every other endpoint) while
+                # holding the send_lock the audio sender also needs.
+                _hdr = GatewayLinkProtocol._HEADER
+                ep.queue_frame(
+                    _hdr.pack(GatewayLinkProtocol.STATUS, len(hb_payload)) + hb_payload,
+                    evict=True)
+                ep._ping_sent = time.monotonic()
+                ep.queue_frame(
+                    _hdr.pack(GatewayLinkProtocol.COMMAND, len(_ping_payload)) + _ping_payload,
+                    evict=True)
                 # Dead peer detection
                 if ep.last_heartbeat > 0:
                     silence = now - ep.last_heartbeat

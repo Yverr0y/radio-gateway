@@ -63,6 +63,12 @@ def _timed_get_audio(source, chunk_size):
     _dur_ms = (time.monotonic() - _t0) * 1000
     _name = getattr(source, 'name', None) or type(source).__name__
     _record_source_call(_name, _dur_ms, audio)
+    # int16 PCM must be even-length: a ragged chunk from any source would
+    # raise in np.frombuffer inside the mix and kill the whole bus tick.
+    # This is the single choke point every bus source passes through.
+    if (audio is not None and isinstance(audio, (bytes, bytearray, memoryview))
+            and len(audio) & 1):
+        audio = bytes(audio)[:-1]
     return audio, ptt
 
 
@@ -83,21 +89,12 @@ def check_signal_instant(audio_data, threshold_db=-60.0):
         return False
 
 
-def mix_audio_streams(audio1, audio2):
-    """Additive mixing of two PCM streams with soft tanh limiter.
+def _soft_limit(mixed):
+    """Soft tanh limiter: compress peaks above the knee in a float32 array.
 
-    Broadcast-style: sum both at full volume, compress peaks above knee.
-    When only one source has signal, it plays at full level.
+    Broadcast-style — signal below the knee passes untouched, peaks above
+    it approach full scale asymptotically instead of clipping.
     """
-    arr1 = np.frombuffer(audio1, dtype=np.int16).astype(np.float32)
-    arr2 = np.frombuffer(audio2, dtype=np.int16).astype(np.float32)
-
-    min_len = min(len(arr1), len(arr2))
-    arr1 = arr1[:min_len]
-    arr2 = arr2[:min_len]
-
-    mixed = arr1 + arr2
-
     _KNEE = 24000.0
     _MAX = 32767.0
     abs_mixed = np.abs(mixed)
@@ -106,26 +103,49 @@ def mix_audio_streams(audio1, audio2):
         excess = (abs_mixed[over] - _KNEE) / (_MAX - _KNEE)
         compressed = _KNEE + (_MAX - _KNEE) * np.tanh(excess)
         mixed[over] = np.sign(mixed[over]) * compressed
+    return mixed
 
-    return mixed.astype(np.int16).tobytes()
+
+def mix_audio_streams(audio1, audio2):
+    """Additive mixing of two PCM streams with soft tanh limiter.
+
+    When the streams differ in length the shorter is padded with silence —
+    truncating (the old behaviour) chopped the tail off the longer stream
+    whenever any source returned a ragged final chunk.
+    """
+    arr1 = np.frombuffer(audio1, dtype=np.int16).astype(np.float32)
+    arr2 = np.frombuffer(audio2, dtype=np.int16).astype(np.float32)
+
+    if len(arr1) != len(arr2):
+        n = max(len(arr1), len(arr2))
+        if len(arr1) < n:
+            arr1 = np.concatenate([arr1, np.zeros(n - len(arr1), dtype=np.float32)])
+        else:
+            arr2 = np.concatenate([arr2, np.zeros(n - len(arr2), dtype=np.float32)])
+
+    mixed = arr1 + arr2
+    return _soft_limit(mixed).astype(np.int16).tobytes()
 
 
 def additive_mix(streams):
-    """Mix N PCM streams via sum-and-clip (no limiter needed for same-tier sources).
+    """Mix N PCM streams: one int-domain sum, one soft-limiter pass.
 
+    The old pairwise chaining through mix_audio_streams re-compressed the
+    earlier pairs on every subsequent mix and made the result depend on
+    stream order. Summing once and limiting once treats all streams equally.
     Returns None if no streams provided.
     """
-    if not streams:
+    present = [p for p in streams if p is not None]
+    if not present:
         return None
-    result = None
-    for pcm in streams:
-        if pcm is None:
-            continue
-        if result is None:
-            result = pcm
-        else:
-            result = mix_audio_streams(result, pcm)
-    return result
+    if len(present) == 1:
+        return present[0]
+    arrs = [np.frombuffer(p, dtype=np.int16).astype(np.float32) for p in present]
+    n = max(len(a) for a in arrs)
+    mixed = np.zeros(n, dtype=np.float32)
+    for a in arrs:
+        mixed[:len(a)] += a
+    return _soft_limit(mixed).astype(np.int16).tobytes()
 
 
 def apply_fade_in(pcm, fade_samples=480):
@@ -684,6 +704,16 @@ class SoloBus(AudioBus):
         self._ptt_hold_until = 0.0
         self._ptt_release_delay = float(getattr(config, 'PTT_RELEASE_DELAY', 1.0))
         self.call_count = 0
+        # Serialised PTT worker. PTT used to fire one thread per transition
+        # with no ordering guarantee — a slow ON (data-mode auto-switch
+        # sleeps 0.5s, CAT RTS switching is 150-600ms) could complete AFTER
+        # the OFF that followed it, leaving the transmitter keyed. One
+        # worker per bus applies the latest desired state in order; PTT is
+        # level-based so intermediate transitions coalesce safely.
+        self._ptt_desired = False
+        self._ptt_worker = None
+        self._ptt_worker_running = False
+        self._ptt_evt = None
 
     def set_radio(self, radio_plugin, routing_id=None):
         """Set the primary radio plugin at the center of this bus.
@@ -722,41 +752,76 @@ class SoloBus(AudioBus):
         self._tx_sources.sort(key=lambda s: s.bus_priority)
 
     def _fire_ptt(self, state):
-        """Fire-and-forget PTT — never block the bus tick loop.
+        """Request a PTT state; applied off-tick by the serialised worker.
 
-        CAT RTS switching + HID write can take 150-600ms (measured),
-        which stalls ALL buses if done synchronously. Fans out across
-        every TX radio registered to this bus (primary + extras).
+        Never blocks the bus tick loop — CAT RTS switching + HID write can
+        take 150-600ms (measured), which would stall ALL buses if done
+        synchronously. The worker fans out across every TX radio registered
+        to this bus (primary + extras) strictly in request order, so an OFF
+        can never overtake a slow ON.
         """
         import threading
-        radios = [self._radio] + [r for r, _ in self._extra_tx_radios]
-        def _do(radio):
-            try:
-                if radio is None:
-                    return
-                # Check link endpoint mode before keying PTT
-                if state and hasattr(radio, 'endpoint_name'):
-                    _ep_name = radio.endpoint_name
-                    _gw = getattr(radio, '_gateway', None)
-                    _ep_status = _gw._link_last_status.get(_ep_name, {}) if _gw else {}
-                    _mode = _ep_status.get('mode', '')
-                    if _mode == 'data':
-                        print(f"  [SoloBus:{self.name}] WARNING: {_ep_name} is in DATA mode — auto-switching to audio for TX")
-                        radio.execute({'cmd': 'mode', 'args': 'audio'})
-                        import time; time.sleep(0.5)  # let mode switch settle
-                if hasattr(radio, 'execute'):
-                    radio.execute({'cmd': 'ptt', 'state': state})
-                elif state and hasattr(radio, 'ptt_on'):
-                    radio.ptt_on()
-                elif not state and hasattr(radio, 'ptt_off'):
-                    radio.ptt_off()
-            except Exception as e:
-                print(f"  [SoloBus:{self.name}] PTT error on {type(radio).__name__}: {e}")
-        for r in radios:
-            if r is None:
+        self._ptt_desired = bool(state)
+        if self._ptt_evt is None:
+            self._ptt_evt = threading.Event()
+        if self._ptt_worker is None or not self._ptt_worker.is_alive():
+            self._ptt_worker_running = True
+            self._ptt_worker = threading.Thread(
+                target=self._ptt_worker_loop, daemon=True,
+                name=f"PTT-{self.name}")
+            self._ptt_worker.start()
+        self._ptt_evt.set()
+
+    def shutdown(self):
+        """Stop the PTT worker. Called by BusManager on stop/reload —
+        without this every routing reload leaks a worker thread (same
+        failure mode as the denoise-worker leak fixed in reload())."""
+        self._ptt_worker_running = False
+        if self._ptt_evt is not None:
+            self._ptt_evt.set()
+
+    def _apply_ptt(self, radio, state):
+        """Apply one PTT state to one radio. Runs on the PTT worker only."""
+        try:
+            if radio is None:
+                return
+            # Check link endpoint mode before keying PTT
+            if state and hasattr(radio, 'endpoint_name'):
+                _ep_name = radio.endpoint_name
+                _gw = getattr(radio, '_gateway', None)
+                _ep_status = _gw._link_last_status.get(_ep_name, {}) if _gw else {}
+                _mode = _ep_status.get('mode', '')
+                if _mode == 'data':
+                    print(f"  [SoloBus:{self.name}] WARNING: {_ep_name} is in DATA mode — auto-switching to audio for TX")
+                    radio.execute({'cmd': 'mode', 'args': 'audio'})
+                    import time; time.sleep(0.5)  # let mode switch settle
+            if hasattr(radio, 'execute'):
+                radio.execute({'cmd': 'ptt', 'state': state})
+            elif state and hasattr(radio, 'ptt_on'):
+                radio.ptt_on()
+            elif not state and hasattr(radio, 'ptt_off'):
+                radio.ptt_off()
+        except Exception as e:
+            print(f"  [SoloBus:{self.name}] PTT error on {type(radio).__name__}: {e}")
+
+    def _ptt_worker_loop(self):
+        """Apply the latest desired PTT state whenever it changes.
+
+        Reads _ptt_desired once per wakeup: if the desire flips while a
+        slow apply is in flight, the event is already set and the next
+        iteration reconciles — no state is ever applied out of order.
+        """
+        applied = None
+        while self._ptt_worker_running:
+            self._ptt_evt.wait(timeout=1.0)
+            self._ptt_evt.clear()
+            want = self._ptt_desired
+            if want == applied:
                 continue
-            threading.Thread(target=_do, args=(r,), daemon=True,
-                             name=f"PTT-{self.name}-{type(r).__name__}").start()
+            for radio in [self._radio] + [r for r, _ in self._extra_tx_radios]:
+                if radio is not None:
+                    self._apply_ptt(radio, want)
+            applied = want
 
     def tick(self, chunk_size):
         """Process one audio cycle.

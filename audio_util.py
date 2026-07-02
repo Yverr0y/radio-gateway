@@ -901,8 +901,17 @@ class AudioProcessor:
         # Silence short-circuit. pcm_rms is cheap (a single numpy RMS).
         # -60 dBFS on int16 ≈ RMS of 32.7. Anything under that is
         # effectively "no energy" — feeding the denoiser is wasted CPU.
+        # Ordering matters: the worker pipeline is one tick delayed, so a
+        # bare "return dry" here stranded the final wet speech chunk in
+        # _dn_queue_out and replayed it, stale, at the next squelch
+        # opening. Pop any pending wet output first — the speech tail
+        # lands in order and the queue is empty when audio resumes.
         try:
             if pcm_rms(pcm_data) < 33:
+                if self._dn_lock is not None:
+                    with self._dn_lock:
+                        if self._dn_queue_out:
+                            return self._dn_queue_out.popleft()
                 return pcm_data
         except Exception:
             pass
