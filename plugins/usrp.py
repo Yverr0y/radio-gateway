@@ -690,8 +690,8 @@ class UsrpPlugin:
         if not self._recent_path:
             return
         try:
-            with open(self._recent_path, 'w') as f:
-                json.dump(self._recent, f)
+            from atomic_json import save_json
+            save_json(self._recent_path, self._recent, indent=None)
         except OSError:
             pass
 

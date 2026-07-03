@@ -810,6 +810,12 @@ def _winlink_tune_endpoint(freq_mhz: float, gw) -> dict:
     return {'ok': True, 'log': '\n'.join(log_lines)}
 
 
+# Winlink session log. Module-level init matters: /packet/winlink/log does
+# `from web_routes_radio import _winlink_log`, which raised ImportError on
+# every poll until the first connect of the process created the global.
+_winlink_log = ''
+
+
 def _winlink_connect(data, gw=None):
     """Connect to a Winlink gateway via Pat CLI + AGW.
 

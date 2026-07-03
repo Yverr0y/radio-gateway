@@ -206,8 +206,8 @@ def _load_saved_settings():
 def _save_settings(settings):
     """Persist transcriber settings."""
     try:
-        with open(_SETTINGS_FILE, 'w') as f:
-            json.dump(settings, f, indent=2)
+        from atomic_json import save_json
+        save_json(_SETTINGS_FILE, settings)
     except Exception:
         pass
 

@@ -492,7 +492,10 @@ class _RoutingCmdsMixin:
                         data['layout'] = old['layout']
                 except Exception:
                     pass
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Atomic write — a crash mid-save (or a reader hitting the file
+            # between truncate and write) would otherwise corrupt the config
+            # and BusManager would boot with zero buses.
+            from atomic_json import save_json
+            save_json(path, data)
         except Exception as e:
             print(f"  [Routing] Failed to save config: {e}")

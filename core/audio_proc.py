@@ -168,8 +168,8 @@ class _AudioProcMixin:
         import json as _json
         try:
             os.makedirs(os.path.dirname(self._link_settings_path), exist_ok=True)
-            with open(self._link_settings_path, 'w') as f:
-                _json.dump(self.link_endpoint_settings, f, indent=2)
+            from atomic_json import save_json
+            save_json(self._link_settings_path, self.link_endpoint_settings)
         except Exception as e:
             print(f"  [Link] Failed to save settings: {e}")
 

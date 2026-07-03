@@ -196,8 +196,12 @@ def migrate_legacy_kv4p_block(config_path=_CONFIG_PATH, instance='vhf'):
                     f.writelines(lines)
         except OSError:
             pass
-        with open(config_path, 'w') as f:
+        # Atomic replace — this is gateway_config.txt (stream keys,
+        # passwords); a crash mid-write must not truncate it.
+        tmp = config_path + '.tmp'
+        with open(tmp, 'w') as f:
             f.writelines(out)
+        os.replace(tmp, config_path)
     return converted
 
 

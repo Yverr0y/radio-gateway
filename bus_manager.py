@@ -839,8 +839,8 @@ class BusManager:
                   f"{len(_stripped_nodes)} node(s))")
             data['connections'] = connections
             try:
-                with open(self._config_path, 'w') as f:
-                    json.dump(data, f, indent=2)
+                from atomic_json import save_json
+                save_json(self._config_path, data)
             except Exception as _e:
                 print(f"  [BusManager] Migration save failed: {_e}")
 

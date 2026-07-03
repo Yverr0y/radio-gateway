@@ -57,8 +57,8 @@ class ManagerEngine:
 
     def _save_state(self):
         try:
-            with open(_STATE_FILE, 'w') as f:
-                json.dump(self._state, f, indent=2)
+            from atomic_json import save_json
+            save_json(_STATE_FILE, self._state)
         except Exception as e:
             print(f"  [Manager] State save error: {e}")
 

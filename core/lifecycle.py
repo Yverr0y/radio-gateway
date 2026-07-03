@@ -302,7 +302,8 @@ class _LifecycleMixin:
             current_time = time.time()
 
             # Check PTT timeout or if TX is muted
-            if self.ptt_active and not self.manual_ptt_mode and not self._rebroadcast_ptt_active and not self._webmic_ptt_active:
+            # (_webmic_ptt_active was write-never dead state — removed)
+            if self.ptt_active and not self.manual_ptt_mode and not self._rebroadcast_ptt_active:
                 # Release PTT if timeout OR if TX is muted
                 # (Don't keep PTT keyed when muted!)
                 # But don't release if in manual PTT mode or rebroadcast mode
@@ -312,6 +313,27 @@ class _LifecycleMixin:
                     self.ptt_active = False
                     self._pending_ptt_state = False
                     self._ptt_change_time = time.monotonic()
+
+            # Manual PTT safety timeout. Manual mode deliberately bypasses
+            # the auto-release above, but on a remotely-operated station a
+            # dropped session mid-manual-TX means a stuck transmitter. The
+            # bus auto-PTT path has a 180s failsafe; this is the manual
+            # equivalent. MANUAL_PTT_MAX_SECS=0 disables it.
+            _manual_max = float(getattr(self.config, 'MANUAL_PTT_MAX_SECS', 300))
+            if self.ptt_active and self.manual_ptt_mode and _manual_max > 0:
+                if not getattr(self, '_manual_ptt_keyed_at', 0):
+                    self._manual_ptt_keyed_at = current_time
+                elif current_time - self._manual_ptt_keyed_at > _manual_max:
+                    print(f"\n[PTT] Manual PTT safety timeout after {_manual_max:.0f}s — forcing unkey")
+                    self.notify(f"Manual PTT forced off after {_manual_max:.0f}s safety timeout", level='warning')
+                    self._trace_events.append((time.monotonic(), 'ptt', 'manual_safety_timeout'))
+                    self.manual_ptt_mode = False
+                    self.ptt_active = False
+                    self._pending_ptt_state = False
+                    self._ptt_change_time = time.monotonic()
+                    self._manual_ptt_keyed_at = 0
+            else:
+                self._manual_ptt_keyed_at = 0
 
             # Periodic status check and reporting (only if enabled)
             if status_check_interval > 0 and current_time - last_status_check >= status_check_interval:
@@ -406,10 +428,9 @@ class _LifecycleMixin:
                         print(f"\n[Charger] DRAINING started (schedule {on_str}-{off_str})")
                     self._trace_events.append((time.monotonic(), 'relay_charger', 'on' if should_on else 'off'))
 
-            # SDR loopback watchdog checks
-            if self.sdr_plugin and self.sdr_plugin.tuner1_enabled:
-                self.sdr_plugin.check_watchdog()
-            if self.sdr_plugin and self.sdr_plugin.tuner2_enabled:
+            # SDR loopback watchdog check (covers both tuners in one call)
+            if self.sdr_plugin and (self.sdr_plugin.tuner1_enabled
+                                    or self.sdr_plugin.tuner2_enabled):
                 self.sdr_plugin.check_watchdog()
 
             # Mumble Server health checks (every ~10 seconds)
@@ -504,7 +525,9 @@ class _LifecycleMixin:
         from gateway_core import LogWriter, __version__
         buf_lines = int(getattr(self.config, 'LOG_BUFFER_LINES', 2000))
         self._status_writer = LogWriter(
-            sys.stdout, buffer_lines=buf_lines, log_file=log_file
+            sys.stdout, buffer_lines=buf_lines, log_file=log_file,
+            log_dir=getattr(self, '_log_dir', None),
+            keep_days=int(getattr(self.config, 'LOG_FILE_DAYS', 7)),
         )
         sys.stdout = self._status_writer
         self._orig_stderr = sys.stderr
@@ -764,9 +787,7 @@ class _LifecycleMixin:
                 self.sdr_plugin.cleanup()
                 if self.config.VERBOSE_LOGGING:
                     print("  SDR audio closed")
-            except Exception as e:
-                pass
-            except Exception as e:
+            except Exception:
                 pass  # Suppress ALSA errors during shutdown
 
         if self.remote_audio_source:

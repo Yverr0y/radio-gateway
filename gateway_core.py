@@ -120,7 +120,8 @@ class LogWriter:
     all status display is via the web UI.
     """
 
-    def __init__(self, original, buffer_lines=2000, log_file=None, **_kwargs):
+    def __init__(self, original, buffer_lines=2000, log_file=None,
+                 log_dir=None, keep_days=7, **_kwargs):
         self._orig = original
         self._lock = threading.Lock()
         self._at_line_start = True
@@ -128,6 +129,15 @@ class LogWriter:
         self._log_buffer = collections.deque(maxlen=buffer_lines)
         self._log_seq = 0
         self._log_file = log_file
+        # Mid-run daily rotation state. The old behaviour opened
+        # gateway-<startday>.log once and wrote to it for the entire
+        # (multi-week) run — rotation and retention only happened on
+        # restart. When log_dir is set, _append_log rolls to a new
+        # dated file at midnight and prunes files beyond keep_days.
+        self._log_dir = log_dir
+        self._log_keep_days = int(keep_days)
+        import datetime as _dt
+        self._log_date = _dt.date.today()
         for attr in ('encoding', 'errors', 'mode', 'name', 'newlines',
                      'fileno', 'isatty', 'readable', 'seekable', 'writable'):
             if hasattr(original, attr):
@@ -146,11 +156,47 @@ class LogWriter:
         self._log_seq += 1
         self._log_buffer.append((self._log_seq, timestamped_line))
         if self._log_file:
+            self._maybe_roll_log()
             try:
                 self._log_file.write(timestamped_line + '\n')
                 self._log_file.flush()
             except Exception:
                 pass
+
+    def _maybe_roll_log(self):
+        """Roll to a new dated log file when the calendar day changes."""
+        if not self._log_dir:
+            return
+        import datetime as _dt
+        today = _dt.date.today()
+        if today == self._log_date:
+            return
+        self._log_date = today
+        try:
+            new_path = os.path.join(self._log_dir,
+                                    f"gateway-{today.strftime('%Y-%m-%d')}.log")
+            new_file = open(new_path, 'a', encoding='utf-8')
+        except Exception:
+            return  # keep writing to the old file rather than lose logs
+        old_file = self._log_file
+        self._log_file = new_file
+        try:
+            old_file.close()
+        except Exception:
+            pass
+        # Retention: prune dated logs beyond keep_days
+        try:
+            import glob as _glob
+            for old_log in sorted(_glob.glob(os.path.join(self._log_dir, 'gateway-*.log'))):
+                try:
+                    date_str = os.path.basename(old_log)[len('gateway-'):-len('.log')]
+                    log_date = _dt.datetime.strptime(date_str, '%Y-%m-%d').date()
+                    if (today - log_date).days > self._log_keep_days:
+                        os.remove(old_log)
+                except (ValueError, OSError):
+                    pass
+        except Exception:
+            pass
 
     def get_log_lines(self, after_seq=0, limit=200):
         """Return log lines with seq > after_seq. For web polling."""
@@ -341,7 +387,6 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
         self.sdr_rebroadcast = False              # Toggle state (press 'b')
         self._rebroadcast_ptt_hold_until = 0      # monotonic deadline for PTT hold
         self._rebroadcast_ptt_active = False       # whether rebroadcast currently has PTT keyed
-        self._webmic_ptt_active = False             # whether browser mic has PTT keyed via CAT
         self._rebroadcast_sending = False           # SDR audio actively being sent (for status bar)
 
         # Relay control — radio power button (momentary pulse with 'j' key)

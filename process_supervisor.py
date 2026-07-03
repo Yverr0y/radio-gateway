@@ -48,8 +48,17 @@ class _Entry:
     last_exit: Optional[int] = None
     restart_count: int = 0
     thread: Optional[threading.Thread] = None
-    stop_event: field(default_factory=threading.Event) = None
-    lock: field(default_factory=threading.Lock) = None
+    # (previously annotated as `field(default_factory=...)` used as a TYPE,
+    # which does nothing — the attributes were None unless add() set them)
+    stop_event: Optional[threading.Event] = None
+    lock: Optional[threading.Lock] = None
+    # Generation counter: bumped by stop()/restart() to invalidate the
+    # running supervisor loop. Closes two races: (a) stop() during the
+    # spawn window left the fresh child running while state said
+    # 'stopped'; (b) restart() cleared stop_event under a still-alive old
+    # loop, which then kept supervising alongside the new one.
+    gen: int = 0
+    loop_gen: int = -1
 
 
 class ProcessSupervisor:
@@ -105,16 +114,24 @@ class ProcessSupervisor:
     def start(self, name):
         e = self._get(name)
         with e.lock:
-            if e.thread and e.thread.is_alive():
+            # A live loop of the CURRENT generation is already supervising.
+            # (An older-generation loop may still be draining — it exits on
+            # its own via the gen check and must not block a fresh start.)
+            if e.thread and e.thread.is_alive() and e.loop_gen == e.gen:
                 return
-            e.stop_event.clear()
+            # Fresh event per loop generation: the old loop keeps its own
+            # (already-set) event; clearing a shared one would revive it.
+            e.stop_event = threading.Event()
+            e.loop_gen = e.gen
             e.thread = threading.Thread(
-                target=self._supervisor_loop, args=(e,),
+                target=self._supervisor_loop, args=(e, e.gen, e.stop_event),
                 daemon=True, name=f'sup-{name}')
             e.thread.start()
 
     def stop(self, name, timeout=5.0):
         e = self._get(name)
+        with e.lock:
+            e.gen += 1  # invalidate the running loop
         e.stop_event.set()
         with e.lock:
             proc = e.proc
@@ -184,10 +201,19 @@ class ProcessSupervisor:
             raise KeyError(f"ProcessSupervisor: unknown process '{name}'")
         return e
 
-    def _supervisor_loop(self, e: _Entry):
+    def _supervisor_loop(self, e: _Entry, my_gen: int, stop_evt: threading.Event):
+        """One supervision loop, valid for a single generation.
+
+        *my_gen* / *stop_evt* are captured at spawn — stop()/restart()
+        bump e.gen and set the CURRENT event, so an old loop always sees
+        its own stop signal even after start() installs a fresh event.
+        """
+        def _stale():
+            return stop_evt.is_set() or e.gen != my_gen
+
         bmin, bmax = e.backoff
         delay = bmin
-        while not e.stop_event.is_set():
+        while not _stale():
             # Adoption check first
             adopted_pid = None
             if e.adopt_existing:
@@ -202,34 +228,34 @@ class ProcessSupervisor:
                     e.started_at = time.time()
                 print(f"  [Sup:{e.name}] adopted existing PID {adopted_pid}", flush=True)
                 # Poll until the adopted process disappears or we're asked to stop
-                while not e.stop_event.is_set():
+                while not _stale():
                     if not _pid_alive(adopted_pid):
                         break
                     time.sleep(2.0)
                 with e.lock:
                     e.adopted_pid = None
-                if e.stop_event.is_set():
+                if _stale():
                     break
                 # Adopted process died; fall through to spawn fresh
             try:
-                self._spawn_and_wait(e)
+                self._spawn_and_wait(e, my_gen, stop_evt)
             except Exception as ex:
                 print(f"  [Sup:{e.name}] spawn error: {ex}", flush=True)
                 with e.lock:
                     e.state = 'failed'
-            if not e.restart or e.stop_event.is_set():
+            if not e.restart or _stale():
                 break
             # Backoff before respawn
             with e.lock:
                 e.restart_count += 1
-            if e.stop_event.wait(delay):
+            if stop_evt.wait(delay):
                 break
             delay = min(bmax, delay * 2)
             # Reset backoff if the previous run was long-lived
             if (time.time() - e.started_at) > 60:
                 delay = bmin
 
-    def _spawn_and_wait(self, e: _Entry):
+    def _spawn_and_wait(self, e: _Entry, my_gen: int, stop_evt: threading.Event):
         log_f = _open_log(e.log_file)
         try:
             stdout = subprocess.PIPE if e.stdout_handler else log_f
@@ -260,6 +286,14 @@ class ProcessSupervisor:
             e.proc = proc
             e.state = 'running'
             e.started_at = time.time()
+        # Close the stop-during-spawn window: stop() looked at e.proc
+        # before we registered this child, so it couldn't terminate it.
+        # If a stop/restart landed while we were spawning, reap it now.
+        if stop_evt.is_set() or e.gen != my_gen:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
         print(f"  [Sup:{e.name}] spawned PID {proc.pid}: {' '.join(e.argv)}", flush=True)
 
         # If stdout_handler is set, drain stdout line-by-line and also tee to log

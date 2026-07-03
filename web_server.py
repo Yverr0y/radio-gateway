@@ -701,7 +701,10 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 try:
                     decoded = base64.b64decode(auth[6:]).decode('utf-8')
                     user, pw = decoded.split(':', 1)
-                    if user == 'admin' and pw == password:
+                    # compare_digest: constant-time, no timing side-channel
+                    import hmac
+                    if (hmac.compare_digest(user, 'admin')
+                            and hmac.compare_digest(pw, password)):
                         return True
                 except Exception:
                     pass

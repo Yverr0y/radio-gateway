@@ -49,7 +49,20 @@ class _StreamMixin:
         restart_darkice(self)
 
     def _send_stream_alert(self, message):
-        """Send Broadcastify stream alert via email and Telegram."""
+        """Send Broadcastify stream alert via email and Telegram.
+
+        Fire-and-forget: the caller is status_monitor_loop — the thread
+        that enforces the legacy PTT release timeout and runs the
+        watchdogs. Synchronous SMTP (15s timeout across several socket
+        ops) + Telegram (10s) here used to block PTT unkey for up to a
+        minute, exactly during network/DNS outages when streams drop.
+        """
+        threading.Thread(
+            target=self._send_stream_alert_blocking, args=(message,),
+            daemon=True, name='StreamAlert',
+        ).start()
+
+    def _send_stream_alert_blocking(self, message):
         import datetime
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         # Email alert

@@ -1895,11 +1895,15 @@ class AudioPlugin(RadioPlugin):
             d = os.path.dirname(self._settings_file)
             if d:
                 os.makedirs(d, exist_ok=True)
-            with open(self._settings_file, 'w') as f:
+            # Atomic write, inlined (this file ships to endpoints via
+            # _ENDPOINT_FILES which does not include atomic_json.py).
+            _tmp = self._settings_file + '.tmp'
+            with open(_tmp, 'w') as f:
                 json.dump({"rx_gain_db": self._rx_gain_db,
                            "tx_gain_db": self._tx_gain_db,
                            "gate_threshold_db": self._gate_threshold_db,
                            "gate_enabled": self._gate_enabled}, f)
+            os.replace(_tmp, self._settings_file)
         except Exception as e:
             print(f"  [Link] AudioPlugin: failed to save settings: {e}")
 

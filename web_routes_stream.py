@@ -7,6 +7,27 @@ import threading as _thr
 import queue as _q_mod
 
 
+def _enable_ws_keepalive(sock):
+    """TCP keepalive + user-timeout so silently-dead WS clients get reaped.
+
+    Browsers don't ping and a client that vanishes without FIN/RST (WiFi
+    drop, phone sleep) never errors recv() — the reader loop's
+    `timeout → continue` then spins forever, leaking the handler thread,
+    the socket and (for /ws_audio) the sender thread + _ws_clients entry.
+    With keepalive, the kernel kills the connection after ~60s of dead
+    peer and recv()/sendall() raise OSError, unwinding the handler.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        _TCP_USER_TIMEOUT = 18  # Linux socket option number
+        sock.setsockopt(socket.IPPROTO_TCP, _TCP_USER_TIMEOUT, 60000)
+    except (AttributeError, OSError):
+        pass  # not supported — behaviour falls back to the old one
+
+
 def handle_ws_audio(handler, parent):
     """GET /ws_audio -- Low-latency PCM WebSocket.
 
@@ -44,10 +65,12 @@ def handle_ws_audio(handler, parent):
     _sock = handler.request  # raw TCP socket for binary frames
     _client_ip = handler.client_address[0]
     print(f"\n[WS-Audio] Low-latency client connected from {_client_ip}")
-    _sock.settimeout(30)  # 30s recv timeout for keepalive
+    _sock.settimeout(30)  # 30s recv timeout
     _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    _enable_ws_keepalive(_sock)
     _send_q = _q_mod.Queue(maxsize=6)  # ~300ms buffer at 50ms chunks
     _ws_entry = (_sock, _send_q)
+    _ws_closed = _thr.Event()  # reader sets on exit; sender polls it
 
     def _ws_sender(_s, _q):
         """Dedicated send thread -- drains queue, never blocks audio loop."""
@@ -58,6 +81,8 @@ def handle_ws_audio(handler, parent):
                     break
                 _s.sendall(frame)
             except (_q_mod.Empty):
+                if _ws_closed.is_set():
+                    break  # reader gone and nothing queued — exit
                 continue
             except (BrokenPipeError, ConnectionResetError, OSError):
                 break
@@ -109,7 +134,16 @@ def handle_ws_audio(handler, parent):
             except (ConnectionResetError, BrokenPipeError, OSError):
                 break
     finally:
-        _send_q.put(None)  # signal sender thread to exit
+        # Signal sender thread to exit. put_nowait, never put: if the
+        # sender already died with the queue full, a blocking put() would
+        # hang this handler thread forever. _ws_closed covers the case
+        # where the sentinel doesn't fit — the sender exits on its next
+        # 5s idle wakeup.
+        _ws_closed.set()
+        try:
+            _send_q.put_nowait(None)
+        except _q_mod.Full:
+            pass
         with parent._ws_lock:
             try:
                 parent._ws_clients.remove(_ws_entry)
@@ -166,6 +200,7 @@ def handle_ws_mic(handler, parent):
     _client_ip = handler.client_address[0]
     _sock.settimeout(30)
     _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    _enable_ws_keepalive(_sock)
     _mic_src.client_connected = True
     print(f"\n[WS-Mic] Browser mic connected from {_client_ip}")
     # PTT is handled by the bus system -- WebMicSource has ptt_control=True,
@@ -263,6 +298,7 @@ def handle_ws_monitor(handler, parent):
     _client_ip = handler.client_address[0]
     _sock.settimeout(30)
     _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    _enable_ws_keepalive(_sock)
     _mon_src.client_connected = True
     print(f"\n[WS-Monitor] Room monitor connected from {_client_ip}")
     try:
