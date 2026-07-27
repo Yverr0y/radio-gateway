@@ -99,6 +99,14 @@ class TH9800Plugin:
         self._ptt_method = 'aioc'
         self._ptt_channel = 3
         self._ptt_change_time = 0.0
+        # Serialises the whole check-then-act + multi-step key sequence.
+        # _set_ptt has four concurrent entry points (SoloBus PTT worker,
+        # main-loop SDR rebroadcast, manual/web/MCP PTT, repeater bus ticks)
+        # and the AIOC path is RTS-switch → HID-write → RTS-restore. Without
+        # this, an interleaved key/unkey could leave RTS in Radio-Controlled
+        # with the CAT drain paused (CAT dead until the next cycle) or apply
+        # the OFF before a slow ON completed — a stuck transmitter.
+        self._ptt_lock = threading.RLock()
 
         # Audio processing
         self._processor = None
@@ -674,45 +682,96 @@ class TH9800Plugin:
     # -- Internal: PTT --
 
     def _set_ptt(self, state_on):
-        """Key/unkey using configured PTT method."""
-        if state_on == self._ptt_active:
-            return
-        if self._ptt_method == 'relay':
-            self._ptt_via_relay(state_on)
-        elif self._ptt_method == 'software':
-            self._ptt_via_software(state_on)
-        else:
-            self._ptt_via_aioc(state_on)
-        self._ptt_active = state_on
-        self._ptt_change_time = time.monotonic()
+        """Key/unkey using configured PTT method.
+
+        Serialised on _ptt_lock: the check-then-act on _ptt_active plus the
+        multi-step AIOC sequence must not interleave between the several
+        threads that key this radio (see _ptt_lock in __init__). Callers are
+        all off-tick or already tolerant of the 150-600ms this can take.
+        """
+        with self._ptt_lock:
+            if state_on == self._ptt_active:
+                return
+            if self._ptt_method == 'relay':
+                self._ptt_via_relay(state_on)
+            elif self._ptt_method == 'software':
+                self._ptt_via_software(state_on)
+            else:
+                self._ptt_via_aioc(state_on)
+            self._ptt_active = state_on
+            self._ptt_change_time = time.monotonic()
 
     def _ptt_via_aioc(self, state_on):
-        """PTT via AIOC HID GPIO with RTS relay switching."""
+        """PTT via AIOC HID GPIO with RTS relay switching.
+
+        RTS drives a relay that connects the radio's TX serial line to either
+        the USB dongle (USB Controlled — CAT works) or the radio front panel
+        (Radio Controlled — required for AIOC PTT to key at all). Key-on
+        switches to Radio Controlled and pauses the CAT drain; unkey restores
+        both.
+
+        Every exit path restores RTS + resumes the drain. The old code only
+        restored on a successful unkey write: a HID write that raised on
+        key-on left the relay in Radio Controlled with CAT effectively dead
+        until the next key cycle, while not transmitting at all.
+        """
         if not self._aioc_device:
             return
-        try:
-            if state_on and self._cat_client:
+        iomask = 1 << (self._ptt_channel - 1)
+        iodata = (1 if state_on else 0) << (self._ptt_channel - 1)
+        data = bytes(struct.pack("<BBBBB", 0, 0, iodata, iomask, 0))
+
+        if state_on:
+            if self._cat_client:
                 self._cat_client._pause_drain()
                 try:
                     self._cat_client.set_rts(False)  # Radio Controlled
-                except Exception:
-                    pass
-            state = 1 if state_on else 0
-            iomask = 1 << (self._ptt_channel - 1)
-            iodata = state << (self._ptt_channel - 1)
-            data = struct.pack("<BBBBB", 0, 0, iodata, iomask, 0)
-            self._aioc_device.write(bytes(data))
-            if not state_on and self._cat_client:
-                try:
-                    self._cat_client.set_rts(True)  # USB Controlled
-                except Exception:
-                    pass
-                finally:
-                    self._cat_client._drain_paused = False
+                except Exception as e:
+                    print(f"  [TH-9800] RTS switch failed: {e}")
+            try:
+                self._aioc_device.write(data)
+            except Exception as e:
+                # Key failed, so we are NOT transmitting — hand the serial
+                # line back to USB rather than stranding CAT.
+                print(f"  [TH-9800] PTT AIOC key failed: {e}")
+                self._restore_cat_rts()
+            return
+
+        # Unkey: write first, then restore RTS/CAT whatever happens.
+        try:
+            try:
+                self._aioc_device.write(data)
+            except Exception as e:
+                # A failed unkey can leave the transmitter keyed — the one
+                # PTT direction where giving up is a stuck-carrier hazard.
+                print(f"  [TH-9800] PTT AIOC unkey failed: {e} — retrying")
+                for _ in range(3):
+                    time.sleep(0.05)
+                    try:
+                        self._aioc_device.write(data)
+                        print("  [TH-9800] PTT AIOC unkey succeeded on retry")
+                        break
+                    except Exception:
+                        continue
+                else:
+                    print("  [TH-9800] PTT AIOC unkey FAILED after 3 retries "
+                          "— TRANSMITTER MAY STILL BE KEYED")
+        finally:
+            self._restore_cat_rts()
+
+    def _restore_cat_rts(self):
+        """Hand the serial relay back to USB Controlled and resume CAT drain.
+
+        Safe to call when CAT is absent or already restored.
+        """
+        if not self._cat_client:
+            return
+        try:
+            self._cat_client.set_rts(True)  # USB Controlled
         except Exception as e:
-            print(f"  [TH-9800] PTT AIOC error: {e}")
-            if self._cat_client and self._cat_client._drain_paused:
-                self._cat_client._drain_paused = False
+            print(f"  [TH-9800] RTS restore failed: {e}")
+        finally:
+            self._cat_client._drain_paused = False
 
     def _ptt_via_relay(self, state_on):
         """PTT via CH340 USB relay."""

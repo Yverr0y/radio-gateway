@@ -8,6 +8,8 @@ See docs/mixer-v2-design.md for architecture.
 See docs/mixer-v2-progress.md for status.
 """
 
+import collections
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -163,6 +165,159 @@ def apply_fade_out(pcm):
     if len(arr) > 0:
         arr *= np.linspace(1.0, 0.0, len(arr))
     return arr.astype(np.int16).tobytes()
+
+
+# ---------------------------------------------------------------------------
+# Off-tick PTT
+# ---------------------------------------------------------------------------
+#
+# Keying a radio blocks: CAT RTS switching plus the HID write measures
+# 150-600 ms, and the link-endpoint data-mode path sleeps another 0.5 s on
+# top. Done inline on the bus tick that stalls EVERY bus, not just the one
+# keying. Worse, firing one thread per transition (the pre-2026-07 SoloBus
+# behaviour) gave no ordering guarantee: a slow ON could land after the OFF
+# that followed it and leave the transmitter keyed.
+#
+# _PttWorker fixes both: one thread per radio (or radio group) applying the
+# latest requested state in order. PTT is level-based, so intermediate
+# transitions coalesce safely.
+
+def _apply_ptt_to_radio(radio, state, label='bus'):
+    """Apply one PTT state to one radio. Called only from a _PttWorker."""
+    try:
+        if radio is None:
+            return
+        # Link endpoints in data mode have handed their sound card to
+        # direwolf — switch back to audio before keying or TX is silent.
+        if state and hasattr(radio, 'endpoint_name'):
+            _ep_name = radio.endpoint_name
+            _gw = getattr(radio, '_gateway', None)
+            _ep_status = _gw._link_last_status.get(_ep_name, {}) if _gw else {}
+            if _ep_status.get('mode', '') == 'data':
+                print(f"  [PTT:{label}] WARNING: {_ep_name} is in DATA mode "
+                      f"— auto-switching to audio for TX")
+                radio.execute({'cmd': 'mode', 'args': 'audio'})
+                time.sleep(0.5)  # let mode switch settle
+        if hasattr(radio, 'execute'):
+            radio.execute({'cmd': 'ptt', 'state': state})
+        elif state and hasattr(radio, 'ptt_on'):
+            radio.ptt_on()
+        elif not state and hasattr(radio, 'ptt_off'):
+            radio.ptt_off()
+    except Exception as e:
+        print(f"  [PTT:{label}] error on {type(radio).__name__}: {e}")
+
+
+class _PttWorker:
+    """Serialised off-tick PTT applier for one radio (or one fan-out group).
+
+    request() never blocks the caller. `applied` reports the state actually
+    pushed to hardware, which lags the request by however long the radio
+    takes to key — callers gate TX audio on it so nothing is transmitted
+    into an unkeyed radio.
+    """
+
+    def __init__(self, label, radios_fn=None, apply_fn=None):
+        self.label = label
+        # Either fan out to radio objects, or call a single apply function
+        # (the gateway's set_ptt_state, which does its own dispatch).
+        self._radios_fn = radios_fn   # callable -> iterable of radio objects
+        self._apply_fn = apply_fn     # callable(state) -> None
+        self._desired = False
+        self._applied = None          # None = nothing applied yet
+        self._thread = None
+        self._running = False
+        self._evt = threading.Event()
+
+    @property
+    def applied(self):
+        """True/False once a state has reached the hardware, else None."""
+        return self._applied
+
+    def request(self, state):
+        """Ask for a PTT state; applied off-tick, latest request wins."""
+        self._desired = bool(state)
+        if self._thread is None or not self._thread.is_alive():
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._loop, daemon=True, name=f"PTT-{self.label}")
+            self._thread.start()
+        self._evt.set()
+
+    def shutdown(self, unkey=True, timeout=2.0):
+        """Stop the worker, unkeying first so a teardown mid-transmission
+        doesn't strand the radio keyed (routing reloads call this)."""
+        if unkey and self._applied:
+            self._desired = False
+            self._evt.set()
+            _deadline = time.monotonic() + timeout
+            while time.monotonic() < _deadline and self._applied is not False:
+                time.sleep(0.02)
+        self._running = False
+        self._evt.set()
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=0.5)
+
+    def _loop(self):
+        while self._running:
+            self._evt.wait(timeout=1.0)
+            self._evt.clear()
+            # Read _desired once per wakeup: if it flips while a slow apply
+            # is in flight the event is already set, so the next iteration
+            # reconciles. No state is ever applied out of order.
+            want = self._desired
+            if want == self._applied:
+                continue
+            if self._apply_fn is not None:
+                try:
+                    self._apply_fn(want)
+                except Exception as e:
+                    print(f"  [PTT:{self.label}] apply error: {e}")
+            else:
+                for radio in self._radios_fn():
+                    _apply_ptt_to_radio(radio, want, self.label)
+            self._applied = want
+
+
+class _PreKeyBuffer:
+    """Parks TX audio produced while a PTT key is still being applied.
+
+    With PTT off-tick, audio pushed during the 150-600 ms key-up window
+    reaches a radio that isn't transmitting yet and is simply lost — the
+    first syllable of every transmission. Chunks wait here and flush in
+    order once the key lands.
+
+    Bounded: oldest chunks drop past *max_ms* so a slow or failed key can't
+    build unbounded latency. Steady state (key already applied) is a no-op.
+    """
+
+    def __init__(self, max_ms=500, rate=48000):
+        self._buf = collections.deque()
+        self._bytes = 0
+        self._max_bytes = int(max_ms * rate * 2 / 1000)  # 16-bit mono
+
+    def hold(self, pcm):
+        """Stash a chunk, dropping the oldest if over budget."""
+        if not pcm:
+            return
+        self._buf.append(pcm)
+        self._bytes += len(pcm)
+        while self._bytes > self._max_bytes and len(self._buf) > 1:
+            self._bytes -= len(self._buf.popleft())
+
+    def flush(self):
+        """Return everything held (oldest first) and empty the buffer."""
+        if not self._buf:
+            return b''
+        out = b''.join(self._buf)
+        self._buf.clear()
+        self._bytes = 0
+        return out
+
+    def clear(self):
+        self._buf.clear()
+        self._bytes = 0
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +478,16 @@ class AudioBus:
         """Register a sink that receives this bus's output."""
         if sink_name not in self.sink_names:
             self.sink_names.append(sink_name)
+
+    @staticmethod
+    def _send_tx(radio, pcm):
+        """Push TX audio to a radio, whichever interface it exposes."""
+        if radio is None or not pcm:
+            return
+        if hasattr(radio, 'put_audio'):
+            radio.put_audio(pcm)
+        elif hasattr(radio, 'write_tx_audio'):
+            radio.write_tx_audio(pcm)
 
     def get_source(self, name):
         """Get a source by name (backward compat with AudioMixer)."""
@@ -512,6 +677,11 @@ class ListenBus(AudioBus):
                 slot.prev_included = False
 
         to_include = {}  # slot -> processed audio
+        # slot -> 'fi'/'fo', recorded AS the fade is applied. The trace used to
+        # derive these afterwards from slot.prev_included, which the same
+        # branch had already overwritten — so both flags read False forever,
+        # exactly when you'd be reading the trace to debug a fade.
+        _faded = {}
 
         for slot in sorted(duckee_audio.keys(), key=lambda s: s.bus_priority):
             audio = duckee_audio[slot]
@@ -574,6 +744,7 @@ class ListenBus(AudioBus):
                 if not slot.prev_included:
                     # First inclusion after silence/duck — fade in
                     audio = apply_fade_in(audio)
+                    _faded[slot] = 'fi'
                 slot.prev_included = True
                 to_include[slot] = audio
                 if slot.source.name not in active_sources:
@@ -581,6 +752,7 @@ class ListenBus(AudioBus):
             elif slot.prev_included:
                 # Was included, now excluded — fade out
                 audio = apply_fade_out(audio)
+                _faded[slot] = 'fo'
                 slot.prev_included = False
                 to_include[slot] = audio
                 if slot.source.name not in active_sources:
@@ -614,7 +786,6 @@ class ListenBus(AudioBus):
         # ── Phase 5: Mix included duckees ──
         duckee_pcm_list = [a for a in to_include.values() if a is not None]
         duckee_mix = additive_mix(duckee_pcm_list)
-        duckee_only_audio = duckee_mix  # for SDR rebroadcast compat
 
         # ── Phase 6: Final assembly ──
         if ptt_audio is not None:
@@ -650,8 +821,8 @@ class ListenBus(AudioBus):
                 'signal': slot.has_signal,
                 'hold_inc': current_time < slot.hold_until,
                 'included': slot in to_include,
-                'fi': slot in to_include and not slot.prev_included,  # fade-in fired
-                'fo': slot not in to_include and slot.prev_included,  # fade-out fired
+                'fi': _faded.get(slot) == 'fi',   # fade-in fired this tick
+                'fo': _faded.get(slot) == 'fo',   # fade-out fired this tick
             }
 
         # Build output
@@ -666,7 +837,6 @@ class ListenBus(AudioBus):
             ducked_sources=ducked_sources,
             status={
                 'rx_audio': rx_audio,
-                'duckee_only_audio': duckee_only_audio,
                 'trace': self._last_trace_state,
             },
         )
@@ -704,16 +874,19 @@ class SoloBus(AudioBus):
         self._ptt_hold_until = 0.0
         self._ptt_release_delay = float(getattr(config, 'PTT_RELEASE_DELAY', 1.0))
         self.call_count = 0
-        # Serialised PTT worker. PTT used to fire one thread per transition
-        # with no ordering guarantee — a slow ON (data-mode auto-switch
-        # sleeps 0.5s, CAT RTS switching is 150-600ms) could complete AFTER
-        # the OFF that followed it, leaving the transmitter keyed. One
-        # worker per bus applies the latest desired state in order; PTT is
-        # level-based so intermediate transitions coalesce safely.
-        self._ptt_desired = False
-        self._ptt_worker = None
-        self._ptt_worker_running = False
-        self._ptt_evt = None
+        # Serialised off-tick PTT for every TX radio on this bus (primary +
+        # extras), applied strictly in request order. See _PttWorker.
+        self._ptt = _PttWorker(
+            self.name,
+            lambda: [r for r in ([self._radio]
+                                 + [x for x, _ in self._extra_tx_radios])
+                     if r is not None],
+        )
+        # TX audio produced while the key is still being applied.
+        self._prekey = _PreKeyBuffer(
+            max_ms=float(getattr(config, 'PTT_PREKEY_BUFFER_MS', 500)),
+            rate=int(getattr(config, 'AUDIO_RATE', 48000)),
+        )
 
     def set_radio(self, radio_plugin, routing_id=None):
         """Set the primary radio plugin at the center of this bus.
@@ -752,76 +925,16 @@ class SoloBus(AudioBus):
         self._tx_sources.sort(key=lambda s: s.bus_priority)
 
     def _fire_ptt(self, state):
-        """Request a PTT state; applied off-tick by the serialised worker.
-
-        Never blocks the bus tick loop — CAT RTS switching + HID write can
-        take 150-600ms (measured), which would stall ALL buses if done
-        synchronously. The worker fans out across every TX radio registered
-        to this bus (primary + extras) strictly in request order, so an OFF
-        can never overtake a slow ON.
-        """
-        import threading
-        self._ptt_desired = bool(state)
-        if self._ptt_evt is None:
-            self._ptt_evt = threading.Event()
-        if self._ptt_worker is None or not self._ptt_worker.is_alive():
-            self._ptt_worker_running = True
-            self._ptt_worker = threading.Thread(
-                target=self._ptt_worker_loop, daemon=True,
-                name=f"PTT-{self.name}")
-            self._ptt_worker.start()
-        self._ptt_evt.set()
+        """Request a PTT state; applied off-tick by the serialised worker."""
+        self._ptt.request(state)
 
     def shutdown(self):
-        """Stop the PTT worker. Called by BusManager on stop/reload —
-        without this every routing reload leaks a worker thread (same
-        failure mode as the denoise-worker leak fixed in reload())."""
-        self._ptt_worker_running = False
-        if self._ptt_evt is not None:
-            self._ptt_evt.set()
-
-    def _apply_ptt(self, radio, state):
-        """Apply one PTT state to one radio. Runs on the PTT worker only."""
-        try:
-            if radio is None:
-                return
-            # Check link endpoint mode before keying PTT
-            if state and hasattr(radio, 'endpoint_name'):
-                _ep_name = radio.endpoint_name
-                _gw = getattr(radio, '_gateway', None)
-                _ep_status = _gw._link_last_status.get(_ep_name, {}) if _gw else {}
-                _mode = _ep_status.get('mode', '')
-                if _mode == 'data':
-                    print(f"  [SoloBus:{self.name}] WARNING: {_ep_name} is in DATA mode — auto-switching to audio for TX")
-                    radio.execute({'cmd': 'mode', 'args': 'audio'})
-                    import time; time.sleep(0.5)  # let mode switch settle
-            if hasattr(radio, 'execute'):
-                radio.execute({'cmd': 'ptt', 'state': state})
-            elif state and hasattr(radio, 'ptt_on'):
-                radio.ptt_on()
-            elif not state and hasattr(radio, 'ptt_off'):
-                radio.ptt_off()
-        except Exception as e:
-            print(f"  [SoloBus:{self.name}] PTT error on {type(radio).__name__}: {e}")
-
-    def _ptt_worker_loop(self):
-        """Apply the latest desired PTT state whenever it changes.
-
-        Reads _ptt_desired once per wakeup: if the desire flips while a
-        slow apply is in flight, the event is already set and the next
-        iteration reconciles — no state is ever applied out of order.
-        """
-        applied = None
-        while self._ptt_worker_running:
-            self._ptt_evt.wait(timeout=1.0)
-            self._ptt_evt.clear()
-            want = self._ptt_desired
-            if want == applied:
-                continue
-            for radio in [self._radio] + [r for r, _ in self._extra_tx_radios]:
-                if radio is not None:
-                    self._apply_ptt(radio, want)
-            applied = want
+        """Unkey and stop the PTT worker. Called by BusManager on
+        stop/reload — without this every routing reload leaks a worker
+        thread (same failure mode as the denoise-worker leak fixed in
+        reload()) and could strand a keyed transmitter."""
+        self._ptt.shutdown()
+        self._prekey.clear()
 
     def tick(self, chunk_size):
         """Process one audio cycle.
@@ -881,14 +994,24 @@ class SoloBus(AudioBus):
             self._fire_ptt(False)
 
         # ── Phase 3: Send TX audio to all registered radios ──
-        if tx_audio is not None and self._ptt_active:
-            for _r in ([self._radio] + [r for r, _ in self._extra_tx_radios]):
-                if _r is None:
-                    continue
-                if hasattr(_r, 'put_audio'):
-                    _r.put_audio(tx_audio)
-                elif hasattr(_r, 'write_tx_audio'):
-                    _r.write_tx_audio(tx_audio)
+        # PTT is applied off-tick, so early chunks would otherwise be pushed
+        # into a radio that hasn't keyed yet and be lost. Hold them until
+        # the key lands, then send them ahead of the live chunk.
+        if self._ptt_active:
+            if self._ptt.applied:
+                # Flush on the first tick after the key lands even if this
+                # tick produced nothing — otherwise a transmission that ends
+                # inside the key-up window is stranded in the buffer.
+                _out = self._prekey.flush() + (tx_audio or b'')
+                if _out:
+                    for _r in ([self._radio] + [r for r, _ in self._extra_tx_radios]):
+                        self._send_tx(_r, _out)
+            elif tx_audio is not None:
+                self._prekey.hold(tx_audio)
+        else:
+            # Unkeyed — anything still held belongs to a transmission that
+            # ended before its key landed; don't replay it on the next one.
+            self._prekey.clear()
 
         # ── Phase 4: Get RX audio from radio (skip during TX and if TX-only) ──
         rx_audio = None
@@ -960,6 +1083,17 @@ class DuplexRepeaterBus(AudioBus):
         self._ptt_hold_time = float(getattr(config, 'REPEATER_PTT_HOLD', 1.0))
         self._signal_threshold = float(getattr(config, 'SDR_SIGNAL_THRESHOLD', -60.0))
         self.call_count = 0
+        # Per-side off-tick PTT. Keying inline used to stall every bus on
+        # the gateway for the 150-600 ms a CAT/HID key takes; each side also
+        # needs its own worker so a slow radio on one side can't delay the
+        # other. Cross-linked audio waits in _prekey_* until its side's key
+        # actually lands (see _PreKeyBuffer).
+        _rate = int(getattr(config, 'AUDIO_RATE', 48000))
+        _prekey_ms = float(getattr(config, 'PTT_PREKEY_BUFFER_MS', 500))
+        self._ptt_a = _PttWorker(f"{name}:A", lambda: [self._side_a])
+        self._ptt_b = _PttWorker(f"{name}:B", lambda: [self._side_b])
+        self._prekey_a = _PreKeyBuffer(max_ms=_prekey_ms, rate=_rate)
+        self._prekey_b = _PreKeyBuffer(max_ms=_prekey_ms, rate=_rate)
 
     def set_side_a(self, radio_plugin):
         """Set the Side A radio plugin."""
@@ -968,6 +1102,13 @@ class DuplexRepeaterBus(AudioBus):
     def set_side_b(self, radio_plugin):
         """Set the Side B radio plugin."""
         self._side_b = radio_plugin
+
+    def shutdown(self):
+        """Unkey both sides and stop their PTT workers (BusManager stop/reload)."""
+        self._ptt_a.shutdown()
+        self._ptt_b.shutdown()
+        self._prekey_a.clear()
+        self._prekey_b.clear()
 
     def tick(self, chunk_size):
         """Process one audio cycle — cross-link both directions.
@@ -1001,28 +1142,26 @@ class DuplexRepeaterBus(AudioBus):
         if a_has_signal:
             self._b_ptt_hold_until = current_time + self._ptt_hold_time
             if not self._b_ptt_active and self._side_b:
-                # Key B's PTT
+                # Key B's PTT (applied off-tick)
                 self._b_ptt_active = True
-                if hasattr(self._side_b, 'execute'):
-                    self._side_b.execute({'cmd': 'ptt', 'state': True})
-                elif hasattr(self._side_b, 'ptt_on'):
-                    self._side_b.ptt_on()
+                self._ptt_b.request(True)
 
         if self._b_ptt_active and self._side_b:
-            if a_rx is not None:
-                if hasattr(self._side_b, 'put_audio'):
-                    self._side_b.put_audio(a_rx)
-                elif hasattr(self._side_b, 'write_tx_audio'):
-                    self._side_b.write_tx_audio(a_rx)
+            if self._ptt_b.applied:
+                # Flush even on a tick with no new RX — a transmission that
+                # ends inside the key-up window would otherwise be stranded.
+                _out = self._prekey_b.flush() + (a_rx or b'')
+                if _out:
+                    self._send_tx(self._side_b, _out)
+            elif a_rx is not None:
+                self._prekey_b.hold(a_rx)   # key still in flight
 
         if self._b_ptt_active and current_time > self._b_ptt_hold_until:
             # Release B's PTT
             self._b_ptt_active = False
+            self._prekey_b.clear()
             if self._side_b:
-                if hasattr(self._side_b, 'execute'):
-                    self._side_b.execute({'cmd': 'ptt', 'state': False})
-                elif hasattr(self._side_b, 'ptt_off'):
-                    self._side_b.ptt_off()
+                self._ptt_b.request(False)
 
         # ── Phase 3: B's RX → A's TX ──
         b_has_signal = check_signal_instant(b_rx, self._signal_threshold) if b_rx else False
@@ -1030,28 +1169,25 @@ class DuplexRepeaterBus(AudioBus):
         if b_has_signal:
             self._a_ptt_hold_until = current_time + self._ptt_hold_time
             if not self._a_ptt_active and self._side_a:
-                # Key A's PTT
+                # Key A's PTT (applied off-tick)
                 self._a_ptt_active = True
-                if hasattr(self._side_a, 'execute'):
-                    self._side_a.execute({'cmd': 'ptt', 'state': True})
-                elif hasattr(self._side_a, 'ptt_on'):
-                    self._side_a.ptt_on()
+                self._ptt_a.request(True)
 
         if self._a_ptt_active and self._side_a:
-            if b_rx is not None:
-                if hasattr(self._side_a, 'put_audio'):
-                    self._side_a.put_audio(b_rx)
-                elif hasattr(self._side_a, 'write_tx_audio'):
-                    self._side_a.write_tx_audio(b_rx)
+            if self._ptt_a.applied:
+                # Flush even on a tick with no new RX (see side B above).
+                _out = self._prekey_a.flush() + (b_rx or b'')
+                if _out:
+                    self._send_tx(self._side_a, _out)
+            elif b_rx is not None:
+                self._prekey_a.hold(b_rx)   # key still in flight
 
         if self._a_ptt_active and current_time > self._a_ptt_hold_until:
             # Release A's PTT
             self._a_ptt_active = False
+            self._prekey_a.clear()
             if self._side_a:
-                if hasattr(self._side_a, 'execute'):
-                    self._side_a.execute({'cmd': 'ptt', 'state': False})
-                elif hasattr(self._side_a, 'ptt_off'):
-                    self._side_a.ptt_off()
+                self._ptt_a.request(False)
 
         # ── Phase 4: Build output ──
         # Mix both RX streams for sink delivery (recording/monitoring)
@@ -1131,12 +1267,23 @@ class SimplexRepeaterBus(AudioBus):
         self._ptt_active_a = False
         self._ptt_active_b = False
         self.call_count = 0
+        # Per-side off-tick PTT (see _PttWorker). Buffer playback is gated on
+        # worker.applied, so store-and-forward never starts talking into a
+        # radio that hasn't keyed yet — the audio is already buffered, so
+        # waiting the extra key-up ticks costs nothing but a little delay.
+        self._ptt_a = _PttWorker(f"{name}:A", lambda: [self._side_a])
+        self._ptt_b = _PttWorker(f"{name}:B", lambda: [self._side_b])
 
     def set_side_a(self, radio_plugin):
         self._side_a = radio_plugin
 
     def set_side_b(self, radio_plugin):
         self._side_b = radio_plugin
+
+    def shutdown(self):
+        """Unkey both sides and stop their PTT workers (BusManager stop/reload)."""
+        self._ptt_a.shutdown()
+        self._ptt_b.shutdown()
 
     def tick(self, chunk_size):
         """Process one audio cycle through the simplex state machine."""
@@ -1192,32 +1339,24 @@ class SimplexRepeaterBus(AudioBus):
                 # Tail expired — start playing on B
                 self._state = self.PLAYING_B
                 self._buffer_pos = 0
-                # Key B's PTT
+                # Key B's PTT (applied off-tick; playback waits for it)
                 self._ptt_active_b = True
                 if self._side_b:
-                    if hasattr(self._side_b, 'execute'):
-                        self._side_b.execute({'cmd': 'ptt', 'state': True})
-                    elif hasattr(self._side_b, 'ptt_on'):
-                        self._side_b.ptt_on()
+                    self._ptt_b.request(True)
 
         elif self._state == self.PLAYING_B:
-            if self._buffer_pos < len(self._buffer):
+            if self._side_b and not self._ptt_b.applied:
+                pass  # key still in flight — hold playback, don't lose audio
+            elif self._buffer_pos < len(self._buffer):
                 pcm = self._buffer[self._buffer_pos]
                 self._buffer_pos += 1
-                if self._side_b:
-                    if hasattr(self._side_b, 'put_audio'):
-                        self._side_b.put_audio(pcm)
-                    elif hasattr(self._side_b, 'write_tx_audio'):
-                        self._side_b.write_tx_audio(pcm)
+                self._send_tx(self._side_b, pcm)
                 playback_audio = pcm
             else:
                 # Buffer exhausted — unkey B, return to idle
                 self._ptt_active_b = False
                 if self._side_b:
-                    if hasattr(self._side_b, 'execute'):
-                        self._side_b.execute({'cmd': 'ptt', 'state': False})
-                    elif hasattr(self._side_b, 'ptt_off'):
-                        self._side_b.ptt_off()
+                    self._ptt_b.request(False)
                 self._buffer = []
                 self._state = self.IDLE
 
@@ -1239,28 +1378,20 @@ class SimplexRepeaterBus(AudioBus):
                 self._buffer_pos = 0
                 self._ptt_active_a = True
                 if self._side_a:
-                    if hasattr(self._side_a, 'execute'):
-                        self._side_a.execute({'cmd': 'ptt', 'state': True})
-                    elif hasattr(self._side_a, 'ptt_on'):
-                        self._side_a.ptt_on()
+                    self._ptt_a.request(True)
 
         elif self._state == self.PLAYING_A:
-            if self._buffer_pos < len(self._buffer):
+            if self._side_a and not self._ptt_a.applied:
+                pass  # key still in flight — hold playback, don't lose audio
+            elif self._buffer_pos < len(self._buffer):
                 pcm = self._buffer[self._buffer_pos]
                 self._buffer_pos += 1
-                if self._side_a:
-                    if hasattr(self._side_a, 'put_audio'):
-                        self._side_a.put_audio(pcm)
-                    elif hasattr(self._side_a, 'write_tx_audio'):
-                        self._side_a.write_tx_audio(pcm)
+                self._send_tx(self._side_a, pcm)
                 playback_audio = pcm
             else:
                 self._ptt_active_a = False
                 if self._side_a:
-                    if hasattr(self._side_a, 'execute'):
-                        self._side_a.execute({'cmd': 'ptt', 'state': False})
-                    elif hasattr(self._side_a, 'ptt_off'):
-                        self._side_a.ptt_off()
+                    self._ptt_a.request(False)
                 self._buffer = []
                 self._state = self.IDLE
 

@@ -111,6 +111,24 @@ denoise_apply_ms = Histogram(
     registry=REGISTRY,
 )
 
+gc_pause_ms = Histogram(
+    'rg_gc_pause_ms',
+    'Garbage-collection stop-the-world pause per generation, milliseconds',
+    ['generation'],
+    # CPython holds the GIL for the whole collection, so this is the pause
+    # EVERY thread sees — including the audio tick. The bus tick runs its
+    # collects at the end of the tick body so pauses are absorbed by the
+    # ~45 ms sleep window; anything past 50 ms actually delays a tick.
+    buckets=(1, 2.5, 5, 10, 25, 50, 100, 250, 500),
+    registry=REGISTRY,
+)
+
+gc_pause_overrun_total = Counter(
+    'rg_gc_pause_overrun_total',
+    'GC pauses that exceeded the bus tick interval (i.e. delayed a tick)',
+    registry=REGISTRY,
+)
+
 
 def _refresh_host_telemetry():
     """Sample CPU temp + fan RPM lazily on scrape. Cheap (~ms): reads

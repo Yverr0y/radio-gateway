@@ -60,6 +60,28 @@ The mode persists across restarts (`SPEAKER_MODE` config key).
 
 A radio plugin is one Python object but exposes itself to the router as **two** nodes: a source (RX, e.g. `th9800`) and a sink (TX, e.g. `th9800_tx`). Each has its own mute toggle. Muting the TX sink does NOT silence the RX source, and vice versa. Important for repeater chains where you want to keep listening even while transmit is muted.
 
+## Rebroadcasting a receiver onto a radio
+
+To put one receiver's audio out over a transmitter (e.g. an SDR onto the
+TH-9800 — what the old "SDR rebroadcast" toggle did), wire it as routing:
+
+1. On `/routing`, create a **solo** bus.
+2. Connect the receiver you want to rebroadcast (`sdr1`, `sdr2`, a link
+   endpoint, …) to that bus as a **source**.
+3. Connect the transmitting radio's **TX sink** (`aioc_tx`, `<plugin>_tx`, …)
+   to the same bus.
+
+`SoloBus` then keys PTT whenever the source produces audio, holds it for
+`PTT_RELEASE_DELAY`, buffers the audio produced during the key-up window so
+the first syllable isn't clipped, and unkeys on release. Add more `*_tx`
+sinks to the same bus to simulcast onto several radios.
+
+The pre-v2 `sdr_rebroadcast` toggle (the `b` key, `/mixer` `flag=rebroadcast`,
+and `SDR_REBROADCAST_PTT_HOLD`) was **removed in 2026-07**. It keyed the radio
+from the main loop and wrote audio to a PortAudio stream the gateway stopped
+opening in 2026-03 when AIOC TX moved into `TH9800Plugin` — so from then on it
+transmitted a dead carrier. Routing supersedes it entirely.
+
 ## Bus tick architecture
 
 A single bus tick thread (~960 samples / 20 ms cadence) drives every bus's mix step. Sinks that would block on the tick (Broadcastify encoder, automation recorder, Mumble TX, EchoLink) run **off-tick** on per-sink drain threads — `_enqueue_sink` stages a sink call into a bounded deque (maxlen 8, drop-oldest); a `SinkDrain-<id>` daemon thread drains it. This keeps the bus tick at sub-millisecond jitter even when one sink is slow.

@@ -37,7 +37,7 @@
 #   MUTE:  't'=TX  'r'=RX  'm'=Global  's'=SDR1  'x'=SDR2  'c'=Remote  'a'=Announce  'o'=Speaker
 #   AUDIO: 'v'=VAD toggle  ','=Vol-  '.'=Vol+
 #   PROC:  'n'=Gate  'f'=HPF  'g'=AGC
-#   SDR:   'd'=SDR1 Duck toggle  'b'=SDR Rebroadcast toggle
+#   SDR:   'd'=SDR1 Duck toggle
 #   PTT:   'p'=Manual PTT toggle
 #   PLAY:  '1-9'=Announcements  '0'=Station ID  '-'=Stop
 #   NET:   'k'=Reset remote audio connection
@@ -145,6 +145,39 @@ TX_TALKBACK = False
 # Delay after PTT key-up before announcement/TTS audio starts (seconds)
 # Gives the radio time to fully key up before speech begins
 PTT_ANNOUNCEMENT_DELAY = 0.5
+
+# Auto-PTT for link endpoints wired as a bus TX sink.
+# THRESHOLD is the bus output level (0-100) that keys the endpoint's radio:
+#   raise it if a noisy source keys unintentionally, lower it if a quiet
+#   source never keys at all.
+# HOLD is how long the key is held after the last chunk above the threshold:
+#   raise it to stop the radio re-keying during gaps in speech.
+LINK_AUTO_PTT_THRESHOLD = 10
+LINK_AUTO_PTT_HOLD = 0.5
+
+# Pre-key TX buffer for bus PTT (milliseconds, 0 = disabled).
+# PTT is applied off-tick and a radio takes 150-600 ms to key, so TX audio
+# produced during that window would be pushed into a radio that isn't
+# transmitting yet — the first syllable of every transmission. Audio waits
+# in this buffer instead and is flushed, in order, once the key lands.
+# Bounded: oldest audio drops past this depth, so a slow or failed key can't
+# build unbounded latency.
+PTT_PREKEY_BUFFER_MS = 500
+
+# Jitter buffer depth, in 50 ms chunks, before a remote source starts playing.
+# This is the single biggest contributor to end-to-end latency, so it is worth
+# tuning — but tune it with evidence, not by ear:
+#   LINK_JITTER_PREFILL   4 = 200 ms cushion. A wired-LAN endpoint usually runs
+#                         fine at 2 (100 ms). Keep 4+ for WiFi or a
+#                         Cloudflare-tunnelled endpoint.
+#   REMOTE_AUDIO_JITTER_PREFILL  8 = 400 ms. Higher because the Windows client's
+#                         WASAPI callback gaps are burstier than a link endpoint.
+# After lowering either, watch rg_link_audio_underruns_total in Prometheus: a
+# rising count is the dropout cost appearing before it becomes audible.
+# Individual link endpoints can override LINK_JITTER_PREFILL at runtime (the
+# value is remembered per endpoint) — this is only the default for new ones.
+LINK_JITTER_PREFILL = 4
+REMOTE_AUDIO_JITTER_PREFILL = 8
 
 
 [vad]
@@ -263,9 +296,9 @@ SDR_DUCK_COOLDOWN = 3.0
 # -50=default | -60=10dB more sensitive (good for weak signals)
 SDR_SIGNAL_THRESHOLD = -70.0
 
-# SDR Rebroadcast: seconds to hold PTT after SDR audio signal stops.
-# Only used when rebroadcast is active (toggled with 'b' key at runtime).
-SDR_REBROADCAST_PTT_HOLD = 3.0
+# (The legacy SDR-rebroadcast toggle and SDR_REBROADCAST_PTT_HOLD were removed
+# in 2026-07. To put a receiver out over a transmitter, route it: source ->
+# solo bus -> <radio>_tx. See docs/audio-routing.md.)
 
 
 [remote]

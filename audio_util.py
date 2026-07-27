@@ -71,6 +71,16 @@ def _warmup_gate_loop():
 
     Run in a background daemon thread so module import (which happens
     early in radio_gateway.py startup) doesn't block on it.
+
+    EXPECT TO SEE SEVERAL THREADS NAMED AFTER THIS ONE, AND DON'T CHASE THEM.
+    The Python thread below finishes and exits in well under a second, but
+    numba brings up its native worker pool while compiling, and on Linux a
+    freshly created thread inherits the creating thread's `comm` name until
+    something renames it. So `top`/`/proc/<pid>/task` show ~3 threads with
+    this name sitting idle for the life of the process while
+    `threading.enumerate()` shows none — they are numba's workers, not leaked
+    warmup threads (verified 2026-07-27). Naming it after numba rather than
+    the caller keeps that obvious.
     """
     if not _HAVE_NUMBA:
         return
@@ -82,7 +92,7 @@ def _warmup_gate_loop():
         except Exception:
             pass
     threading.Thread(
-        target=_go, name='GateJITWarmup', daemon=True,
+        target=_go, name='numba-jit-warmup', daemon=True,
     ).start()
 
 
@@ -106,29 +116,62 @@ _warmup_gate_loop()
 # The JSON/API surface still uses the legacy key 'dfn' — it's no longer a
 # literal acronym but kept for config compatibility.
 
-_RNN_MOD = None   # lazy-loaded module handle (shared across streams)
+_RNN_LIB = None   # (ctypes.CDLL, frame_size) after first successful load
+_RNN_LIB_SRC = ''  # path the lib was loaded from (status/debug)
+
+# Drop-in override path for an optimized librnnoise build. The pyrnnoise
+# wheel ships a mostly-scalar build that measures ~0.9 ms/frame on the
+# gateway's Haswell; a local `-O3 -march=native` build of xiph/rnnoise runs
+# the same API at ~0.22 ms/frame (4× — measured 2026-07-27). The optimized
+# .so is machine-specific, so it lives OUTSIDE the repo; build one with
+# tools/build_rnnoise.sh. Wheel lib remains the portable fallback.
+_RNNOISE_OPT_PATH = '~/.local/lib/radio-gateway/librnnoise.so'
 
 
 def _load_rnnoise():
-    """Load pyrnnoise.rnnoise as a standalone module, bypassing its package
-    __init__.py. Returns the module on success, None if unavailable."""
-    global _RNN_MOD
-    if _RNN_MOD is not None:
-        return _RNN_MOD
+    """Load librnnoise via ctypes. Prefers the optimized local build at
+    _RNNOISE_OPT_PATH, falls back to the pyrnnoise wheel's bundled lib.
+    Returns (lib, frame_size), or None if no candidate loads."""
+    global _RNN_LIB, _RNN_LIB_SRC
+    if _RNN_LIB is not None:
+        return _RNN_LIB
+    import ctypes, os
+    candidates = [os.path.expanduser(_RNNOISE_OPT_PATH)]
     try:
-        import importlib.util, os
+        import importlib.util
         spec = importlib.util.find_spec('pyrnnoise')
-        if spec is None or not spec.submodule_search_locations:
-            return None
-        sub_path = os.path.join(spec.submodule_search_locations[0], 'rnnoise.py')
-        sub_spec = importlib.util.spec_from_file_location('_rnnoise_lowlevel', sub_path)
-        mod = importlib.util.module_from_spec(sub_spec)
-        sub_spec.loader.exec_module(mod)
-        _RNN_MOD = mod
-        return mod
-    except Exception as e:
-        print(f"[DFN] rnnoise unavailable: {e}")
-        return None
+        if spec is not None and spec.submodule_search_locations:
+            candidates.append(os.path.join(
+                spec.submodule_search_locations[0], 'librnnoise.so'))
+    except Exception:
+        pass
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            lib = ctypes.CDLL(path)
+            lib.rnnoise_create.argtypes = [ctypes.c_void_p]
+            lib.rnnoise_create.restype = ctypes.c_void_p
+            lib.rnnoise_destroy.argtypes = [ctypes.c_void_p]
+            lib.rnnoise_get_frame_size.restype = ctypes.c_int
+            lib.rnnoise_process_frame.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+            ]
+            lib.rnnoise_process_frame.restype = ctypes.c_float
+            frame_size = int(lib.rnnoise_get_frame_size())
+            if not 0 < frame_size <= 4800:
+                print(f"[DFN] rnnoise at {path}: bad frame size {frame_size}")
+                continue
+            _RNN_LIB = (lib, frame_size)
+            _RNN_LIB_SRC = path
+            print(f"  [DFN] rnnoise loaded: {path} (frame={frame_size})")
+            return _RNN_LIB
+        except Exception as e:
+            print(f"[DFN] rnnoise candidate {path} failed: {e}")
+    print("[DFN] rnnoise unavailable: no loadable librnnoise")
+    return None
 
 
 class _RNNoiseStream:
@@ -148,11 +191,11 @@ class _RNNoiseStream:
     dry_delay_samples = 960
 
     def __init__(self):
-        mod = _load_rnnoise()
-        if mod is None:
+        loaded = _load_rnnoise()
+        if loaded is None:
             raise RuntimeError("rnnoise library not available")
-        self._mod = mod
-        self._state = mod.create()
+        self._lib, self._frame_size = loaded
+        self._state = self._lib.rnnoise_create(None)
         self._buf = np.empty(0, dtype=np.int16)
         self._dry_delay_buf = np.empty(0, dtype=np.int16)  # used by process_mix
         self.last_prob = 0.0
@@ -160,7 +203,7 @@ class _RNNoiseStream:
     def close(self):
         if self._state is not None:
             try:
-                self._mod.destroy(self._state)
+                self._lib.rnnoise_destroy(self._state)
             except Exception:
                 pass
             self._state = None
@@ -174,7 +217,7 @@ class _RNNoiseStream:
         if samples_i16.size == 0:
             return samples_i16
 
-        frame_size = self._mod.FRAME_SIZE
+        frame_size = self._frame_size
         buf = np.concatenate([self._buf, samples_i16]) if self._buf.size else samples_i16
         n_frames = buf.size // frame_size
 
@@ -182,17 +225,26 @@ class _RNNoiseStream:
             self._buf = buf.copy()
             return np.empty(0, dtype=np.int16)
 
-        out_chunks = []
+        # One float32 conversion for the whole chunk, direct in-place C
+        # calls per frame, one int16 conversion out. (The pyrnnoise
+        # process_mono_frame wrapper paid dtype checks + pad + two astype
+        # copies + allocs per frame; direct calls keep the whole chunk in
+        # one buffer. Output matches the wrapper bit-for-bit: same
+        # int16→float32→C(in-place)→int16 cast chain.)
+        import ctypes as _ct
+        f32 = np.ascontiguousarray(
+            buf[: n_frames * frame_size].astype(np.float32))
+        _fn = self._lib.rnnoise_process_frame
+        _PTR = _ct.POINTER(_ct.c_float)
+        _base = f32.ctypes.data
+        _state = self._state
         last_prob = self.last_prob
         for i in range(n_frames):
-            frame = buf[i * frame_size : (i + 1) * frame_size]
-            denoised, prob = self._mod.process_mono_frame(self._state, frame)
-            out_chunks.append(denoised)
-            last_prob = float(prob)
-
+            _ptr = _ct.cast(_base + i * frame_size * 4, _PTR)
+            last_prob = _fn(_state, _ptr, _ptr)
         self._buf = buf[n_frames * frame_size :].copy()
-        self.last_prob = last_prob
-        return np.concatenate(out_chunks)
+        self.last_prob = float(last_prob)
+        return f32.astype(np.int16)
 
     def process_mix(self, samples_i16, mix):
         """Process + wet/dry blend with dry-path delay compensation.
@@ -699,6 +751,14 @@ class AudioProcessor:
                                       # pumping. 0 = model decides (can
                                       # pump). Applied only when engine is
                                       # DeepFilterNet; RNNoise ignores it.
+        self.dfn_bypass_db = -60.0    # Denoise bypass threshold (dBFS).
+                                      # Chunks below this RMS skip the
+                                      # denoise worker entirely and pass
+                                      # dry — feeding squelch hiss / noise
+                                      # floor to the engine is pure CPU
+                                      # waste. Raise per-bus (routing cmd
+                                      # 'set_dfn_bypass') for sources whose
+                                      # idle floor sits above -60 dBFS.
 
         # Filter state (persists across audio chunks for continuity)
         self.highpass_state = None
@@ -899,15 +959,19 @@ class AudioProcessor:
         stream-state drift on silence is inaudible when speech resumes.
         """
         # Silence short-circuit. pcm_rms is cheap (a single numpy RMS).
-        # -60 dBFS on int16 ≈ RMS of 32.7. Anything under that is
-        # effectively "no energy" — feeding the denoiser is wasted CPU.
+        # Threshold is per-bus configurable (dfn_bypass_db, default -60
+        # dBFS ≈ RMS 32.7 on int16 — the historical hardcoded value).
+        # Anything under it is treated as "no energy" — feeding the
+        # denoiser is wasted CPU.
         # Ordering matters: the worker pipeline is one tick delayed, so a
         # bare "return dry" here stranded the final wet speech chunk in
         # _dn_queue_out and replayed it, stale, at the next squelch
         # opening. Pop any pending wet output first — the speech tail
         # lands in order and the queue is empty when audio resumes.
         try:
-            if pcm_rms(pcm_data) < 33:
+            _bypass_rms = 32767.0 * (10.0 ** (
+                float(getattr(self, 'dfn_bypass_db', -60.0)) / 20.0))
+            if pcm_rms(pcm_data) < _bypass_rms:
                 if self._dn_lock is not None:
                     with self._dn_lock:
                         if self._dn_queue_out:
@@ -1066,7 +1130,12 @@ def generate_cw_pcm(text, wpm=15, freq=700, sample_rate=48000):
     dit_n = int(sample_rate * 1.2 / wpm)
     t = np.arange(dit_n) / sample_rate
     dit_tone = (np.sin(2 * np.pi * freq * t) * 32767).astype(np.int16)
-    dah_tone = np.tile(dit_tone, 3)
+    # Generate the dah as one continuous 3-dit sine rather than tiling the dit
+    # three times. Tiling restarts the sine's phase at each copy, and unless
+    # freq*1.2/wpm happens to be a whole number of cycles that step is an
+    # audible click one third and two thirds of the way through every dah.
+    t_dah = np.arange(dit_n * 3) / sample_rate
+    dah_tone = (np.sin(2 * np.pi * freq * t_dah) * 32767).astype(np.int16)
     dit_sil  = np.zeros(dit_n,     dtype=np.int16)
     char_sil = np.zeros(3 * dit_n, dtype=np.int16)
     word_sil = np.zeros(7 * dit_n, dtype=np.int16)

@@ -446,6 +446,11 @@ def _make_link_callbacks(gw):
             src.audio_boost = saved['rx_boost'] / 100.0
         if 'tx_boost' in saved:
             src.tx_audio_boost = saved['tx_boost'] / 100.0
+        # Per-endpoint jitter cushion. A wired LAN endpoint can run tighter
+        # than one over WiFi or a tunnel, and they reconnect independently,
+        # so this belongs per endpoint rather than in the global config.
+        if 'jitter_prefill' in saved:
+            src.set_jitter_prefill(saved['jitter_prefill'])
         src.server_connected = True
         src._stream_trace = gw._stream_trace
         src._endpoint_caps = info.get('capabilities', {})

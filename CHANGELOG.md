@@ -2,6 +2,22 @@
 
 All notable changes to Radio Gateway.
 
+## [Unreleased]
+
+### Removed
+
+- **Legacy SDR rebroadcast** — the `sdr_rebroadcast` toggle (`b` key, `/mixer`
+  `flag=rebroadcast`, `SDR_REBROADCAST_PTT_HOLD`, and the BusManager
+  `drain_sdr_rebroadcast` queue) is gone. It keyed the transmitter from the main
+  loop and wrote its audio to `gw.output_stream`, which has been permanently
+  `None` since AIOC TX moved into `TH9800Plugin` (2026-03-30) — so enabling it
+  put a **dead carrier** on the air. The supported equivalent is routing: wire
+  the receiver to a solo bus carrying the radio's `*_tx` sink, which does PTT and
+  TX audio properly through `SoloBus`. See
+  [docs/audio-routing.md](docs/audio-routing.md#rebroadcasting-a-receiver-onto-a-radio).
+  The `/mixer` endpoint still accepts `flag=rebroadcast` but returns an error
+  pointing at the routing page rather than silently doing nothing.
+
 ## [4.0.0] -- 2026-06-26
 
 AllStar integration, Kokoro offline TTS, USRP2 dual-node support, IC-7100 squelch fix, and a complete MCP tool overhaul. The plugin platform is now fully generic over discovered plugins — routing UI, bus radio resolution, meters, and `web_routes` dispatch all enumerate `_external_plugins` rather than hardcoded radio names. Any future plugin gets full UI and MCP coverage for free.

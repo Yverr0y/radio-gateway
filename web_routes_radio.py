@@ -490,13 +490,22 @@ def handle_catcmd(handler, parent):
             # Key/unkey TH-9800 via configured PTT_METHOD, regardless of TX_RADIO
             gw._web_th9800_ptt = not getattr(gw, '_web_th9800_ptt', False)
             state = gw._web_th9800_ptt
-            method = str(getattr(gw.config, 'PTT_METHOD', 'aioc')).lower()
-            if method == 'relay':
-                gw._ptt_relay(state)
-            elif method == 'software':
-                gw._ptt_software(state)
+            # Prefer the plugin: it owns _ptt_lock, so this button can't
+            # interleave its RTS-switch/HID-write sequence with a bus PTT
+            # worker or the SDR-rebroadcast path (the gw._ptt_* helpers key
+            # the same AIOC device on a different lock domain — i.e. none).
+            # The plugin dispatches on the same PTT_METHOD config value.
+            _th = getattr(gw, 'th9800_plugin', None)
+            if _th is not None:
+                _th._set_ptt(state)
             else:
-                gw._ptt_aioc(state)
+                method = str(getattr(gw.config, 'PTT_METHOD', 'aioc')).lower()
+                if method == 'relay':
+                    gw._ptt_relay(state)
+                elif method == 'software':
+                    gw._ptt_software(state)
+                else:
+                    gw._ptt_aioc(state)
             result = {'ok': True}
         elif cmd == 'CAT_RECONNECT' and gw:
             if gw.cat_client:

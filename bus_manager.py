@@ -2,8 +2,7 @@
 
 All buses (listen, solo, duplex, simplex) are created and ticked by
 BusManager in a dedicated daemon thread.  The main audio loop in
-gateway_core handles SDR rebroadcast TX and WebSocket push, draining
-audio from BusManager queues.
+gateway_core drains the PCM/MP3 queues for WebSocket and stream push.
 """
 
 import collections
@@ -95,7 +94,6 @@ class BusManager:
         # ── Primary listen bus state ──────────────────────────────────────
         self.listen_bus = None              # Primary ListenBus instance
         self._listen_bus_id = None          # Primary listen bus ID from routing config
-        self._sdr_rebroadcast_queue = collections.deque(maxlen=4)  # (sdr_only_pcm, ptt_required)
         self._listen_vad_pass = True        # VAD state, computed each tick
 
         # ── Audio quality diagnostics ──────────────────────────────────────
@@ -223,20 +221,6 @@ class BusManager:
             except IndexError:
                 break
         return b''.join(chunks) if chunks else None
-
-    def drain_sdr_rebroadcast(self):
-        """Return (sdr_only_audio, ptt_required) for SDR rebroadcast, or (None, False)."""
-        if not self._sdr_rebroadcast_queue:
-            return None, False
-        # Take the most recent entry (discard older ones)
-        sdr_audio = None
-        ptt = False
-        while self._sdr_rebroadcast_queue:
-            try:
-                sdr_audio, ptt = self._sdr_rebroadcast_queue.popleft()
-            except IndexError:
-                break
-        return sdr_audio, ptt
 
     # ── v3.5-A: off-tick sink delivery ──────────────────────────────────
     @staticmethod
@@ -693,17 +677,20 @@ class BusManager:
         # Wake any sleeping sink drains so they observe _running=False
         for evt in self._sink_events.values():
             evt.set()
-        # Stop per-bus PTT workers (solo buses). Without this each routing
-        # reload leaks a worker thread, same as the denoise-worker leak
-        # handled in reload().
+        # Join the tick thread BEFORE unkeying: bus.shutdown() drives PTT to
+        # off, and a tick still in flight would happily re-request ON right
+        # after, stranding a keyed transmitter through the reload.
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        # Stop per-bus PTT workers (solo + repeater buses), unkeying first.
+        # Without this each routing reload leaks a worker thread, same as
+        # the denoise-worker leak handled in reload().
         for _bus in self._busses.values():
             if hasattr(_bus, 'shutdown'):
                 try:
                     _bus.shutdown()
                 except Exception:
                     pass
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
         for t in self._sink_threads.values():
             if t.is_alive():
                 t.join(timeout=0.5)
@@ -716,6 +703,11 @@ class BusManager:
         self._sink_events.clear()
         self._sink_threads.clear()
         self._sink_stats.clear()
+        # Drop any partial Mumble frame. pymumble needs whole 20 ms frames, so
+        # the drain accumulates a remainder between calls; carrying it across a
+        # routing reload spliced the tail of the old session's audio onto the
+        # front of the new one.
+        self._mumble_drain_buf = b''
 
     def reload(self):
         """Reload config and recreate busses."""
@@ -974,6 +966,10 @@ class BusManager:
                 # audio). Clamp to a sane range.
                 proc.dfn_atten_db = max(0.0, min(60.0,
                     float(proc_cfg.get('dfn_atten_db', 18.0))))
+                # Denoise bypass threshold (dBFS). Missing key → -60
+                # (historical hardcoded value — behavior unchanged).
+                proc.dfn_bypass_db = max(-90.0, min(-20.0,
+                    float(proc_cfg.get('dfn_bypass_db', -60.0))))
                 # Back-compat: missing 'dfn_engine' → 'rnnoise' (existing
                 # deployments' behaviour). Use set_dfn_engine so an invalid
                 # saved value is rejected without killing the bus.
@@ -1250,13 +1246,22 @@ class BusManager:
                                 # Auto-PTT: track hold timer (actual send deferred to tick loop)
                                 if not hasattr(self, '_sink_ptt_hold'):
                                     self._sink_ptt_hold = {}
-                                _ptt_threshold = 10
+                                # Level (0-100) the bus output must reach to key
+                                # a link endpoint, and how long the key is held
+                                # after the last qualifying chunk. Both were
+                                # hardcoded (10 / 0.5 s); a quiet source could
+                                # never key, and a source with gaps re-keyed
+                                # constantly. Tune via gateway_config.txt.
+                                _ptt_threshold = float(getattr(
+                                    self.config, 'LINK_AUTO_PTT_THRESHOLD', 10))
+                                _ptt_hold_s = float(getattr(
+                                    self.config, 'LINK_AUTO_PTT_HOLD', 0.5))
                                 if _audio_level is not None and _audio_level >= _ptt_threshold:
                                     if not hasattr(self, '_sink_ptt_start'):
                                         self._sink_ptt_start = {}
                                     if not hasattr(self, '_sink_ptt_pending'):
                                         self._sink_ptt_pending = {}
-                                    self._sink_ptt_hold[_eln] = time.monotonic() + 0.5
+                                    self._sink_ptt_hold[_eln] = time.monotonic() + _ptt_hold_s
                                     if not gw._link_ptt_active.get(_eln, False):
                                         self._sink_ptt_pending[_eln] = True
                                         self._sink_ptt_start[_eln] = time.monotonic()
@@ -1303,16 +1308,11 @@ class BusManager:
         """Handle listen-bus-specific post-tick work.
 
         Called from _tick_loop after the primary listen bus tick, before
-        _deliver_audio.  Handles: SDR rebroadcast queue, health flags,
-        ducked states, click suppression, VAD, EchoLink, automation.
+        _deliver_audio.  Handles: health flags, ducked states, click
+        suppression, VAD, EchoLink, automation.
         """
         gw = self.gateway
         data = output.mixed_audio
-
-        # Queue duckee_only_audio + ptt for SDR rebroadcast
-        sdr_only = output.status.get('duckee_only_audio')
-        ptt_required = output.ptt.get('_ptt_required', False)
-        self._sdr_rebroadcast_queue.append((sdr_only, ptt_required))
 
         # Health flags
         if data is not None:
@@ -1372,12 +1372,30 @@ class BusManager:
             self._enqueue_sink('echolink_legacy', (data,))
 
     def _gc_callback(self, phase, info):
-        """Record GC pause events for diagnostics."""
+        """Record GC pause events for diagnostics.
+
+        CPython collects with the GIL held, so this duration is the pause
+        EVERY thread sees, not just the one that called collect(). The tick
+        loop deliberately collects at the end of its body so the pause is
+        absorbed by the sleep window — an overrun past the tick interval is
+        the case that actually costs audio, so it's counted separately.
+        """
         if phase == 'start':
             self._gc_start = time.monotonic()
         elif phase == 'stop' and hasattr(self, '_gc_start'):
             dur_ms = (time.monotonic() - self._gc_start) * 1000
-            self._gc_events.append((time.monotonic(), info.get('generation', -1), dur_ms))
+            _gen = info.get('generation', -1)
+            self._gc_events.append((time.monotonic(), _gen, dur_ms))
+            try:
+                import metrics as _m
+                _m.gc_pause_ms.labels(generation=str(_gen)).observe(dur_ms)
+                if dur_ms > self._tick_interval * 1000:
+                    _m.gc_pause_overrun_total.inc()
+                    print(f"  [BusManager] GC gen-{_gen} pause {dur_ms:.0f}ms "
+                          f"exceeded the {self._tick_interval*1000:.0f}ms tick "
+                          f"interval — a tick was delayed")
+            except Exception:
+                pass
 
     def dump_tick_trace(self):
         """Return tick trace data for analysis.  Called by audio_trace dump."""
@@ -1625,9 +1643,17 @@ class BusManager:
             # gen-0 sweep, cyclic garbage promoted to gen-1/gen-2 was never
             # freed for the life of the process (the only full collect in
             # the codebase runs in transcriber.stop()) — unbounded RSS
-            # growth. Escalating cadence keeps every generation bounded;
-            # pauses land in the sleep window and are recorded by
-            # _gc_callback so the tick trace shows their cost.
+            # growth. Escalating cadence keeps every generation bounded.
+            #
+            # DO NOT "optimise" this onto a background thread. CPython
+            # collects with the GIL held, so a collect from any thread
+            # stops every thread — measured 2026-07-27: a 41 ms gen-2
+            # collect stalled an unrelated thread for 42 ms. Running it
+            # here, as the LAST thing in the tick body, is what makes it
+            # cheap: the pause is spent out of the ~45 ms sleep window
+            # instead of landing at a random point mid-tick. Pauses are
+            # recorded by _gc_callback (rg_gc_pause_ms) and an overrun past
+            # the tick interval increments rg_gc_pause_overrun_total.
             if _tick_num % 12000 == 0:      # ~10 min: full collect
                 gc.collect(2)
             elif _tick_num % 1200 == 0:     # ~60 s: gen-1

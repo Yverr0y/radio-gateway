@@ -10,6 +10,7 @@ Frame format: [1 byte type][2 byte big-endian length][payload]
 Dependencies: stdlib only (+ pyaudio inside AudioPlugin.setup only)
 """
 
+import math
 import os
 import socket
 import struct
@@ -19,6 +20,66 @@ import time
 import logging
 
 log = logging.getLogger("GatewayLink")
+
+# ---------------------------------------------------------------------------
+# PCM helpers
+# ---------------------------------------------------------------------------
+# This module ships to every endpoint, some of them minimal installs, so it
+# has deliberately carried no third-party imports. numpy is therefore
+# OPTIONAL: when present these run vectorised, otherwise they fall back to
+# the original stdlib loops. Both paths produce byte-identical output.
+#
+# It matters because the audio thread ran three per-sample Python loops on
+# every 50 ms chunk (diagnostic RMS, gate RMS, and the gain multiply) — real
+# sustained CPU on a CM5/Pi that is also running direwolf.
+try:
+    import numpy as _np
+except Exception:                                    # pragma: no cover
+    _np = None
+
+
+def pcm_rms(data):
+    """RMS of signed 16-bit little-endian PCM. 0.0 for an empty buffer."""
+    n = len(data) // 2
+    if n == 0:
+        return 0.0
+    if _np is not None:
+        arr = _np.frombuffer(data, dtype='<i2', count=n).astype(_np.float32)
+        return float(_np.sqrt(_np.mean(arr * arr)))
+    samples = struct.unpack(f'<{n}h', data)
+    return math.sqrt(sum(s * s for s in samples) / n)
+
+
+def pcm_db(data):
+    """dBFS of int16 PCM, floored at -100 dB for silence."""
+    rms = pcm_rms(data)
+    return 20.0 * math.log10(rms / 32767.0) if rms > 0 else -100.0
+
+
+def pcm_apply_gain(pcm, gain):
+    """Multiply int16 PCM by *gain*, clamped to the int16 range.
+
+    Truncates toward zero on both paths (numpy's float->int16 cast and the
+    stdlib int() behave the same), so output is byte-identical either way.
+    """
+    if gain == 1.0:
+        return pcm
+    n = len(pcm) // 2
+    if n == 0:
+        return pcm
+    if _np is not None:
+        arr = _np.frombuffer(pcm, dtype='<i2', count=n).astype(_np.float32) * gain
+        return _np.clip(arr, -32768, 32767).astype('<i2').tobytes()
+    samples = struct.unpack(f'<{n}h', pcm)
+    gained = []
+    for s in samples:
+        v = int(s * gain)
+        if v > 32767:
+            v = 32767
+        elif v < -32768:
+            v = -32768
+        gained.append(v)
+    return struct.pack(f'<{n}h', *gained)
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +591,10 @@ class GatewayLinkServer:
                     old = self._endpoints[ep_name]
                     print(f"  [Link] Endpoint '{ep_name}' reconnected from "
                           f"{addr[0]}:{addr[1]}, replacing stale connection")
+                    # Stop the old sender thread too — closing only the socket
+                    # left it alive polling an orphaned queue at 1 Hz forever
+                    # (one leaked LinkSend thread per reconnect-with-same-name).
+                    old.stop_sender()
                     try:
                         old.sock.close()
                     except OSError:
@@ -1644,7 +1709,7 @@ class AudioPlugin(RadioPlugin):
 
     def _arecord_reader(self):
         """Read audio from ALSA via arecord subprocess (dedicated thread)."""
-        import subprocess, struct as _st, math as _m
+        import subprocess
         chunk_bytes = self.CHUNK_BYTES
         while self._rx_running:
             proc = None
@@ -1689,15 +1754,16 @@ class AudioPlugin(RadioPlugin):
                         _diag_short += 1
                         data += b'\x00' * (chunk_bytes - len(data))
 
-                    # Compute RMS for diagnostics
-                    n = len(data) // 2
-                    samples = _st.unpack(f'<{n}h', data)
-                    rms = _m.sqrt(sum(s * s for s in samples) / n) if n else 0
+                    # Compute RMS for diagnostics (on the raw chunk)
+                    rms = pcm_rms(data)
                     _diag_rms_sum += rms
 
                     # RX gain
                     if self._rx_gain_db != 0.0:
                         data = self._apply_volume(data, self._db_to_linear(self._rx_gain_db))
+                        _gate_rms = None      # data changed — gate must recompute
+                    else:
+                        _gate_rms = rms       # unchanged — reuse, skip a whole pass
 
                     # Noise gate — when closed, DROP the chunk rather than
                     # queue silence. The gateway treats missing audio as
@@ -1705,7 +1771,7 @@ class AudioPlugin(RadioPlugin):
                     # bandwidth and, on the gateway side, keeps the receive
                     # queue saturated (overflow on every push).
                     if self._gate_enabled:
-                        data = self._apply_gate(data)
+                        data = self._apply_gate(data, rms=_gate_rms)
                         if self._gate_open is False:
                             _diag_gated += 1
                             continue
@@ -1728,7 +1794,7 @@ class AudioPlugin(RadioPlugin):
                     _now = time.monotonic()
                     if _now - _diag_time >= _DIAG_INTERVAL:
                         _avg_rms = _diag_rms_sum / max(_diag_reads, 1)
-                        _db = 20 * _m.log10(_avg_rms / 32767.0) if _avg_rms > 0 else -100.0
+                        _db = 20 * math.log10(_avg_rms / 32767.0) if _avg_rms > 0 else -100.0
                         print(f"  [RX-DIAG] {_DIAG_INTERVAL:.0f}s: reads={_diag_reads} "
                               f"gated={_diag_gated} short={_diag_short} overflow={_diag_overflow} "
                               f"max_read={_diag_max_read_ms:.0f}ms avg_rms={_avg_rms:.0f} "
@@ -1755,13 +1821,17 @@ class AudioPlugin(RadioPlugin):
                 print(f"  [Link] AudioPlugin: arecord died — restarting in 2s")
                 time.sleep(2)
 
-    def _apply_gate(self, data):
-        """Apply noise gate to PCM data. Returns data or silence."""
-        import struct as _st, math as _m
-        n = len(data) // 2
-        samples = _st.unpack(f'<{n}h', data)
-        rms = _m.sqrt(sum(s * s for s in samples) / n) if n else 0
-        db = 20 * _m.log10(rms / 32767.0) if rms > 0 else -100.0
+    def _apply_gate(self, data, rms=None):
+        """Apply noise gate to PCM data. Returns data or silence.
+
+        *rms* lets the caller pass a value it already computed for this exact
+        buffer — the reader thread computes one for diagnostics and, when no
+        RX gain was applied, the buffer is unchanged so the gate can reuse it
+        instead of running a second full pass over every sample.
+        """
+        if rms is None:
+            rms = pcm_rms(data)
+        db = 20 * math.log10(rms / 32767.0) if rms > 0 else -100.0
         if db > self._gate_threshold_db:
             self._gate_envelope += self._gate_attack * (1.0 - self._gate_envelope)
         else:
@@ -1869,18 +1939,7 @@ class AudioPlugin(RadioPlugin):
     @staticmethod
     def _apply_volume(pcm, gain):
         """Apply a gain multiplier to 16-bit signed LE PCM audio."""
-        import struct as _struct
-        n_samples = len(pcm) // 2
-        samples = _struct.unpack(f'<{n_samples}h', pcm)
-        gained = []
-        for s in samples:
-            v = int(s * gain)
-            if v > 32767:
-                v = 32767
-            elif v < -32768:
-                v = -32768
-            gained.append(v)
-        return _struct.pack(f'<{n_samples}h', *gained)
+        return pcm_apply_gain(pcm, gain)
 
     # -- helpers ------------------------------------------------------------
 
@@ -1991,6 +2050,26 @@ class AIOCPlugin(AudioPlugin):
         self._ptt_timeout = 60  # seconds — safety auto-unkey
         self._ptt_timer = None
         self._ptt_timer_lock = threading.Lock()
+        # Serialises the HID write + _ptt_on update. Two threads key this
+        # radio: the link reader (execute 'ptt') and the safety Timer
+        # (_ptt_timeout_fired). Interleaved, the last hardware write could
+        # disagree with _ptt_on — and because the fired timer has already
+        # cleared itself, a resulting stuck key had nothing left to correct
+        # it. Never taken while holding _ptt_timer_lock (no nesting).
+        self._ptt_hw_lock = threading.Lock()
+        # ── Pre-key TX buffer ──────────────────────────────────────────────
+        # The gateway starts streaming TX audio at the same moment it sends
+        # the PTT command, but the radio isn't transmitting until the HID
+        # write lands here — so those first chunks used to be played into an
+        # unkeyed radio and lost (the first syllable of every transmission).
+        # They wait here instead and are flushed, in order, the moment PTT
+        # goes on. Bounded so a key that never arrives can't grow it or add
+        # unbounded latency; oldest chunks drop first.
+        import collections as _collections
+        self._prekey_buf = _collections.deque()
+        self._prekey_bytes = 0
+        self._prekey_max_bytes = int(0.5 * self.RATE * self.FORMAT_WIDTH)  # 500 ms
+        self._prekey_lock = threading.Lock()
         # Data mode (Direwolf TNC) — TNC runs on the gateway now
         # (packet_tnc.py). AIOCPlugin's job is to release ALSA when the
         # mode is 'data' so direwolf can claim hw:N,0 exclusively.
@@ -2007,6 +2086,10 @@ class AIOCPlugin(AudioPlugin):
         self._pid = int(config.get('pid', '7388'), 16)
         self._ptt_channel = int(config.get('ptt_channel', 3))
         self._ptt_timeout = int(config.get('ptt_timeout', 60))
+        # Pre-key TX buffer depth in ms (0 disables the buffer entirely and
+        # restores the old drop-while-unkeyed behaviour).
+        _pk_ms = max(0, int(config.get('prekey_buffer_ms', 500)))
+        self._prekey_max_bytes = int(_pk_ms / 1000.0 * self.RATE * self.FORMAT_WIDTH)
 
         # Find AIOC audio device by ALSA card name if not specified.
         # PyAudio via PipeWire doesn't enumerate ALSA hardware devices,
@@ -2249,8 +2332,45 @@ class AIOCPlugin(AudioPlugin):
     # (running on the gateway) has exclusive device access; orchestration is
     # owned by packet_radio.py.
 
+    def put_audio(self, pcm):
+        """Play gateway TX audio, holding it back until the radio is keyed.
+
+        See _prekey_buf in __init__. When keyed, any held audio goes out
+        ahead of the live chunk so ordering is preserved.
+        """
+        if not pcm:
+            return
+        if not self._ptt_on:
+            if self._prekey_max_bytes <= 0:
+                return  # buffering disabled — old behaviour (chunk is lost)
+            with self._prekey_lock:
+                self._prekey_buf.append(pcm)
+                self._prekey_bytes += len(pcm)
+                while (self._prekey_bytes > self._prekey_max_bytes
+                       and len(self._prekey_buf) > 1):
+                    self._prekey_bytes -= len(self._prekey_buf.popleft())
+            return
+        pending = self._take_prekey()
+        if pending:
+            super().put_audio(pending)
+        super().put_audio(pcm)
+
+    def _take_prekey(self):
+        """Atomically remove and return everything held (b'' if nothing)."""
+        with self._prekey_lock:
+            if not self._prekey_buf:
+                return b''
+            data = b''.join(self._prekey_buf)
+            self._prekey_buf.clear()
+            self._prekey_bytes = 0
+        return data
+
     def _set_ptt(self, state_on):
-        """Key or unkey the radio via AIOC HID GPIO."""
+        """Key or unkey the radio via AIOC HID GPIO.
+
+        Serialised on _ptt_hw_lock so the command path and the safety-timer
+        path can't interleave their write + state update.
+        """
         if not self._hid:
             return {"ok": False, "error": "HID not connected"}
         try:
@@ -2259,8 +2379,19 @@ class AIOCPlugin(AudioPlugin):
             iomask = 1 << (self._ptt_channel - 1)
             iodata = state << (self._ptt_channel - 1)
             data = struct.pack("<BBBBB", 0, 0, iodata, iomask, 0)
-            self._hid.write(bytes(data))
-            self._ptt_on = state_on
+            with self._ptt_hw_lock:
+                self._hid.write(bytes(data))
+                self._ptt_on = state_on
+            # Release held audio as soon as the radio is actually keyed. Done
+            # outside the HW lock (the aplay write can block) and also here
+            # rather than only in put_audio, so a transmission that ended
+            # inside the key-up window isn't stranded in the buffer.
+            if state_on:
+                pending = self._take_prekey()
+                if pending:
+                    super().put_audio(pending)
+            else:
+                self._take_prekey()  # discard — belongs to a finished TX
             self._status_dirty = True  # trigger immediate status report
             print(f"  [Link] AIOCPlugin: PTT {'ON' if state_on else 'OFF'}")
             return {"ok": True, "ptt": state_on}

@@ -33,7 +33,7 @@ def watchdog_trace_loop(gw):
            "\tmu_tx\tmu_rx\tmu_sdr1\tmu_sdr2\tmu_remote\tmu_announce\tmu_spk"
            "\tlvl_tx\tlvl_rx\tlvl_sdr1\tlvl_sdr2\tlvl_sv"
            "\tq_aioc\tq_sdr1\tq_sdr2"
-           "\tptt\tvad\trebro_ptt\trss_mb\n")
+           "\tptt\tvad\trss_mb\n")
     try:
         with open(out_path, 'a') as f:
             f.write(f"\n# Watchdog started {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -116,10 +116,9 @@ def watchdog_trace_loop(gw):
         q_sdr1 = 0
         q_sdr2 = 0
 
-        # PTT / VAD / rebroadcast
+        # PTT / VAD
         ptt = 1 if gw.ptt_active else 0
         vad = 1 if gw.vad_active else 0
-        rebro = 1 if gw._rebroadcast_ptt_active else 0
 
         # RSS memory (KB → MB)
         try:
@@ -135,7 +134,7 @@ def watchdog_trace_loop(gw):
                 f"\t{mu_tx}\t{mu_rx}\t{mu_sdr1}\t{mu_sdr2}\t{mu_remote}\t{mu_announce}\t{mu_spk}"
                 f"\t{lvl_tx}\t{lvl_rx}\t{lvl_sdr1}\t{lvl_sdr2}\t{lvl_sv}"
                 f"\t{q_aioc}\t{q_sdr1}\t{q_sdr2}"
-                f"\t{ptt}\t{vad}\t{rebro}\t{rss_mb:.1f}\n")
+                f"\t{ptt}\t{vad}\t{rss_mb:.1f}\n")
         buffer.append(line)
 
         # Flush to disk periodically
@@ -555,18 +554,6 @@ def dump_audio_trace(gw, out_path=None):
         else:
             f.write("GAP-STUTTER EVENTS: none detected\n\n")
 
-        # ── Rebroadcast summary ──
-        rebro_vals = [r[REBRO] for r in trace if len(r) > REBRO and r[REBRO]]
-        if rebro_vals:
-            n = len(trace)
-            r_sig = sum(1 for v in rebro_vals if v == 'sig')
-            r_hold = sum(1 for v in rebro_vals if v == 'hold')
-            r_idle = sum(1 for v in rebro_vals if v == 'idle')
-            f.write("SDR REBROADCAST\n")
-            f.write(f"  active: {len(rebro_vals)}/{n} ticks  "
-                    f"sig={r_sig} ({100*r_sig/n:.1f}%)  "
-                    f"hold={r_hold} ({100*r_hold/n:.1f}%)  "
-                    f"idle={r_idle} ({100*r_idle/n:.1f}%)\n\n")
 
         # ── Audio quality diagnostics (new columns 50-53) ──
         has_aq = len(trace[0]) > SPK_DROPS if trace else False
@@ -705,7 +692,6 @@ def dump_audio_trace(gw, out_path=None):
         f.write("  SDR:   D=ducked F=fade-in(first-inc) O=fade-out(going-silent) S=signal H=hold_inc X=sole_src I=inc(other) .=excluded\n")
         f.write("  * MISSING-FADE-IN tick: SDR included at duck-release without fade-in → click risk\n")
         f.write("  PB: B=prebuffering (waiting to rebuild cushion) .=normal\n")
-        f.write("  RB: sig=rebroadcast sending  hold=PTT hold  idle=on but no signal\n")
         f.write("  s1_disc/s2_disc/a_disc/o_disc: sample discontinuity at chunk boundary (abs delta, >5000=click)\n")
         f.write("  s1_sba/a_sba: sub-buffer bytes remaining AFTER serving this chunk\n")
         f.write("  kv_txf: TX Opus frames sent | kv_txdrop: TX PCM bytes dropped (partial frame) | kv_txrms: TX input RMS | kv_ann: TX silenced by PTT settle delay\n\n")
@@ -720,7 +706,7 @@ def dump_audio_trace(gw, out_path=None):
                f"{'s1_disc':>7} {'s2_disc':>7} {'a_disc':>7} {'o_disc':>7} "
                f"{'kv_rxf':>6} {'kv_rxB':>6} {'kv_qd':>5} {'kv_sbb':>7} {'kv_sba':>7} {'kv_got':>6} {'kv_rms':>7} {'kv_q':>4} "
                f"{'kv_txf':>6} {'kv_txdrop':>9} {'kv_txrms':>8} {'kv_txerr':>8} {'kv_ann':>6} "
-               f"{'sources':>14} {'state':>14} {'rb':>4}\n")
+               f"{'sources':>14} {'state':>14}\n")
         f.write(hdr)
         f.write('-' * len(hdr) + '\n')
         for i, r in enumerate(trace):
@@ -753,7 +739,6 @@ def dump_audio_trace(gw, out_path=None):
             ssb2 = r[SSB2] if len(r) > SSB2 else -1
             pb1 = 'B' if (len(r) > SPREBUF and r[SPREBUF]) else '.'
             pb2 = 'B' if (len(r) > S2PREBUF and r[S2PREBUF]) else '.'
-            rb = r[REBRO] if len(r) > REBRO else ''
             sv_ms = r[SVMS] if len(r) > SVMS else 0.0
             sv_n = r[SVSENT] if len(r) > SVSENT else 0
             s1_disc = r[SDR1_DISC] if _has_enh else 0.0
@@ -786,7 +771,7 @@ def dump_audio_trace(gw, out_path=None):
                     f"{s1_disc:7.0f} {s2_disc:7.0f} {a_disc:7.0f} {o_disc:7.0f} "
                     f"{kv_rxf:6} {kv_rxB:6} {kv_qd:5} {kv_sbb:7} {kv_sba:7} {'yes' if kv_got else 'no':>6} {kv_rms:7.0f} {kv_q:4} "
                     f"{kv_txf:6} {kv_txdrop:9} {kv_txrms:8.0f} {kv_txerr:8} {kv_ann:>6} "
-                    f"{r[MSRC]:>14} {st} {rb:>4}\n")
+                    f"{r[MSRC]:>14} {st}\n")
 
         # ── KV4P summary ──
         kv4p_ticks = [r for r in trace if len(r) > KV4P_RXF]

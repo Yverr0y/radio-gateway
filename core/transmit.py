@@ -19,8 +19,6 @@ import sys
 import threading
 import time
 
-import numpy as np
-from audio_util import pcm_level, pcm_db
 
 
 class _TransmitMixin:
@@ -70,7 +68,7 @@ class _TransmitMixin:
                 dur_ms = (time.monotonic() - _gc_cb._t0) * 1000
                 self._gc_events_main.append((time.monotonic(), info.get('generation', -1), dur_ms))
         _gc.callbacks.append(_gc_cb)
-        print("  Audio thread: GC disabled, manual gen-0 every 5s")
+        print("  Audio thread: GC disabled (BusManager owns collection)")
 
         consecutive_errors = 0
         max_consecutive_errors = 10
@@ -118,7 +116,8 @@ class _TransmitMixin:
             _tr_sdr_prebuf = False
             _tr_sdr2_prebuf = False
             _out_disc = 0.0  # reset per tick
-            _tr_rebro = ''  # rebroadcast state: ''=off, 'sig'=sending, 'hold'=PTT hold, 'idle'=on but no signal
+            _tr_rebro = ''  # 22: retired (legacy SDR rebroadcast) — slot kept
+                            # so the trace CSV column indices stay stable
             _tr_sv_ms = 0.0   # RemoteAudioServer send_audio cumulative time (ms)
             _tr_sv_sent = 0   # number of send_audio calls this tick
             active_sources = []
@@ -153,9 +152,6 @@ class _TransmitMixin:
                     self.audio_capture_active = False
                     continue
 
-                # Drain SDR rebroadcast queue (duckee_only_audio + ptt flag)
-                sdr_only_audio, ptt_required = self.bus_manager.drain_sdr_rebroadcast()
-
                 # Drain PCM/MP3 for WebSocket push
                 _bm_pcm = self.bus_manager.drain_pcm()
                 _bm_mp3 = self.bus_manager.drain_mp3()
@@ -173,68 +169,13 @@ class _TransmitMixin:
                 if _bm_levels:
                     active_sources = [bid for bid, lvl in _bm_levels.items() if lvl > 0]
 
-                # SDR rebroadcast: route SDR-only mix to AIOC radio TX
-                if self.sdr_rebroadcast and not ptt_required and sdr_only_audio is not None:
-                    sdr_has_signal = pcm_db(sdr_only_audio) > -50.3  # was rms > 100
-
-                    if sdr_has_signal:
-                        self._rebroadcast_ptt_hold_until = time.monotonic() + self.config.SDR_REBROADCAST_PTT_HOLD
-                        self._rebroadcast_sending = True
-                        self.last_sound_time = time.time()
-                    else:
-                        self._rebroadcast_sending = False
-
-                    rebroadcast_ptt_needed = time.monotonic() < self._rebroadcast_ptt_hold_until
-
-                    if rebroadcast_ptt_needed:
-                        self.last_sound_time = time.time()
-
-                        if not self._rebroadcast_ptt_active and not self.tx_muted and not self.manual_ptt_mode:
-                            self.set_ptt_state(True)
-                            self._ptt_change_time = time.monotonic()
-                            self._rebroadcast_ptt_active = True
-                            if self.radio_source:
-                                self.radio_source.enabled = False
-                            self._trace_events.append((time.monotonic(), 'rebro_ptt', 'on'))
-
-                        pcm = sdr_only_audio if sdr_has_signal else b'\x00' * len(sdr_only_audio)
-                        if self.output_stream and not self.tx_muted:
-                            if self.config.OUTPUT_VOLUME != 1.0:
-                                arr = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
-                                pcm = np.clip(arr * self.config.OUTPUT_VOLUME, -32768, 32767).astype(np.int16).tobytes()
-                            try:
-                                self.output_stream.write(pcm, exception_on_overflow=False)
-                            except TypeError:
-                                self.output_stream.write(pcm)
-
-                        tx_level_pcm = pcm if sdr_has_signal else sdr_only_audio
-                        self.rx_audio_level = pcm_level(tx_level_pcm, self.rx_audio_level)
-                        self.last_rx_audio_time = time.time()
-
-                        _tr_rebro = 'sig' if sdr_has_signal else 'hold'
-                    else:
-                        if self._rebroadcast_ptt_active and self.ptt_active:
-                            self.set_ptt_state(False)
-                            self._ptt_change_time = time.monotonic()
-                            self._rebroadcast_ptt_active = False
-                            if self.radio_source:
-                                self.radio_source.enabled = True
-                            self._trace_events.append((time.monotonic(), 'rebro_ptt', 'off'))
-                        self._rebroadcast_sending = False
-                        _tr_rebro = 'idle'
-                elif self.sdr_rebroadcast and not ptt_required and sdr_only_audio is None:
-                    self._rebroadcast_sending = False
-                    if time.monotonic() >= self._rebroadcast_ptt_hold_until:
-                        if self._rebroadcast_ptt_active and self.ptt_active:
-                            self.set_ptt_state(False)
-                            self._ptt_change_time = time.monotonic()
-                            self._rebroadcast_ptt_active = False
-                            if self.radio_source:
-                                self.radio_source.enabled = True
-                            self._trace_events.append((time.monotonic(), 'rebro_ptt', 'off'))
-                        _tr_rebro = 'idle'
-                    else:
-                        _tr_rebro = 'hold'
+                # Legacy SDR rebroadcast (SDR-only mix -> AIOC TX, keyed from
+                # this loop) was retired 2026-07-27. It had been transmitting a
+                # dead carrier since f9c3dfe (2026-03-30) moved AIOC TX audio
+                # into TH9800Plugin, leaving gw.output_stream permanently None.
+                # The supported equivalent is routing: wire the SDR source to a
+                # solo bus with the radio's *_tx sink, which does PTT + TX audio
+                # properly through SoloBus. See docs/mixer-v2-design.md.
 
                 # WebSocket PCM push — now done directly from bus tick thread
                 # Main loop drain kept for level metering only, no WS push
@@ -313,7 +254,7 @@ class _TransmitMixin:
                         _tr_sdr2_sb,                          # 19: SDR2 sub-buffer bytes before
                         _tr_sdr_prebuf,                       # 20: SDR1 _prebuffering flag
                         _tr_sdr2_prebuf,                      # 21: SDR2 _prebuffering flag
-                        _tr_rebro,                            # 22: rebroadcast state (''=off, sig/hold/idle)
+                        _tr_rebro,                            # 22: retired (legacy rebroadcast); always ''
                         _tr_sv_ms,                            # 23: RemoteAudioServer send_audio time (ms)
                         _tr_sv_sent,                          # 24: number of SV send_audio calls this tick
                         # === Enhanced instrumentation (25+) ===
@@ -356,7 +297,10 @@ class _TransmitMixin:
                 # Reset per-tick counters
                 self._spk_drop_count = 0
                 self._last_pcm_drain_n = 0
-                # Manual GC: gen-0 only, every 100 ticks (~5s), during sleep window
-                if self._tx_loop_tick % 100 == 0:
-                    _gc.collect(0)
+                # No collect here. This loop used to run its own gen-0 sweep
+                # every ~5 s, duplicating BusManager's — and since CPython
+                # collects with the GIL held, that was a second stop-the-world
+                # pause hitting the bus tick for no extra benefit. BusManager
+                # owns the gen-0/1/2 cadence; the callback above still records
+                # those pauses for the trace.
 

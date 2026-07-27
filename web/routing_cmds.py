@@ -233,6 +233,30 @@ class _RoutingCmdsMixin:
                 return {'ok': True, 'atten_db': atten}
         return {'ok': False, 'error': f'bus not found: {bus_id}'}
 
+    def _routing_cmd_set_dfn_bypass(self, data, busses, connections):
+        # Denoise bypass threshold in dBFS: chunks below this RMS skip the
+        # denoise worker (CPU saver). Clamped to [-90, -20]; -60 is the
+        # historical default.
+        bus_id = data.get('bus', '')
+        try:
+            bypass = max(-90.0, min(-20.0, float(data.get('bypass_db', -60.0))))
+        except (ValueError, TypeError):
+            return {'ok': False, 'error': 'invalid bypass_db value'}
+        for b in busses:
+            if b['id'] == bus_id:
+                proc = b.setdefault('processing', {})
+                proc['dfn_bypass_db'] = bypass
+                self._save_routing_config(busses, connections)
+                bm = getattr(self.gateway, 'bus_manager', None) if self.gateway else None
+                if bm:
+                    if bus_id in bm._bus_config:
+                        bm._bus_config[bus_id]['dfn_bypass_db'] = bypass
+                    _bp = bm._bus_processors.get(bus_id)
+                    if _bp is not None:
+                        _bp.dfn_bypass_db = bypass
+                return {'ok': True, 'bypass_db': bypass}
+        return {'ok': False, 'error': f'bus not found: {bus_id}'}
+
     def _routing_cmd_set_bus_delay(self, data, busses, connections):
         bus_id = data.get('bus', '')
         try:
@@ -411,6 +435,7 @@ class _RoutingCmdsMixin:
         'toggle_proc':     _routing_cmd_toggle_proc,
         'set_dfn_mix':     _routing_cmd_set_dfn_mix,
         'set_dfn_atten':   _routing_cmd_set_dfn_atten,
+        'set_dfn_bypass':  _routing_cmd_set_dfn_bypass,
         'set_dfn_engine':  _routing_cmd_set_dfn_engine,
         'set_bus_delay':   _routing_cmd_set_bus_delay,
         'set_loop_hours':  _routing_cmd_set_loop_hours,

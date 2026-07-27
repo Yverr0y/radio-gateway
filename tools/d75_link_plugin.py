@@ -463,17 +463,14 @@ class D75Plugin(RadioPlugin):
 
     @staticmethod
     def _apply_volume(pcm, gain):
-        """Apply a gain multiplier to 16-bit signed LE PCM audio."""
-        import struct as _struct
-        n = len(pcm) // 2
-        samples = _struct.unpack(f'<{n}h', pcm)
-        out = []
-        for s in samples:
-            v = int(s * gain)
-            if v > 32767: v = 32767
-            elif v < -32768: v = -32768
-            out.append(v)
-        return _struct.pack(f'<{n}h', *out)
+        """Apply a gain multiplier to 16-bit signed LE PCM audio.
+
+        Delegates to gateway_link.pcm_apply_gain, which runs vectorised when
+        numpy is present and falls back to this module's original per-sample
+        loop otherwise. Byte-identical either way.
+        """
+        from gateway_link import pcm_apply_gain
+        return pcm_apply_gain(pcm, gain)
 
     @staticmethod
     def _db_to_linear(db):

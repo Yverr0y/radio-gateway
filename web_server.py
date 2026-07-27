@@ -78,6 +78,11 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         'PTT_RELAY_DEVICE': 'device path',
         'PTT_RELAY_BAUD': 'bps',
         'PTT_RELEASE_DELAY': 'seconds',
+        'LINK_AUTO_PTT_THRESHOLD': 'level 0-100 (higher = needs louder audio to key)',
+        'LINK_AUTO_PTT_HOLD': 'seconds (hold after last audio above threshold)',
+        'PTT_PREKEY_BUFFER_MS': 'ms of TX audio buffered during key-up (0 = off)',
+        'LINK_JITTER_PREFILL': '50ms chunks (4 = 200ms cushion; 2 ok on wired LAN)',
+        'REMOTE_AUDIO_JITTER_PREFILL': '50ms chunks (8 = 400ms cushion)',
         'PTT_ACTIVATION_DELAY': 'seconds',
         'PTT_TTS_DELAY': 'seconds (silence before TTS)',
         'PTT_ANNOUNCEMENT_DELAY': 'seconds (silence after PTT key-up)',
@@ -156,7 +161,6 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         'SWITCH_PADDING_TIME': 'seconds (silence at transitions)',
         'SDR_DUCK_COOLDOWN': 'seconds (hold after unduck)',
         'SDR_SIGNAL_THRESHOLD': 'dBFS (lower = more sensitive)',
-        'SDR_REBROADCAST_PTT_HOLD': 'seconds',
         # Remote
         'REMOTE_AUDIO_HOST': 'IP address or hostname',
         'REMOTE_AUDIO_PORT': 'port (1–65535)',
@@ -438,6 +442,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             'TX_RADIO', 'PTT_METHOD', 'PTT_RELAY_DEVICE', 'PTT_RELAY_BAUD',
             'PTT_RELEASE_DELAY', 'PTT_ACTIVATION_DELAY',
             'PTT_TTS_DELAY', 'PTT_ANNOUNCEMENT_DELAY',
+            'LINK_AUTO_PTT_THRESHOLD', 'LINK_AUTO_PTT_HOLD', 'PTT_PREKEY_BUFFER_MS',
+            'LINK_JITTER_PREFILL', 'REMOTE_AUDIO_JITTER_PREFILL',
             'TX_TALKBACK',
         ]),
         ('radio', 'Radio Interface (AIOC)', [
@@ -478,7 +484,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         ]),
         ('switching', 'Signal Detection & Switching', [
             'SIGNAL_ATTACK_TIME', 'SIGNAL_RELEASE_TIME', 'SWITCH_PADDING_TIME',
-            'SDR_DUCK_COOLDOWN', 'SDR_SIGNAL_THRESHOLD', 'SDR_REBROADCAST_PTT_HOLD',
+            'SDR_DUCK_COOLDOWN', 'SDR_SIGNAL_THRESHOLD',
             'REDUCK_INHIBIT_TIME',
             'REPEATER_PTT_HOLD', 'SIMPLEX_TAIL_TIME', 'SIMPLEX_MAX_BUFFER',
         ]),

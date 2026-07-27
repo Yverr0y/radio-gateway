@@ -140,6 +140,11 @@ class Config:
             'PTT_RELAY_BAUD': 9600,
             'AIOC_PTT_CHANNEL': 3,
             'PTT_RELEASE_DELAY': 0.5,
+            'LINK_AUTO_PTT_THRESHOLD': 10,   # Bus level (0-100) that keys a link endpoint's TX
+            'LINK_AUTO_PTT_HOLD': 0.5,       # Seconds to hold a link endpoint keyed after the last chunk
+            'PTT_PREKEY_BUFFER_MS': 500,     # ms of TX audio held while a bus PTT key is still being applied (0=off)
+            'LINK_JITTER_PREFILL': 4,        # 50ms chunks buffered before a link endpoint starts playing (latency vs dropout)
+            'REMOTE_AUDIO_JITTER_PREFILL': 8, # same for the Windows remote-audio client (burstier, needs more)
             'PTT_ACTIVATION_DELAY': 0.1,
             'AIOC_VID': 0x1209,
             'AIOC_PID': 0x7388,
@@ -249,7 +254,6 @@ class Config:
             'SWITCH_PADDING_TIME': 1.0,  # Seconds of silence inserted at each transition (duck-out and duck-in)
             'SDR_DUCK_COOLDOWN': 3.0,   # After lower-priority SDR unducks, seconds before higher-priority SDR can re-duck it
             'SDR_SIGNAL_THRESHOLD': -70.0,  # dBFS threshold for SDR signal detection (inclusion + ducking); lower = more sensitive
-            'SDR_REBROADCAST_PTT_HOLD': 3.0,  # Seconds to hold PTT after SDR audio stops during rebroadcast
             # EchoLink Integration (Phase 3B)
             'ENABLE_ECHOLINK': False,
             'ECHOLINK_RX_PIPE': '/tmp/echolink_rx',

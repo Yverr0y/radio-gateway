@@ -599,7 +599,6 @@ function updateStatus() {
     h+='<div class="st-item"><span class="st-label">Mumble:</span><span class="st-val '+(s.mumble?'green':'red')+flashCls('mumble',!!s.mumble)+'">'+(s.mumble?'OK':'DOWN')+'</span></div>';
     h+='<div class="st-item"><span class="st-label">PTT:</span><span class="st-val '+(s.ptt_active?'red':'green')+flashCls('ptt',!!s.ptt_active)+'">'+(s.ptt_active?'ON':'off')+'</span> <span class="st-label">('+s.ptt_method+')</span></div>';
     if(s.sdr1_enabled&&s.sdr1_duck) h+='<div class="st-item"><span class="st-label">Duck:</span><span class="st-val green">ON</span></div>';
-    if(s.sdr1_enabled&&s.sdr_rebroadcast) h+='<div class="st-item"><span class="st-label">Rebroadcast:</span><span class="st-val yellow">ON</span></div>';
     h+='<div class="st-item"><span class="st-label">Man PTT:</span><span class="st-val '+(s.manual_ptt?'red':'green')+flashCls('manual_ptt',!!s.manual_ptt)+'">'+(s.manual_ptt?'ON':'off')+'</span></div>';
     if(s.tx_talkback) h+='<div class="st-item"><span class="st-label">TX Talkback:</span><span class="st-val yellow">ON</span></div>';
     if(s.ms1_state) h+='<div class="st-item"><span class="st-label">MS1:</span><span class="st-val '+(s.ms1_state==='running'?'green':s.ms1_state==='error'?'red':'white')+flashCls('ms1',s.ms1_state)+'">'+(s.ms1_state==='running'?'ON':'OFF')+'</span></div>';

@@ -634,7 +634,7 @@ class FilePlaybackSource(AudioSource):
 
         # Release PTT immediately (don't wait for timeout)
         gw = self.gateway
-        if gw.ptt_active and not gw.manual_ptt_mode and not gw._rebroadcast_ptt_active:
+        if gw.ptt_active and not gw.manual_ptt_mode:
             gw.ptt_active = False
             gw._pending_ptt_state = False
 
@@ -1376,6 +1376,8 @@ class EchoLinkSource(AudioSource):
         self.tx_pipe = None
         self.connected = False
         self.last_audio_time = 0
+        # Carries the remainder of a short pipe read to the next get_audio.
+        self._sub_buffer = b''
         
         # Try to setup IPC
         if config.ENABLE_ECHOLINK:
@@ -1432,20 +1434,29 @@ class EchoLinkSource(AudioSource):
         
         try:
             chunk_bytes = chunk_size * self.config.AUDIO_CHANNELS * 2  # 16-bit
-            data = self.rx_pipe.read(chunk_bytes)
-            
-            if data and len(data) == chunk_bytes:
-                self.last_audio_time = time.time()
-                
-                # Apply volume
-                if self.volume != 1.0:
-                    arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                    data = np.clip(arr * self.volume, -32768, 32767).astype(np.int16).tobytes()
 
-                return data, False  # No PTT control
-            else:
+            # A non-blocking pipe read returns whatever is buffered, which is
+            # very often less than a full chunk. The old code compared
+            # `len(data) == chunk_bytes` and threw everything else away, so
+            # any partial read silently dropped that audio and the stream
+            # arrived chopped. Accumulate instead and only serve whole chunks.
+            data = self.rx_pipe.read(chunk_bytes)
+            if data:
+                self._sub_buffer += data
+            if len(self._sub_buffer) < chunk_bytes:
                 return None, False
-                
+            out = self._sub_buffer[:chunk_bytes]
+            self._sub_buffer = self._sub_buffer[chunk_bytes:]
+
+            self.last_audio_time = time.time()
+
+            # Apply volume
+            if self.volume != 1.0:
+                arr = np.frombuffer(out, dtype=np.int16).astype(np.float32)
+                out = np.clip(arr * self.volume, -32768, 32767).astype(np.int16).tobytes()
+
+            return out, False  # No PTT control
+
         except BlockingIOError:
             # No data available (non-blocking read)
             return None, False
@@ -1681,7 +1692,16 @@ class RemoteAudioSource(AudioSource):
         # LinkAudioSource. Un-primes only on disconnect; transient underruns
         # emit silence but stay primed. 8 chunks = ~400 ms initial cushion,
         # maxsize=32 = ~1.6 s absorption capacity for bus-side stalls.
-        self._jitter_prefill = 8
+        # 8 chunks = ~400 ms. Higher than the link default because this feed
+        # comes from a Windows client whose WASAPI callback gaps are much
+        # burstier than a link endpoint's. maxsize=32 caps absorption at
+        # ~1.6 s. Clamped to [1, 31]: 0 defeats the buffer, >= maxsize can
+        # never prime.
+        try:
+            _pf = int(getattr(config, 'REMOTE_AUDIO_JITTER_PREFILL', 8))
+        except (TypeError, ValueError):
+            _pf = 8
+        self._jitter_prefill = max(1, min(_pf, 31))
         self._jitter_primed = False
 
     def setup_audio(self, port_override=None):
@@ -1914,13 +1934,51 @@ class LinkAudioSource(AudioSource):
         self._chunk_queue = _queue_mod.deque(maxlen=16)
         self._sub_buffer = b''
         self._link_server = None  # Set by gateway_core after init
-        self._jitter_prefill = 4  # wait for N chunks before draining (absorbs endpoint jitter)
+        # Chunks (50 ms each) to accumulate before draining. This is the
+        # dominant tunable in end-to-end latency: 4 = 200 ms of cushion.
+        # A wired LAN endpoint can usually run 2; keep 4+ for WiFi or a
+        # Cloudflare-tunnelled endpoint. Tune with evidence, not taste —
+        # rg_link_audio_underruns_total counts what a too-low value costs.
+        # Per-endpoint override lives in link_endpoint_settings and is
+        # applied by set_jitter_prefill() once the endpoint registers.
+        self._jitter_prefill = self._clamp_prefill(
+            getattr(config, 'LINK_JITTER_PREFILL', 4))
         self._last_push_mono = time.monotonic()  # track last audio arrival for underrun timeout
         # Device identity — set by _link_on_register, used by all consumers
         self.source_id = None      # routing source ID, e.g. "d75", "ftm_150"
         self.sink_id = None        # routing TX sink ID, e.g. "d75_tx", "ftm_150_tx"
         self.plugin_type = None    # device class from REGISTER, e.g. "d75", "aioc", "audio"
         self._jitter_primed = False
+
+    def _clamp_prefill(self, value):
+        """Keep prefill in [1, queue_maxlen-1].
+
+        0 would defeat the buffer entirely — every scheduling hiccup becomes
+        a dropout. Above maxlen the queue can never reach the threshold, so
+        the source would never prime and would stay silent forever. Exactly
+        maxlen does prime, but only with the queue completely full, i.e. at
+        the point where the next push starts dropping the oldest chunk — so
+        the ceiling is maxlen-1 to keep one chunk of headroom.
+        """
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            v = 4
+        return max(1, min(v, (self._chunk_queue.maxlen or 16) - 1))
+
+    def set_jitter_prefill(self, value):
+        """Change the prefill depth at runtime (per-endpoint tuning).
+
+        Takes effect on the next prime — i.e. after the current transmission
+        ends — so it never chops audio that is already flowing.
+        """
+        old = self._jitter_prefill
+        self._jitter_prefill = self._clamp_prefill(value)
+        if self._jitter_prefill != old:
+            print(f"  [Link:{self.endpoint_name}] jitter prefill "
+                  f"{old} -> {self._jitter_prefill} chunks "
+                  f"({self._jitter_prefill * 50} ms cushion)")
+        return self._jitter_prefill
 
     def setup_audio(self):
         return True
@@ -2820,12 +2878,15 @@ class StreamOutputSource:
         return self._bytes_sent / (1024 * 1024)
     
     def cleanup(self):
-        """Close pipe"""
-        if self.pipe:
-            try:
-                self.pipe.close()
-            except:
-                pass
+        """Shut the stream down. Alias for close() — the gateway's shutdown
+        path calls cleanup() on every source uniformly.
+
+        This used to reference `self.pipe`, an attribute that has never
+        existed on this class (it predates the DarkIce->direct-Icecast
+        rewrite), so shutdown raised AttributeError here every single time
+        and the encoder/socket were left to the OS instead of being closed.
+        """
+        self.close()
 
 
 

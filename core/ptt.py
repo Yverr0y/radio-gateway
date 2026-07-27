@@ -85,9 +85,17 @@ class _PTTMixin:
         except Exception as e:
             print(f"\n[PTT] AIOC error: {e}")
             self.notify(f"PTT error: {e}")
-            # Ensure drain is resumed on any error
-            if _cat and _cat._drain_paused:
-                _cat._drain_paused = False
+            # Restore the serial relay to USB Controlled as well as resuming
+            # the drain. Resuming the drain alone (the old behaviour) left
+            # RTS in Radio Controlled after a failed key-on, so CAT was
+            # effectively dead until the next successful key cycle.
+            if _cat:
+                try:
+                    _cat.set_rts(True)  # USB Controlled
+                except Exception as _re:
+                    print(f"\n[PTT] RTS restore failed: {_re}")
+                finally:
+                    _cat._drain_paused = False
 
     def _ptt_relay(self, state_on):
         """PTT via CH340 USB relay."""

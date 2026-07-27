@@ -225,11 +225,22 @@ def apply_gain(pcm, gain):
 # ---------------------------------------------------------------------------
 
 def _compute_local_version():
-    """Compute hash of local endpoint files."""
+    """Compute hash of local endpoint files.
+
+    This list MUST stay identical to _ENDPOINT_FILES in web_routes_get.py,
+    in the same order — the gateway hashes its copies the same way and the
+    two are compared directly. They had drifted (log_shipper.py was missing
+    here), so the hashes could never match: every check logged "New version
+    available", downloaded the whole ~225 KB bundle, found the contents
+    identical and logged "Files unchanged despite version mismatch". Updates
+    still worked (the per-file content compare is what actually gates them)
+    but the version signal was pure noise, which is exactly the signal you
+    need when a deploy silently fails.
+    """
     import hashlib
     h = hashlib.sha256()
     _dir = os.path.dirname(os.path.abspath(__file__))
-    for fname in ['gateway_link.py', 'link_endpoint.py',
+    for fname in ['gateway_link.py', 'link_endpoint.py', 'log_shipper.py',
                   'd75_link_plugin.py', 'remote_bt_proxy.py']:
         path = os.path.join(_dir, fname)
         if os.path.isfile(path):

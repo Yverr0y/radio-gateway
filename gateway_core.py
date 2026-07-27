@@ -383,11 +383,8 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
         self._sink_gains = {}       # {sink_id: float} — runtime only for now
         self.aioc_available = False  # Track if AIOC is connected
 
-        # SDR rebroadcast — route mixed SDR audio to AIOC radio TX
-        self.sdr_rebroadcast = False              # Toggle state (press 'b')
-        self._rebroadcast_ptt_hold_until = 0      # monotonic deadline for PTT hold
-        self._rebroadcast_ptt_active = False       # whether rebroadcast currently has PTT keyed
-        self._rebroadcast_sending = False           # SDR audio actively being sent (for status bar)
+        # Legacy SDR rebroadcast state removed 2026-07-27 — the feature is
+        # retired in favour of routing (SDR source -> solo bus -> <radio>_tx).
 
         # Relay control — radio power button (momentary pulse with 'j' key)
         self.relay_radio = None              # RelayController instance
@@ -617,7 +614,6 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             'sdr1_muted': getattr(self, 'sdr_muted', False),
             'sdr2_muted': getattr(self, 'sdr2_muted', False),
             'sdr1_duck': self.sdr_plugin.duck if self.sdr_plugin else False,
-            'sdr_rebroadcast': getattr(self, 'sdr_rebroadcast', False),
             'tx_talkback': getattr(self, 'tx_talkback', False),
             'remote_muted': getattr(self, 'remote_audio_muted', False),
             'announce_muted': getattr(self, 'announce_input_muted', False),

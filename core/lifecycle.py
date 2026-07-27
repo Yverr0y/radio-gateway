@@ -303,10 +303,10 @@ class _LifecycleMixin:
 
             # Check PTT timeout or if TX is muted
             # (_webmic_ptt_active was write-never dead state — removed)
-            if self.ptt_active and not self.manual_ptt_mode and not self._rebroadcast_ptt_active:
+            if self.ptt_active and not self.manual_ptt_mode:
                 # Release PTT if timeout OR if TX is muted
                 # (Don't keep PTT keyed when muted!)
-                # But don't release if in manual PTT mode or rebroadcast mode
+                # But don't release if in manual PTT mode
                 if current_time - self.last_sound_time > self.config.PTT_RELEASE_DELAY or self.tx_muted:
                     # Queue the HID write to the audio thread.  Clear ptt_active
                     # immediately so this block is not re-entered on the next tick.

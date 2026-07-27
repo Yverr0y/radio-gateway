@@ -417,8 +417,6 @@ def on_text_message(gw, text_message):
             if gw.manual_ptt_mode: ptt += " (manual)"
             s.append(f"\n📻 RADIO:")
             s.append(f"  PTT: {ptt}  Muted: {', '.join(mutes) if mutes else 'None'}")
-            if gw.sdr_rebroadcast:
-                s.append(f"  Rebroadcast: ON")
 
             # Sources
             sources = []
@@ -718,18 +716,6 @@ def handle_key(gw, char):
             gw.manual_ptt_mode = not gw.manual_ptt_mode
             gw._pending_ptt_state = gw.manual_ptt_mode
             gw._trace_events.append((time.monotonic(), 'ptt', 'on' if gw.manual_ptt_mode else 'off'))
-    elif char == 'b':
-        gw.sdr_rebroadcast = not gw.sdr_rebroadcast
-        if not gw.sdr_rebroadcast:
-            if gw._rebroadcast_ptt_active and gw.ptt_active:
-                gw.set_ptt_state(False)
-                gw._ptt_change_time = time.monotonic()
-                gw._rebroadcast_ptt_active = False
-            if gw.radio_source:
-                gw.radio_source.enabled = True
-            gw._rebroadcast_sending = False
-            gw._rebroadcast_ptt_hold_until = 0
-        gw._trace_events.append((time.monotonic(), 'sdr_rebroadcast', 'on' if gw.sdr_rebroadcast else 'off'))
     elif char == 'j':
         if gw.relay_radio and not gw._relay_radio_pressing:
             def _pulse_power():

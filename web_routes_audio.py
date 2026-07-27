@@ -88,7 +88,6 @@ def handle_mixer(handler, parent):
                 'vad': s.get('vad_enabled', False),
                 'agc': getattr(gw.config, 'ENABLE_AGC', False),
                 'echo_cancel': getattr(gw.config, 'ENABLE_ECHO_CANCELLATION', False),
-                'rebroadcast': s.get('sdr_rebroadcast', False),
                 'talkback': getattr(gw, 'tx_talkback', False),
                 'manual_ptt': s.get('manual_ptt', False),
             }, 'boost': {
@@ -179,6 +178,33 @@ def handle_mixer(handler, parent):
                 else:
                     result = {'ok': False, 'error': f'unknown source: {source}'}
 
+        elif action == 'jitter_prefill':
+            # Per-endpoint jitter cushion, in 50 ms chunks. Lower = less
+            # latency, more exposure to network jitter. Watch
+            # rg_link_audio_underruns_total after lowering it: a rising
+            # count is the audible cost showing up before you hear it.
+            ep = data.get('endpoint', '')
+            val = data.get('chunks')
+            _src = gw.link_endpoints.get(ep)
+            if _src is None:
+                for _n, _s in gw.link_endpoints.items():
+                    if getattr(_s, 'source_id', None) == ep:
+                        _src, ep = _s, _n
+                        break
+            if _src is None or not hasattr(_src, 'set_jitter_prefill'):
+                result = {'ok': False, 'error': f'unknown link endpoint: {ep}'}
+            elif val is None:
+                result = {'ok': True, 'endpoint': ep,
+                          'chunks': _src._jitter_prefill,
+                          'ms': _src._jitter_prefill * 50}
+            else:
+                applied = _src.set_jitter_prefill(val)
+                settings = gw.link_endpoint_settings.setdefault(ep, {})
+                settings['jitter_prefill'] = applied
+                gw._save_link_settings()
+                result = {'ok': True, 'endpoint': ep, 'chunks': applied,
+                          'ms': applied * 50}
+
         elif action == 'volume':
             # Set absolute INPUT_VOLUME
             val = data.get('value')
@@ -212,7 +238,7 @@ def handle_mixer(handler, parent):
                 result = {'ok': False, 'error': f'boost not supported for: {source}'}
 
         elif action == 'flag':
-            # Toggle or set a mixer flag (vad, agc, echo_cancel, rebroadcast)
+            # Toggle or set a mixer flag (vad, agc, echo_cancel, talkback)
             flag = data.get('flag', '')
             state = data.get('state')  # true/false or omit for toggle
             if flag == 'vad':
@@ -234,18 +260,13 @@ def handle_mixer(handler, parent):
                     gw.config.ENABLE_ECHO_CANCELLATION = bool(state)
                 result = {'ok': True, 'flag': 'echo_cancel', 'enabled': gw.config.ENABLE_ECHO_CANCELLATION}
             elif flag == 'rebroadcast':
-                if state is None:
-                    new_state = not gw.sdr_rebroadcast
-                else:
-                    new_state = bool(state)
-                gw.sdr_rebroadcast = new_state
-                if not new_state:
-                    # Clean up PTT if disabling rebroadcast
-                    if getattr(gw, '_rebroadcast_ptt_active', False):
-                        gw._rebroadcast_ptt_active = False
-                    if gw.radio_source:
-                        gw.radio_source.enabled = True
-                result = {'ok': True, 'flag': 'rebroadcast', 'enabled': gw.sdr_rebroadcast}
+                # Retired 2026-07-27 — the legacy SDR->radio rebroadcast path
+                # transmitted a dead carrier (its audio sink had been None
+                # since 2026-03-30). Use routing instead: wire the SDR source
+                # to a solo bus carrying the radio's *_tx sink.
+                result = {'ok': False, 'flag': 'rebroadcast',
+                          'error': 'retired — route SDR to a solo bus with the '
+                                   'radio TX sink on the /routing page instead'}
             elif flag == 'talkback':
                 if state is None:
                     gw.tx_talkback = not gw.tx_talkback

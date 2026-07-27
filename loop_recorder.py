@@ -194,10 +194,32 @@ class LoopRecorder:
         self._default_retention_hours = retention_hours
         self._retention = {}     # bus_id → hours (per-bus override)
         self._sample_rate = sample_rate
-        self._active = {}        # bus_id → LoopSegment
+        self._active = {}        # bus_id → LoopSegment (published, feed-owned)
         self._lock = threading.Lock()
-        self._cleanup_counter = 0
         os.makedirs(self._base_dir, exist_ok=True)
+
+        # ── Housekeeping thread ────────────────────────────────────────────
+        # feed() runs on the BusManager tick thread (SCHED_RR) and must never
+        # touch the filesystem. Two things used to happen there:
+        #   * segment rotation constructed a LoopSegment inline — os.makedirs
+        #     plus subprocess.Popen('lame') — while holding the lock EVERY
+        #     loop-recording bus needs, so one rotation stalled them all.
+        #     (The matching close() was moved off-tick after an 800 ms stall;
+        #     the open never was.)
+        #   * retention cleanup ran os.listdir + os.unlink every ~3 s.
+        # Now feed() only appends to an in-memory buffer and this thread does
+        # the spawning and the deleting.
+        self._pending = {}       # bus_id → list of pcm chunks awaiting a segment
+        self._wanted = {}        # bus_id → segment_start datetime to create
+        self._hk_evt = threading.Event()
+        self._hk_running = True
+        self._last_cleanup = 0.0
+        # ~2 s of 50 ms chunks. Only ever holds audio for the few ms a lame
+        # spawn takes; the bound stops a wedged spawn eating memory.
+        self._pending_max = 40
+        self._hk_thread = threading.Thread(
+            target=self._housekeeping_loop, daemon=True, name='LoopRec-hk')
+        self._hk_thread.start()
 
     def set_retention(self, bus_id, hours):
         """Set per-bus retention window in hours."""
@@ -210,46 +232,143 @@ class LoopRecorder:
     # -- Recording ----------------------------------------------------------
 
     def feed(self, bus_id, pcm_data):
-        """Feed PCM audio for a bus.  Called from BusManager thread."""
+        """Feed PCM audio for a bus.  Called from the BusManager tick thread.
+
+        Never does I/O: on the steady-state path this is a dict lookup plus
+        a queue append. When a segment boundary is crossed (or the bus is
+        recording for the first time) the audio is parked in _pending and
+        the housekeeping thread spawns the encoder, then drains the backlog
+        into it — see _housekeeping_loop.
+        """
         seg_start = self._current_segment_start()
-        _old_seg = None
+        _need_hk = False
         with self._lock:
             current = self._active.get(bus_id)
+            if current is not None and current.segment_start == seg_start:
+                current.feed(pcm_data)
+            else:
+                # Boundary crossed / cold start — hand off to housekeeping.
+                buf = self._pending.setdefault(bus_id, [])
+                buf.append(pcm_data)
+                if len(buf) > self._pending_max:
+                    del buf[:len(buf) - self._pending_max]  # drop oldest
+                self._wanted[bus_id] = seg_start
+                _need_hk = True
+        if _need_hk:
+            # Self-heal: if the housekeeping thread ever died (or stop() was
+            # called and recording resumed), nothing would ever create a
+            # segment again and every bus would silently stop recording.
+            _t = getattr(self, '_hk_thread', None)
+            if _t is None or not _t.is_alive():
+                self._hk_running = True
+                self._hk_thread = threading.Thread(
+                    target=self._housekeeping_loop, daemon=True,
+                    name='LoopRec-hk')
+                self._hk_thread.start()
+            self._hk_evt.set()
 
-            # Rotate segment if boundary crossed or first feed
-            if current is None or current.segment_start != seg_start:
-                _old_seg = current  # close outside lock to avoid blocking tick
-                bus_dir = os.path.join(self._base_dir, bus_id)
+    def _housekeeping_loop(self):
+        """Off-tick worker: create segments, close old ones, prune retention."""
+        while self._hk_running:
+            self._hk_evt.wait(timeout=1.0)
+            self._hk_evt.clear()
+            try:
+                self._service_pending()
+            except Exception as e:
+                print(f"  [LoopRec] housekeeping error: {e}")
+            # Retention sweep every 60 s across every bus with data on disk.
+            # (It used to piggyback on feed() every ~3 s and only ever ran for
+            # whichever bus happened to trigger it, so a bus that stopped
+            # feeding was never pruned.)
+            _now = time.monotonic()
+            if _now - self._last_cleanup >= 60.0:
+                self._last_cleanup = _now
+                try:
+                    self._cleanup_all()
+                except Exception as e:
+                    print(f"  [LoopRec] cleanup error: {e}")
+
+    def _service_pending(self):
+        """Create any requested segments and drain buffered audio into them."""
+        with self._lock:
+            wanted = list(self._wanted.items())
+        for bus_id, seg_start in wanted:
+            bus_dir = os.path.join(self._base_dir, bus_id)
+            try:
+                # The expensive part — makedirs + Popen('lame') — runs here,
+                # with no lock held, off the audio thread.
                 os.makedirs(bus_dir, exist_ok=True)
-                current = LoopSegment(bus_id, seg_start, bus_dir, self._sample_rate)
-                self._active[bus_id] = current
+                new_seg = LoopSegment(bus_id, seg_start, bus_dir,
+                                      self._sample_rate)
+            except Exception as e:
+                print(f"  [LoopRec] failed to open segment for {bus_id}: {e}")
+                with self._lock:
+                    # Drop the request and its backlog; retry on the next feed
+                    # rather than spinning on a broken encoder every second.
+                    if self._wanted.get(bus_id) == seg_start:
+                        del self._wanted[bus_id]
+                    self._pending.pop(bus_id, None)
+                continue
+            with self._lock:
+                # Skip if a newer boundary was requested while we were
+                # spawning — the next pass creates that one instead.
+                if self._wanted.get(bus_id) != seg_start:
+                    _stale = new_seg
+                else:
+                    _stale = None
+                    old_seg = self._active.get(bus_id)
+                    for chunk in self._pending.pop(bus_id, []):
+                        new_seg.feed(chunk)
+                    # Publish before closing the old one so an in-flight feed()
+                    # lands on the new segment, not a closing bytearray.
+                    self._active[bus_id] = new_seg
+                    del self._wanted[bus_id]
+            if _stale is not None:
+                _stale.close()
+                continue
+            if old_seg is not None:
+                old_seg.close()   # outside the lock — joins its writer thread
 
-            current.feed(pcm_data)
+    def _cleanup_all(self):
+        """Run retention cleanup for every bus directory on disk."""
+        if not os.path.isdir(self._base_dir):
+            return
+        for bus_id in os.listdir(self._base_dir):
+            if os.path.isdir(os.path.join(self._base_dir, bus_id)):
+                self._cleanup(bus_id)
 
-        # Close old segment in background so writer_thread.join() doesn't stall
-        # the BusManager tick (segment rotation was causing 800ms+ stalls).
-        if _old_seg is not None:
-            import threading as _t
-            _t.Thread(target=_old_seg.close, daemon=True,
-                      name=f'LoopClose-{bus_id}').start()
-
-        # Periodic cleanup (every ~3 seconds at 50ms ticks)
-        self._cleanup_counter += 1
-        if self._cleanup_counter >= 60:
-            self._cleanup_counter = 0
-            self._cleanup(bus_id)
+    def shutdown(self):
+        """Stop the housekeeping thread (called from stop())."""
+        self._hk_running = False
+        self._hk_evt.set()
+        t = getattr(self, '_hk_thread', None)
+        if t is not None and t.is_alive():
+            t.join(timeout=3.0)
 
     def stop(self, bus_id=None):
-        """Stop recording for one bus or all."""
+        """Stop recording for one bus, or all (also stops housekeeping)."""
+        if bus_id is None:
+            # Full stop: park housekeeping first so it can't publish a new
+            # segment behind us, then flush whatever it hadn't got to yet.
+            self.shutdown()
+            try:
+                self._service_pending()
+            except Exception:
+                pass
         with self._lock:
             if bus_id:
-                seg = self._active.pop(bus_id, None)
-                if seg:
-                    seg.close()
+                self._wanted.pop(bus_id, None)
+                self._pending.pop(bus_id, None)
+                segs = [self._active.pop(bus_id, None)]
             else:
-                for seg in self._active.values():
-                    seg.close()
+                self._wanted.clear()
+                self._pending.clear()
+                segs = list(self._active.values())
                 self._active.clear()
+        # close() joins the encoder writer thread — never under the lock.
+        for seg in segs:
+            if seg is not None:
+                seg.close()
 
     # -- Queries ------------------------------------------------------------
 
