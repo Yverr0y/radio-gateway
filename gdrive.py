@@ -43,21 +43,68 @@ class GDriveClient:
 
         # Probe remote in background — slow Google API responses won't block startup
         self._connected = False
-        threading.Thread(target=self._probe, daemon=True, name="gdrive-probe").start()
+        self._probing = False           # guards against overlapping probes
+        self._last_probe = 0.0          # monotonic; throttles the lazy re-probe
+        self._start_probe()
         print(f"  [GDrive] Client ready ({self._rclone_ver}) → {remote}:{folder_path} (probing...)")
 
+    # Probe retry schedule, seconds. The first probe fires ~5 s into gateway
+    # startup, competing with Kokoro ONNX init, Mumble, mDNS and the soundboard
+    # downloading over the same link — rclone measures 0.6 s standalone but has
+    # been seen to exceed 20 s there. Retrying costs nothing and removes the
+    # failure mode this replaced: a single transient timeout left _connected
+    # False for the life of the process, so the UI read "not connected" until
+    # the next gateway restart even though uploads worked fine.
+    _PROBE_BACKOFF = (5, 15, 30, 60, 120)
+    _PROBE_TIMEOUT = 60                 # was 20 — too tight under startup load
+    _PROBE_MIN_INTERVAL = 60            # floor between lazy re-probes
+
+    def _start_probe(self):
+        """Kick off a background probe unless one is already running."""
+        with self._lock:
+            if self._probing:
+                return False
+            self._probing = True
+        threading.Thread(target=self._probe, daemon=True,
+                         name="gdrive-probe").start()
+        return True
+
     def _probe(self):
-        """Background probe — sets self._connected after testing remote access."""
+        """Background probe — retries with backoff until the remote answers.
+
+        Stops as soon as it connects; loss of connectivity later is picked up
+        by the lazy re-probe in get_status(). Never raises: it owns a daemon
+        thread and a failure here must not be able to kill it silently.
+        """
         try:
-            stdout, stderr, rc = self._run('lsd', self._rpath(), timeout=20)
+            for attempt, delay in enumerate((0,) + self._PROBE_BACKOFF, start=1):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    stdout, stderr, rc = self._run('lsd', self._rpath(),
+                                                   timeout=self._PROBE_TIMEOUT)
+                    ok = (rc == 0)
+                    detail = "OK" if ok else f"failed (rc={rc}) {stderr.strip()[:120]}"
+                except Exception as e:
+                    ok, detail = False, f"error: {e}"
+                with self._lock:
+                    self._connected = ok
+                    self._last_probe = time.monotonic()
+                if ok:
+                    # Only announce recovery, not the ordinary first success,
+                    # so a healthy startup stays quiet in the log.
+                    print(f"  [GDrive] Probe OK"
+                          + (f" (attempt {attempt})" if attempt > 1 else ""))
+                    return
+                print(f"  [GDrive] Probe {detail} — attempt {attempt}"
+                      f"{f', retrying in {self._PROBE_BACKOFF[attempt-1]}s' if attempt <= len(self._PROBE_BACKOFF) else ''}")
+            print("  [GDrive] Probe gave up after "
+                  f"{len(self._PROBE_BACKOFF) + 1} attempts; will retry when "
+                  "status is next requested. Uploads are unaffected — the flag "
+                  "only drives the status display.")
+        finally:
             with self._lock:
-                self._connected = rc == 0
-            status = "OK" if rc == 0 else f"failed (rc={rc})"
-            print(f"  [GDrive] Probe {status}")
-        except Exception as e:
-            with self._lock:
-                self._connected = False
-            print(f"  [GDrive] Probe error: {e}")
+                self._probing = False
 
     def _rpath(self, path=''):
         """Build rclone remote path."""
@@ -181,9 +228,22 @@ class GDriveClient:
         return rc == 0
 
     def get_status(self):
-        """Return status dict for web UI / MCP."""
+        """Return status dict for web UI / MCP.
+
+        If we are not currently connected, this kicks off a background re-probe
+        (throttled, never more than one at a time) so simply opening the page
+        recovers a stale 'disconnected' without needing a gateway restart. It
+        does NOT wait for the result — this is called from the web request path
+        and must stay fast, so the caller sees the old value and the next poll
+        sees the new one.
+        """
         with self._lock:
             connected = self._connected
+            probing = self._probing
+            stale = (time.monotonic() - self._last_probe) >= self._PROBE_MIN_INTERVAL
+        if not connected and not probing and stale:
+            self._start_probe()
+            probing = True
         result = {
             'configured': True,
             'remote': self._remote,
@@ -192,7 +252,11 @@ class GDriveClient:
             'folder_accessible': connected,
         }
         if not connected:
-            result['folder_error'] = 'Not yet connected (probe in progress or failed)'
+            result['folder_error'] = (
+                'Re-checking the remote now — reload in a few seconds'
+                if probing else
+                'Not connected. Uploads may still work; this flag only '
+                'reflects the last probe.')
             return result
         try:
             stdout, stderr, rc = self._run('about', f'{self._remote}:', '--json')
