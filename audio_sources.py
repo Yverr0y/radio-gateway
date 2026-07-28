@@ -2709,15 +2709,22 @@ class StreamOutputSource:
                 # (verified 2026-07-28 against the live mount: channels=2,
                 # audio on L while R stayed at exactly zero).
                 #
-                # BOTH key dialects are sent deliberately. Icecast's own docs
-                # give two real-world examples with different names —
+                # BOTH key dialects are sent. Icecast's own docs give two
+                # real-world examples with different names —
                 #   LadioCast: samplerate=44100;quality=10%2e0;channels=2
                 #   Butt:      ice-bitrate=128;ice-channels=2;ice-samplerate=44100
                 # — and Icecast passes the pairs through rather than
-                # normalising them, so which one a downstream consumer reads is
-                # its own choice. Sending both costs a few bytes once per
-                # connect and removes the guess. Extra keys are ignored by a
-                # parser that does not know them.
+                # normalising them.
+                #
+                # CONFIRMED 2026-07-28: Broadcastify reads the ice- prefixed
+                # (Butt) dialect. A build sending ONLY those keys took their
+                # feed page from Sample Rate 0 / Bitrate 0 / Channels 1 to
+                # 22050 / 32 / 2. The bare keys are therefore not required for
+                # Broadcastify and are kept only so this works against Icecast
+                # servers that read the other dialect — this is a public
+                # project and not everyone streams to Broadcastify. Unknown
+                # keys are ignored by any parser, so the cost is a few bytes
+                # once per connect.
                 f"ice-audio-info: samplerate={out_rate};channels={self._channels};"
                 f"bitrate={bitrate};ice-samplerate={out_rate};"
                 f"ice-channels={self._channels};ice-bitrate={bitrate}\r\n"
