@@ -55,6 +55,8 @@ manager_reports.jsonl
 gateway_config.txt
 sdr_channels.json
 routing_config.json
+routing_config.json.bak*
+*.bak-*
 endpoints_state.json
 .transcribe_settings.json
 gateway_config_local.txt
