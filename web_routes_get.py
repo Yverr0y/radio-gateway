@@ -1278,6 +1278,8 @@ def handle_routing_levels(handler, parent):
         # Decay all sink/source levels on each poll (200ms interval)
         gw.speaker_audio_level = max(0, int(getattr(gw, 'speaker_audio_level', 0) * 0.8))
         gw.stream_audio_level = max(0, int(getattr(gw, 'stream_audio_level', 0) * 0.8))
+        gw.stream_audio_l_level = max(0, int(getattr(gw, 'stream_audio_l_level', 0) * 0.8))
+        gw.stream_audio_r_level = max(0, int(getattr(gw, 'stream_audio_r_level', 0) * 0.8))
         gw.mumble_tx_level = max(0, int(getattr(gw, 'mumble_tx_level', 0) * 0.8))
         if getattr(gw, 'mumble_source', None):
             gw.mumble_source.audio_level = max(0, int(gw.mumble_source.audio_level * 0.8))
@@ -1293,6 +1295,11 @@ def handle_routing_levels(handler, parent):
         # Report sink levels — 0 when disconnected so bars clear
         data['speaker'] = gw.speaker_audio_level if 'speaker' in _all_connected else 0
         data['broadcastify'] = gw.stream_audio_level if 'broadcastify' in _all_connected else 0
+        # Dual-channel feed exposes broadcastify_l / broadcastify_r instead of
+        # the mono node, so they need their own entries — keying only on
+        # 'broadcastify' left both new nodes' meters permanently dead.
+        data['broadcastify_l'] = getattr(gw, 'stream_audio_l_level', 0) if 'broadcastify_l' in _all_connected else 0
+        data['broadcastify_r'] = getattr(gw, 'stream_audio_r_level', 0) if 'broadcastify_r' in _all_connected else 0
         data['mumble'] = gw.mumble_tx_level if 'mumble' in _all_connected else 0
         data['transcription'] = getattr(gw, 'transcription_audio_level', 0) if 'transcription' in _all_connected else 0
         gw.transcription_audio_level = max(0, int(getattr(gw, 'transcription_audio_level', 0) * 0.8))

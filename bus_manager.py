@@ -138,6 +138,8 @@ class BusManager:
         # existing UI consumers (status JSON, level bars) keep working.
         self._meters = {
             'stream_audio': 0,
+            'stream_audio_l': 0,   # dual-channel feed, left
+            'stream_audio_r': 0,   # dual-channel feed, right
             'mumble_tx': 0,
             'transcription': 0,
             'remote_audio_tx': 0,
@@ -1182,6 +1184,8 @@ class BusManager:
         # Listen bus: decay sink levels when no audio
         if _is_listen and bus_output.mixed_audio is None:
             self._meters['stream_audio'] = max(0, int(self._meters['stream_audio'] * 0.7))
+            self._meters['stream_audio_l'] = max(0, int(self._meters['stream_audio_l'] * 0.7))
+            self._meters['stream_audio_r'] = max(0, int(self._meters['stream_audio_r'] * 0.7))
             self._meters['mumble_tx'] = max(0, int(self._meters['mumble_tx'] * 0.7))
             self._meters['transcription'] = max(0, int(self._meters['transcription'] * 0.7))
             self._meters['nul'] = max(0, int(self._meters['nul'] * 0.7))
@@ -1253,9 +1257,20 @@ class BusManager:
                 # would offset the channels permanently, and the drift would be
                 # invisible until someone noticed the two receivers had
                 # separated by seconds.
-                self._bcfy_ch['left' if sink_id.endswith('_l') else 'right'] = audio
+                _side = 'left' if sink_id.endswith('_l') else 'right'
+                self._bcfy_ch[_side] = audio
                 if ctx.stream_output.connected:
-                    self._meters['stream_audio'] = _audio_level
+                    # Per-channel meters: the whole point of a dual feed is that
+                    # the two sides carry different receivers, so a shared meter
+                    # would show the same bar on both nodes and hide exactly the
+                    # asymmetry you want to see. 'stream_audio' stays as the
+                    # aggregate for the dashboard and the Prometheus
+                    # bus_audio_level{bus=stream} series.
+                    _mk = 'stream_audio_l' if _side == 'left' else 'stream_audio_r'
+                    self._meters[_mk] = _audio_level
+                    self._meters['stream_audio'] = max(
+                        self._meters.get('stream_audio_l', 0),
+                        self._meters.get('stream_audio_r', 0))
                 if _st and _st.active:
                     _st.record(f'{bus_id}_deliver', sink_id, audio, -1, 'slot')
             elif sink_id == 'broadcastify' and ctx.stream_output is not None:
@@ -1615,6 +1630,8 @@ class BusManager:
             # link endpoint /level field) reading from gw without each
             # consumer learning a new attribute path.
             gw.stream_audio_level = self._meters['stream_audio']
+            gw.stream_audio_l_level = self._meters['stream_audio_l']
+            gw.stream_audio_r_level = self._meters['stream_audio_r']
             gw.mumble_tx_level = self._meters['mumble_tx']
             gw.transcription_audio_level = self._meters['transcription']
             gw.remote_audio_tx_level = self._meters['remote_audio_tx']
