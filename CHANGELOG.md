@@ -4,6 +4,101 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+## [4.1.0] -- 2026-07-28
+
+Broadcastify goes dual-channel, and a round of measurement-led cleanup across the
+audio path. The theme of this release is that several things were quietly wrong
+in the *reporting* rather than the audio — a metric fed from a web handler, a
+bitrate that was never applied, stream metadata that was never sent — and fixing
+the instrumentation is what exposed the rest.
+
+### Added — dual-channel Broadcastify feed
+
+Broadcastify accepts a stereo feed carrying a different receiver on each channel.
+`STREAM_DUAL_CHANNEL` swaps the single `Broadcastify` routing node for a
+`Broadcastify [L]` / `Broadcastify [R]` pair; route a different bus to each.
+
+- The mono node and the L/R pair are **mutually exclusive by construction**, so an
+  invalid routing graph cannot be expressed and there is nothing to validate. A
+  third "both" node was considered and rejected — routing one bus to L and R is
+  already equivalent, and it was the sole source of the invalid state.
+- L and R arrive from different buses, so they are parked in per-tick slots and
+  interleaved at the **end of the tick** into a single enqueue. Both channels
+  therefore share one bounded queue: with a queue each, a drop on one side would
+  offset the channels permanently and the drift would stay invisible until the
+  receivers had separated by seconds. A short buffer is zero-padded, never
+  truncated, for the same reason.
+- Encoder uses `-joint_stereo 0`. Joint stereo codes mid/side to exploit L/R
+  similarity that two independent receivers do not have.
+- Per-channel meters (`stream_audio_l` / `_r`) on the routing page; a shared meter
+  would show identical bars and hide the asymmetry a dual feed exists to show.
+
+### Added — stream diagnostics
+
+- **Dashboard**: last stream error with local timestamp and relative age, retained
+  after recovery so an overnight drop is still visible; plus an inline sparkline
+  of the last hour of bitrate, read through the gateway's own `/prometheus/` proxy.
+- **ffmpeg stderr is captured** rather than sent to `/dev/null`. An encoder exit
+  previously logged "Reader thread exited" with no reason. Drained on a dedicated
+  thread — an unread pipe fills its ~64 KB buffer and blocks the encoder.
+
+### Fixed — Broadcastify
+
+- **`STREAM_BITRATE` had never taken effect.** At 48 kHz the encoder is MPEG-1
+  Layer III, whose lowest Layer III bitrate is 32 kbps, so lame silently clamped
+  16 up to 32. The feed ran at double Broadcastify's single-scanner spec. Output is
+  now resampled to `STREAM_SAMPLE_RATE` (22050, MPEG-2 Layer III) where 16 kbps
+  exists — verified 16.3 kbps, `sample_rate=22050 bit_rate=16000`. 22.05 kHz
+  carries 11 kHz of audio against ~3 kHz of narrowband FM voice, so nothing
+  audible is lost and upstream bandwidth halves.
+- **False "feed has failed" alerts, 4–11 a day, on a healthy stream.**
+  `rg_stream_bytes_sent_total` was incremented inside a web status handler with no
+  background caller, so it only advanced while somebody had the dashboard open —
+  flat, then one 86 MB step. `rate()` read zero in every gap. Now incremented
+  where the bytes are written to the socket. Also corrects
+  `manager_engine` `stream_throughput_kbps`, which derives from the same counter.
+- **Every reconnect wasted its first attempt on `403 Mountpoint in use`** — the
+  server had not yet reaped our own previous connection. A drop or a 403 now makes
+  the worker wait `STREAM_MOUNT_WAIT` (15 s) instead of 5 s. Recovery went from
+  10 s across two attempts to 15 s on one clean attempt.
+- **No format metadata was sent.** The feed page showed Sample Rate 0, Bitrate 0,
+  Channels 1 — unknown, not misread. `ice-audio-info` (both the `ice-` prefixed and
+  bare key dialects) plus `ice-description` are now sent; the page reads
+  22050 / 32 / 2.
+- Routing UI meters on the new L/R nodes were permanently dead — `/routing/levels`
+  keyed only on the old `broadcastify` sink id.
+
+### Fixed — elsewhere
+
+- **Google Drive showed "Not yet connected" indefinitely.** The startup probe ran
+  once with no retry, so a single transient timeout stuck for the life of the
+  process. Uploads were unaffected throughout — nothing but the status display read
+  that flag. Now retries with backoff, 60 s timeout, and re-probes lazily from
+  `get_status()` without blocking the request.
+- Audio/PTT/CPU review findings — 12 items plus 3 found while fixing. Highlights:
+  LoopRecorder filesystem work moved off the tick (rotation worst case 8.35 ms →
+  0.047 ms), endpoint DSP vectorised (RX path 0.429 → 0.015 ms), TH-9800 PTT
+  serialised with RTS restore on every exit path, per-endpoint jitter prefill made
+  configurable.
+
+### Performance — GC pauses
+
+The gateway's SCHED_RR tick had a full collection overrunning its 50 ms budget
+every 10 minutes, 100% of the time.
+
+- `gc.freeze()` ran as the tick thread's first act, which only captured what
+  existed at that instant. The transcriber loads Silero VAD + Moonshine ONNX on its
+  own thread ~2 s later, so the expensive graphs escaped it. The freeze is now
+  **deferred to a one-shot 60 s in**, after async startup work has settled.
+- **gen-2 ~63 ms → ~4 ms**, measured over 14 hours and 85 collects with zero
+  overruns and zero link-audio underruns. gen-1 3.080 → 0.566 ms, gen-0 0.336 →
+  0.113 ms.
+- The GC callback was appended on every tick-loop entry and never removed, so each
+  routing reload left another live copy inflating `rg_gc_pause_ms_count` and
+  `rg_gc_pause_overrun_total`. The counter read 8 for 4 real overruns.
+- Moving `gc.collect()` off the tick thread was considered and rejected: CPython
+  collects with the GIL held, so a collect from any thread stops every thread.
+
 ### Removed
 
 - **Legacy SDR rebroadcast** — the `sdr_rebroadcast` toggle (`b` key, `/mixer`
