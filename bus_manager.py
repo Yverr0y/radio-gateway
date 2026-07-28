@@ -1685,9 +1685,13 @@ class BusManager:
                 # One-shot: sweep everything startup allocated — including the
                 # async model loads that a freeze at loop entry misses — then
                 # move the survivors into the permanent generation so no later
-                # gen-2 walks them again. This full collect costs ~63 ms ONCE
-                # and will increment rg_gc_pause_overrun_total by 1 at startup;
-                # that single overrun is expected, not a regression. It takes
+                # gen-2 walks them again. Measured 2026-07-27: this full collect
+                # cost 135 ms ONCE (it sweeps a minute of accumulated startup
+                # heap, so it is dearer than a steady-state gen-2 — do not size
+                # it from those), froze 427045 objects, and dropped steady-state
+                # gen-2 from ~63 ms to ~4.4 ms, i.e. inside the tick budget.
+                # It increments rg_gc_pause_overrun_total by 1 at startup; that
+                # single overrun is expected, not a regression. It takes
                 # this tick's slot in the chain rather than adding work: a full
                 # collect supersedes the gen-1 sweep that would otherwise run
                 # here (_FREEZE_AT_TICK is a multiple of the 1200-tick gen-1
