@@ -260,6 +260,19 @@
       <span id="bc-status-badge" class="panel-meta"></span>
     </div>
     <div class="st-row" id="bc-stats"><span class="dim">Not enabled</span></div>
+    <div id="bc-spark-wrap" style="display:none;margin-top:var(--s-2)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span class="st-label">Bitrate, last hour</span>
+        <span id="bc-spark-now" class="st-val cyan" style="font-size:var(--f-sm)"></span>
+      </div>
+      <svg id="bc-spark" viewBox="0 0 300 44" preserveAspectRatio="none"
+           style="width:100%;height:44px;display:block"></svg>
+      <div style="display:flex;justify-content:space-between">
+        <span class="panel-meta" id="bc-spark-lo"></span>
+        <span class="panel-meta" id="bc-spark-hi"></span>
+      </div>
+    </div>
+    <div id="bc-lasterr" class="panel-foot" style="display:none"></div>
   </div>
 
   <div id="svc-loop" class="panel-pane">
@@ -559,6 +572,60 @@ function linkMuteToggle(ep,dir){ postJson('/mixer',{action:'toggle',source:'link
 var _lastNotifSeq = 0;
 var _prevStates = {};
 function flashCls(key, val) { var prev=_prevStates[key]; _prevStates[key]=val; return (prev!==undefined&&prev!==val)?' flash':''; }
+
+// Escape untrusted text before innerHTML. Stream errors are exception strings
+// (server responses, socket messages) and can contain angle brackets.
+function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+// ── Broadcastify bitrate sparkline, last hour ────────────────────────────
+// Reads Prometheus through the gateway's own /prometheus/ proxy, so it needs
+// no extra origin and inherits the same auth as the rest of the dashboard.
+// The status poll runs every 2s; this pulls an hour of history, so it is
+// throttled hard — an hour-long graph gains nothing from sub-minute refresh.
+var _bcSparkLast = 0, _bcSparkBusy = false;
+function bcSparkMaybeRefresh(){
+  var now = Date.now();
+  if(_bcSparkBusy || now - _bcSparkLast < 60000) return;
+  _bcSparkLast = now; _bcSparkBusy = true;
+  var end = Math.floor(now/1000), start = end - 3600;
+  // rate() over 5m smooths the 4096-byte chunk quantisation that otherwise
+  // makes a correct CBR stream look like it is oscillating.
+  var q = 'rate(rg_stream_bytes_sent_total[5m])*8/1000';
+  fetch('/prometheus/api/v1/query_range?query='+encodeURIComponent(q)
+        +'&start='+start+'&end='+end+'&step=60')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      _bcSparkBusy = false;
+      var res = j && j.data && j.data.result;
+      var svg = document.getElementById('bc-spark');
+      if(!svg) return;
+      if(!res || !res.length){ svg.innerHTML=''; document.getElementById('bc-spark-now').textContent='no data'; return; }
+      var vals = res[0].values.map(function(v){ return parseFloat(v[1]); })
+                              .filter(function(v){ return isFinite(v); });
+      if(!vals.length){ svg.innerHTML=''; return; }
+      var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      // Pad a flat line so a rock-steady CBR feed draws mid-height rather
+      // than collapsing onto the axis and looking like it died.
+      if(hi - lo < 0.5){ var m=(hi+lo)/2; lo=m-1; hi=m+1; }
+      var W=300, H=44, n=vals.length, pts=[];
+      for(var i=0;i<n;i++){
+        var x = n>1 ? (i/(n-1))*W : W/2;
+        var y = H - 3 - ((vals[i]-lo)/(hi-lo))*(H-6);
+        pts.push(x.toFixed(1)+','+y.toFixed(1));
+      }
+      var area = '0,'+H+' '+pts.join(' ')+' '+W+','+H;
+      svg.innerHTML =
+        '<polygon points="'+area+'" fill="currentColor" opacity="0.12"/>'
+      + '<polyline points="'+pts.join(' ')+'" fill="none" stroke="currentColor"'
+      + ' stroke-width="1.5" vector-effect="non-scaling-stroke"/>';
+      svg.style.color = 'var(--cyan, #4dd0e1)';
+      document.getElementById('bc-spark-now').textContent = vals[vals.length-1].toFixed(1)+' kbps';
+      document.getElementById('bc-spark-lo').textContent  = lo.toFixed(1)+' kbps';
+      document.getElementById('bc-spark-hi').textContent  = hi.toFixed(1)+' kbps';
+    })
+    .catch(function(){ _bcSparkBusy = false; });
+}
 function flashDotOnChange(el, val) { var key='_dot_'+el.id; if(_prevStates[key]!==undefined&&_prevStates[key]!==val)flashValue(el); _prevStates[key]=val; }
 
 function restartEndpoint(name) {
@@ -624,9 +691,31 @@ function updateStatus() {
       if(ds.bytes_sent){var kb=ds.bytes_sent/1024;var mb=kb/1024;bh+='<div class="st-item"><span class="st-label">Sent:</span><span class="st-val cyan">'+(mb>=1?mb.toFixed(1)+' MB':kb.toFixed(0)+' KB')+'</span></div>';}
       if(ds.send_rate) bh+='<div class="st-item"><span class="st-label">Rate:</span><span class="st-val cyan">'+ds.send_rate+'</span></div>';
       if(ds.server) bh+='<div class="st-item st-item-wide"><span class="st-label">Server:</span><span class="st-val white">'+ds.server+ds.mount+'</span></div>';
+      if(ds.dual_channel) bh+='<div class="st-item"><span class="st-label">Mode:</span><span class="st-val white">Dual L/R</span></div>';
+      if(ds.sample_rate) bh+='<div class="st-item"><span class="st-label">Sample:</span><span class="st-val white">'+(ds.sample_rate/1000).toFixed(2)+' kHz</span></div>';
       document.getElementById('bc-stats').innerHTML=bh||'<span class="dim">Stopped</span>';
+      // Last error persists after recovery on purpose — "it dropped at 03:12
+      // and came back" is what you want to see hours later.
+      var le=document.getElementById('bc-lasterr');
+      if(ds.last_error && ds.last_error_time){
+        var d=new Date(ds.last_error_time*1000);
+        var ago=Math.max(0,(Date.now()/1000)-ds.last_error_time);
+        var agoTxt = ago<90 ? Math.round(ago)+'s ago'
+                   : ago<5400 ? Math.round(ago/60)+'m ago'
+                   : ago<172800 ? Math.round(ago/3600)+'h ago'
+                   : Math.round(ago/86400)+'d ago';
+        le.style.display='';
+        le.innerHTML='<span class="st-label">Last error:</span> '
+          +'<span class="'+(conn?'dim':'red')+'">'+esc(ds.last_error)+'</span>'
+          +'<br><span class="panel-meta">'+d.toLocaleString()+' &middot; '+agoTxt
+          +(conn?' &middot; recovered':'')+'</span>';
+      } else { le.style.display='none'; }
+      document.getElementById('bc-spark-wrap').style.display='';
+      bcSparkMaybeRefresh();
     } else {
       document.getElementById('bc-stats').innerHTML='<span class="dim">Not enabled</span>';
+      document.getElementById('bc-lasterr').style.display='none';
+      document.getElementById('bc-spark-wrap').style.display='none';
     }
 
     // ── Gateway Link status ──

@@ -83,8 +83,17 @@ def get_darkice_stats(gw):
 def get_stream_stats(gw):
     """Get live streaming statistics from direct Icecast connection."""
     so = getattr(gw, 'stream_output', None)
-    if not so or not so.connected:
+    if not so:
         return {}
+    # Error info is returned even while DISCONNECTED — that is precisely when
+    # it matters. Returning a bare {} here used to leave the dashboard showing
+    # "Stopped" with no indication of why.
+    _err = {
+        'last_error': getattr(so, '_last_error', '') or '',
+        'last_error_time': getattr(so, '_last_error_time', 0) or 0,
+    }
+    if not so.connected:
+        return dict(_err, connected=False)
     uptime_s = int(so.uptime)
     # NOTE: rg_stream_bytes_sent_total is NOT updated here any more. This
     # function only runs when a web request asks for gateway status, so
@@ -96,6 +105,7 @@ def get_stream_stats(gw):
     # StreamOutputSource._reader (audio_sources.py), where the bytes are
     # actually written to the socket. Don't reintroduce it here.
     return {
+        **_err,
         'connected': True,
         'uptime': uptime_s,
         'bytes_sent': int(so._bytes_sent),
@@ -103,6 +113,8 @@ def get_stream_stats(gw):
         'server': getattr(gw.config, 'STREAM_SERVER', ''),
         'mount': getattr(gw.config, 'STREAM_MOUNT', ''),
         'bitrate': int(getattr(gw.config, 'STREAM_BITRATE', 16)),
+        'sample_rate': int(getattr(gw.config, 'STREAM_SAMPLE_RATE', 22050)),
+        'dual_channel': bool(getattr(gw.config, 'STREAM_DUAL_CHANNEL', True)),
     }
 
 

@@ -2643,6 +2643,12 @@ class StreamOutputSource:
         # connection: set on a detected drop AND on a 403 mount-in-use refusal,
         # cleared by a successful connect.
         self._mount_in_use = False
+        # Last failure, surfaced on the dashboard. Kept even after a
+        # successful reconnect: 'it broke at 03:12 and recovered' is the
+        # thing you want to see hours later, and clearing it on recovery
+        # would hide every transient drop that happened overnight.
+        self._last_error = ''
+        self._last_error_time = 0.0   # unix epoch, 0 = never
         self._reconnect_count = 0
         self._last_drop_time = 0   # monotonic time of last connection drop
         self._was_connected = False  # True once first successful connection
@@ -2675,6 +2681,7 @@ class StreamOutputSource:
 
         if not server or not password:
             print("  ⚠ Broadcastify: missing server or password")
+            self._note_error("missing server or password")
             return
 
         # Connect TCP to Icecast
@@ -2708,6 +2715,7 @@ class StreamOutputSource:
             resp_str = resp.decode(errors='replace')
             if '200' not in resp_str.split('\n')[0]:
                 print(f"  ⚠ Broadcastify: Icecast rejected connection: {resp_str.strip()}")
+                self._note_error(f"Icecast rejected: {resp_str.splitlines()[0].strip()}")
                 # "403 Mountpoint in use" is not a real failure — it means the
                 # server has not yet reaped OUR previous source connection, so
                 # retrying sooner cannot possibly work. Flag it so the reconnect
@@ -2724,6 +2732,7 @@ class StreamOutputSource:
 
         except Exception as e:
             print(f"  ⚠ Broadcastify: connection failed: {e}")
+            self._note_error(f"connection failed: {e}")
             return
 
         # Start ffmpeg MP3 encoder: PCM stdin → MP3 stdout
@@ -2752,6 +2761,7 @@ class StreamOutputSource:
             ], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.DEVNULL)
         except Exception as e:
             print(f"  ⚠ Broadcastify: ffmpeg encoder failed: {e}")
+            self._note_error(f"ffmpeg encoder failed: {e}")
             self._icecast_sock.close()
             self._icecast_sock = None
             return
@@ -2795,6 +2805,7 @@ class StreamOutputSource:
                 except (BrokenPipeError, OSError, ConnectionError) as e:
                     uptime_s = int(time.time() - self._connect_time) if self._connect_time else 0
                     print(f"  [Broadcastify] Connection lost after {uptime_s}s: {e}")
+                    self._note_error(f"connection lost after {uptime_s}s: {e}")
                     self.connected = False
                     self._last_drop_time = time.monotonic()
                     # Our source connection just died, so the server may still
@@ -2805,6 +2816,7 @@ class StreamOutputSource:
                     break
                 except Exception as e:
                     print(f"  [Broadcastify] Reader error: {e}")
+                    self._note_error(f"reader error: {e}")
                     break
             # Clean up on exit
             if self.connected:
@@ -2877,6 +2889,7 @@ class StreamOutputSource:
                             print(f"  [Broadcastify] Reconnected successfully (attempt #{count})")
                         else:
                             print(f"  [Broadcastify] Reconnect failed (attempt #{count})")
+                            self._note_error(f"reconnect failed (attempt #{count})")
                     finally:
                         self._reconnecting = False
                 worker = threading.Thread(target=_auto_reconnect, daemon=True,
@@ -2903,6 +2916,14 @@ class StreamOutputSource:
             self.connected = False
         except Exception:
             pass
+
+    def _note_error(self, msg):
+        """Record the most recent stream failure for the dashboard."""
+        try:
+            self._last_error = str(msg)[:200]
+            self._last_error_time = time.time()
+        except Exception:
+            pass   # diagnostics must never break the stream
 
     def _keepalive_loop(self):
         """Feed silence to the encoder when no real audio is arriving.
