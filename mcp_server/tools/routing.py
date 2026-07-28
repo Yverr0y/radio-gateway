@@ -53,7 +53,8 @@ def routing_connect(source_or_bus: str, bus_or_sink: str, connection_type: str =
     """
     if connection_type == 'auto':
         # Heuristic: if second arg looks like a sink, it's bus→sink
-        sink_ids = {'speaker', 'broadcastify', 'mumble', 'remote_audio_tx',
+        sink_ids = {'speaker', 'broadcastify', 'broadcastify_l', 'broadcastify_r',
+                    'mumble', 'remote_audio_tx',
                     'kv4p_tx', 'aioc_tx', 'nul'}
         if bus_or_sink in sink_ids or bus_or_sink.endswith('_tx'):
             connection_type = 'bus-sink'
@@ -82,7 +83,8 @@ def routing_disconnect(source_or_bus: str, bus_or_sink: str, connection_type: st
         connection_type: 'source-bus', 'bus-sink', or 'auto' (auto-detect)
     """
     if connection_type == 'auto':
-        sink_ids = {'speaker', 'broadcastify', 'mumble', 'remote_audio_tx',
+        sink_ids = {'speaker', 'broadcastify', 'broadcastify_l', 'broadcastify_r',
+                    'mumble', 'remote_audio_tx',
                     'kv4p_tx', 'aioc_tx', 'nul'}
         if bus_or_sink in sink_ids or bus_or_sink.endswith('_tx'):
             connection_type = 'bus-sink'

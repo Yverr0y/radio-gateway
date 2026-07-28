@@ -437,7 +437,30 @@ STREAM_MOUNT = /your_feed_mount
 STREAM_NAME = Radio Gateway
 STREAM_DESCRIPTION = Radio to Mumble Gateway Stream
 STREAM_FORMAT = mp3       # mp3 or ogg
-STREAM_BITRATE = 16       # kbps (16=common for scanner audio)
+# Broadcastify: 16 kbps per scanner. A dual-channel feed is 32 kbps TOTAL,
+# i.e. the same 16k per scanner — not better quality per channel.
+# Set 32 when STREAM_DUAL_CHANNEL is true, 16 when it is false.
+STREAM_BITRATE = 32       # kbps (16 = single scanner, 32 = dual-channel feed)
+
+# Encoder output sample rate. MUST stay below 32000. At 32/44.1/48 kHz the
+# encoder is MPEG-1 Layer III, whose lowest Layer III bitrate is 32 kbps, so
+# lame silently clamps anything smaller and STREAM_BITRATE is ignored. 16 kbps
+# only exists in MPEG-2 Layer III (16/22.05/24 kHz). 22.05 kHz carries 11 kHz
+# of audio; narrowband FM voice is ~3 kHz, so nothing audible is lost.
+STREAM_SAMPLE_RATE = 22050
+
+# Dual-channel (two-scanner) Broadcastify feed.
+#   true  -> "Broadcastify [L]" and "Broadcastify [R]" sinks on the routing
+#            page. Route a different bus to each; an unrouted side is filled
+#            with silence. Needs STREAM_BITRATE = 32.
+#   false -> a single mono "Broadcastify" sink. Needs STREAM_BITRATE = 16.
+# The two node sets are mutually exclusive by construction, so the routing
+# graph cannot express an invalid combination. Changing this orphans any
+# existing Broadcastify connection in routing_config.json — rewire it on the
+# /routing page afterwards, or the feed goes silent.
+# Broadcastify must also have the feed provisioned for two sources at their
+# end; the encoder change alone will not make them split it.
+STREAM_DUAL_CHANNEL = true
 
 
 [echolink]

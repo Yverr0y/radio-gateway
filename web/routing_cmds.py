@@ -342,7 +342,8 @@ class _RoutingCmdsMixin:
         if target_id == 'nul':
             return {'ok': True, 'muted': True}
         # Sinks without a plugin object — toggle a separate gateway flag
-        _sink_ids = ('speaker', 'broadcastify', 'mumble', 'remote_audio_tx')
+        _sink_ids = ('speaker', 'broadcastify', 'broadcastify_l', 'broadcastify_r',
+                      'mumble', 'remote_audio_tx')
         if target_id in _sink_ids and self.gateway:
             muted_sinks = getattr(self.gateway, '_muted_sinks', set())
             if target_id in muted_sinks:
@@ -388,7 +389,7 @@ class _RoutingCmdsMixin:
                 _gw._save_source_gains()
             return {'ok': True, 'gain': value}
         # Passive sinks (mumble, broadcastify, speaker, etc.) — no plugin
-        _passive_sinks = ('mumble', 'broadcastify', 'speaker',
+        _passive_sinks = ('mumble', 'broadcastify', 'broadcastify_l', 'broadcastify_r', 'speaker',
                           'transcription', 'remote_audio_tx')
         if target_id in _passive_sinks and _gw:
             _gw._sink_gains[target_id] = value / 100.0

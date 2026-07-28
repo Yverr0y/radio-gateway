@@ -1,0 +1,919 @@
+{
+  "busses": [
+    {
+      "id": "sdr2",
+      "name": "SDR2",
+      "type": "listen",
+      "sources": [
+        "sdr2"
+      ],
+      "sinks": [
+        "nul"
+      ],
+      "processing": {
+        "gate": false,
+        "hpf": true,
+        "lpf": true,
+        "dfn": true,
+        "loop": true,
+        "pcm": false,
+        "dfn_mix": 0.45,
+        "notch": true
+      }
+    },
+    {
+      "id": "allstar",
+      "name": "PAPA",
+      "type": "solo",
+      "sources": [
+        "sdr1"
+      ],
+      "sinks": [
+        "nul"
+      ],
+      "processing": {
+        "pcm": false,
+        "loop": true,
+        "dfn": true,
+        "hpf": true,
+        "lpf": true,
+        "dfn_mix": 0.55,
+        "notch": true,
+        "dfn_engine": "rnnoise"
+      }
+    },
+    {
+      "id": "solo",
+      "name": "solo",
+      "type": "solo",
+      "sources": [
+        "playback"
+      ],
+      "sinks": [
+        "cm5_aioc_tx"
+      ],
+      "processing": {
+        "dfn": false,
+        "hpf": true,
+        "lpf": true,
+        "notch": false
+      }
+    },
+    {
+      "id": "listener",
+      "name": "listener",
+      "type": "solo",
+      "sources": [
+        "aioc"
+      ],
+      "sinks": [
+        "broadcastify"
+      ],
+      "processing": {
+        "pcm": true,
+        "hpf": true,
+        "lpf": true,
+        "notch": true,
+        "loop": true
+      }
+    },
+    {
+      "id": "loop",
+      "name": "loop",
+      "type": "solo",
+      "sources": [
+        "loop_playback"
+      ],
+      "sinks": [
+        "ic7100_tx"
+      ]
+    },
+    {
+      "id": "asl2",
+      "name": "asl2",
+      "type": "solo",
+      "sources": [
+        "usrp2"
+      ],
+      "sinks": [
+        "speaker"
+      ],
+      "processing": {
+        "pcm": true
+      }
+    }
+  ],
+  "connections": [
+    {
+      "type": "source-bus",
+      "from": "sdr1",
+      "to": "allstar"
+    },
+    {
+      "type": "source-bus",
+      "from": "sdr2",
+      "to": "sdr2"
+    },
+    {
+      "type": "source-bus",
+      "from": "aioc",
+      "to": "listener"
+    },
+    {
+      "type": "source-bus",
+      "from": "playback",
+      "to": "solo"
+    },
+    {
+      "type": "source-bus",
+      "from": "loop_playback",
+      "to": "loop"
+    },
+    {
+      "type": "source-bus",
+      "from": "usrp2",
+      "to": "asl2"
+    },
+    {
+      "type": "bus-sink",
+      "from": "sdr2",
+      "to": "nul"
+    },
+    {
+      "type": "bus-sink",
+      "from": "allstar",
+      "to": "nul"
+    },
+    {
+      "type": "bus-sink",
+      "from": "solo",
+      "to": "cm5_aioc_tx"
+    },
+    {
+      "type": "bus-sink",
+      "from": "listener",
+      "to": "broadcastify"
+    },
+    {
+      "type": "bus-sink",
+      "from": "loop",
+      "to": "ic7100_tx"
+    },
+    {
+      "type": "bus-sink",
+      "from": "asl2",
+      "to": "speaker"
+    }
+  ],
+  "layout": {
+    "drawflow": {
+      "Home": {
+        "data": {
+          "1": {
+            "id": 1,
+            "name": "sdr1",
+            "data": {
+              "id": "sdr1"
+            },
+            "class": "source",
+            "html": "SDR1 [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('sdr1')\" id=\"mute-sdr1\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('sdr1',this.value)\" ondblclick=\"this.value=100;setGain('sdr1',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-sdr1\">100%</span></div><div class=\"level-bar\" id=\"level-sdr1\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "17",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 291
+          },
+          "2": {
+            "id": 2,
+            "name": "sdr2",
+            "data": {
+              "id": "sdr2"
+            },
+            "class": "source",
+            "html": "SDR2 [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('sdr2')\" id=\"mute-sdr2\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"180\" oninput=\"setGain('sdr2',this.value)\" ondblclick=\"this.value=100;setGain('sdr2',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-sdr2\">180%</span></div><div class=\"level-bar\" id=\"level-sdr2\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "16",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 429
+          },
+          "3": {
+            "id": 3,
+            "name": "aioc",
+            "data": {
+              "id": "aioc"
+            },
+            "class": "source",
+            "html": "TH-9800 [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('aioc')\" id=\"mute-aioc\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('aioc',this.value)\" ondblclick=\"this.value=100;setGain('aioc',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-aioc\">100%</span></div><div class=\"level-bar\" id=\"level-aioc\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "19",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 689
+          },
+          "4": {
+            "id": 4,
+            "name": "playback",
+            "data": {
+              "id": "playback"
+            },
+            "class": "source",
+            "html": "System Sounds\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('playback')\" id=\"mute-playback\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"135\" oninput=\"setGain('playback',this.value)\" ondblclick=\"this.value=100;setGain('playback',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-playback\">135%</span></div><div class=\"level-bar\" id=\"level-playback\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "18",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 551
+          },
+          "5": {
+            "id": 5,
+            "name": "loop_playback",
+            "data": {
+              "id": "loop_playback"
+            },
+            "class": "source",
+            "html": "Loop Playback\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('loop_playback')\" id=\"mute-loop_playback\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('loop_playback',this.value)\" ondblclick=\"this.value=100;setGain('loop_playback',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-loop_playback\">100%</span></div><div class=\"level-bar\" id=\"level-loop_playback\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "20",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 1117
+          },
+          "6": {
+            "id": 6,
+            "name": "webmic",
+            "data": {
+              "id": "webmic"
+            },
+            "class": "source",
+            "html": "Web Mic\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('webmic')\" id=\"mute-webmic\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('webmic',this.value)\" ondblclick=\"this.value=100;setGain('webmic',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-webmic\">100%</span></div><div class=\"level-bar\" id=\"level-webmic\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 1545
+          },
+          "7": {
+            "id": 7,
+            "name": "announce",
+            "data": {
+              "id": "announce"
+            },
+            "class": "source",
+            "html": "Remote Audio [PTT]<span class=\"node-port\">:9601</span>\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('announce')\" id=\"mute-announce\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('announce',this.value)\" ondblclick=\"this.value=100;setGain('announce',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-announce\">100%</span></div><div class=\"level-bar\" id=\"level-announce\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 796
+          },
+          "8": {
+            "id": 8,
+            "name": "monitor",
+            "data": {
+              "id": "monitor"
+            },
+            "class": "source",
+            "html": "Room Monitor\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('monitor')\" id=\"mute-monitor\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('monitor',this.value)\" ondblclick=\"this.value=100;setGain('monitor',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-monitor\">100%</span></div><div class=\"level-bar\" id=\"level-monitor\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 1224
+          },
+          "9": {
+            "id": 9,
+            "name": "mumble_rx",
+            "data": {
+              "id": "mumble_rx"
+            },
+            "class": "source",
+            "html": "Mumble [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('mumble_rx')\" id=\"mute-mumble_rx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('mumble_rx',this.value)\" ondblclick=\"this.value=100;setGain('mumble_rx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-mumble_rx\">100%</span></div><div class=\"level-bar\" id=\"level-mumble_rx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 1331
+          },
+          "10": {
+            "id": 10,
+            "name": "remote_audio",
+            "data": {
+              "id": "remote_audio"
+            },
+            "class": "source",
+            "html": "Remote Audio [RX]<span class=\"node-port\">:9600</span>\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('remote_audio')\" id=\"mute-remote_audio\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"188\" oninput=\"setGain('remote_audio',this.value)\" ondblclick=\"this.value=100;setGain('remote_audio',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-remote_audio\">188%</span></div><div class=\"level-bar\" id=\"level-remote_audio\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 153
+          },
+          "11": {
+            "id": 11,
+            "name": "cm5_aioc",
+            "data": {
+              "id": "cm5_aioc"
+            },
+            "class": "source",
+            "html": "Cm5 Aioc [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('cm5_aioc')\" id=\"mute-cm5_aioc\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"114\" oninput=\"setGain('cm5_aioc',this.value)\" ondblclick=\"this.value=100;setGain('cm5_aioc',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-cm5_aioc\">114%</span></div><div class=\"level-bar\" id=\"level-cm5_aioc\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": -52,
+            "pos_y": 980
+          },
+          "12": {
+            "id": 12,
+            "name": "d75",
+            "data": {
+              "id": "d75"
+            },
+            "class": "source",
+            "html": "D75Cm5 [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('d75')\" id=\"mute-d75\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('d75',this.value)\" ondblclick=\"this.value=100;setGain('d75',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-d75\">100%</span></div><div class=\"level-bar\" id=\"level-d75\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 903
+          },
+          "13": {
+            "id": 13,
+            "name": "ic7100",
+            "data": {
+              "id": "ic7100"
+            },
+            "class": "source",
+            "html": "Ic7100 [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('ic7100')\" id=\"mute-ic7100\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"238\" oninput=\"setGain('ic7100',this.value)\" ondblclick=\"this.value=100;setGain('ic7100',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-ic7100\">238%</span></div><div class=\"level-bar\" id=\"level-ic7100\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 1010
+          },
+          "14": {
+            "id": 14,
+            "name": "usrp",
+            "data": {
+              "id": "usrp"
+            },
+            "class": "source",
+            "html": "AllStar (USRP) [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('usrp')\" id=\"mute-usrp\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('usrp',this.value)\" ondblclick=\"this.value=100;setGain('usrp',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-usrp\">100%</span></div><div class=\"level-bar\" id=\"level-usrp\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": []
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 15
+          },
+          "15": {
+            "id": 15,
+            "name": "usrp2",
+            "data": {
+              "id": "usrp2"
+            },
+            "class": "source",
+            "html": "AllStar 2 (USRP) [RX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('usrp2')\" id=\"mute-usrp2\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('usrp2',this.value)\" ondblclick=\"this.value=100;setGain('usrp2',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-usrp2\">100%</span></div><div class=\"level-bar\" id=\"level-usrp2\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {},
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "21",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 15,
+            "pos_y": 1438
+          },
+          "16": {
+            "id": 16,
+            "name": "sdr2",
+            "data": {
+              "id": "sdr2",
+              "type": "listen"
+            },
+            "class": "bus-listen recording",
+            "html": "<span class=\"rec-dot\" title=\"Loop recording\"></span><span class=\"bus-name\" data-bus=\"sdr2\" ondblclick=\"renameBus(this,'sdr2')\">SDR2</span> <span class=\"bus-type-tag\">(listen)</span>\n<div class=\"box\"><div class=\"proc-buttons\"><button class=\"proc-btn\" onclick=\"toggleProc('sdr2','gate')\" id=\"proc-sdr2-gate\" title=\"Noise Gate\">G</button><button class=\"proc-btn on\" onclick=\"toggleProc('sdr2','hpf')\" id=\"proc-sdr2-hpf\" title=\"High Pass Filter\">H</button><button class=\"proc-btn on\" onclick=\"toggleProc('sdr2','lpf')\" id=\"proc-sdr2-lpf\" title=\"Low Pass Filter\">L</button><button class=\"proc-btn on\" onclick=\"toggleProc('sdr2','notch')\" id=\"proc-sdr2-notch\" title=\"Notch Filter\">N</button><button class=\"proc-btn on\" onclick=\"toggleProc('sdr2','dfn')\" id=\"proc-sdr2-dfn\" title=\"Neural Denoise (RNNoise)\">D</button><span class=\"proc-sep\"></span><button class=\"proc-btn out-btn\" onclick=\"toggleProc('sdr2','pcm')\" id=\"proc-sdr2-pcm\" title=\"Feed PCM stream\">P</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('sdr2','mp3')\" id=\"proc-sdr2-mp3\" title=\"Feed MP3 stream\">M</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('sdr2','vad')\" id=\"proc-sdr2-vad\" title=\"VAD gate\">V</button><button class=\"proc-btn out-btn on\" onclick=\"toggleProc('sdr2','loop')\" id=\"proc-sdr2-loop\" title=\"Loop record\">R</button><span class=\"flex-spacer\"></span><button class=\"mute-btn\" onclick=\"toggleBusMute('sdr2')\" id=\"bus-mute-sdr2\" title=\"Mute bus\">M</button></div><div class=\"dfn-mix-row\" id=\"dfn-mix-row-sdr2\"><button class=\"dfn-engine-pill\" id=\"dfn-engine-sdr2\" data-engine=\"rnnoise\" title=\"Click to swap denoise engine (RNNoise \u2194 DeepFilterNet)\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" ontouchstart=\"event.stopPropagation()\" onclick=\"event.stopPropagation(); toggleDfnEngine('sdr2')\">RNN</button><span class=\"dfn-mix-label\">mix</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"1\" step=\"0.05\" value=\"0.45\" id=\"dfn-mix-sdr2\" oninput=\"setDfnMix('sdr2', this.value, true)\" onchange=\"setDfnMix('sdr2', this.value, false)\" ondblclick=\"this.value=0.5;setDfnMix('sdr2', 0.5, false)\"><span class=\"dfn-mix-val\" id=\"dfn-mix-val-sdr2\">45%</span><span class=\"dfn-atten-wrap\" id=\"dfn-atten-wrap-sdr2\" style=\"display:none\"><span class=\"dfn-mix-label\" title=\"Attenuation cap (dB). 0=unlimited, 15\u201325 typical. Stops pumping.\">cap</span><input type=\"number\" class=\"dfn-atten-input\" min=\"0\" max=\"60\" step=\"1\" value=\"18\" id=\"dfn-atten-sdr2\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" onchange=\"setDfnAtten('sdr2', this.value)\"><span class=\"dfn-mix-label\">dB</span></span></div><div class=\"level-bar\" id=\"level-bus_sdr2\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "2",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "26",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 325,
+            "pos_y": 98
+          },
+          "17": {
+            "id": 17,
+            "name": "allstar",
+            "data": {
+              "id": "allstar",
+              "type": "solo"
+            },
+            "class": "bus-solo recording",
+            "html": "<span class=\"rec-dot\" title=\"Loop recording\"></span><span class=\"bus-name\" data-bus=\"allstar\" ondblclick=\"renameBus(this,'allstar')\">PAPA</span> <span class=\"bus-type-tag\">(solo)</span>\n<div class=\"box\"><div class=\"proc-buttons\"><button class=\"proc-btn\" onclick=\"toggleProc('allstar','gate')\" id=\"proc-allstar-gate\" title=\"Noise Gate\">G</button><button class=\"proc-btn on\" onclick=\"toggleProc('allstar','hpf')\" id=\"proc-allstar-hpf\" title=\"High Pass Filter\">H</button><button class=\"proc-btn on\" onclick=\"toggleProc('allstar','lpf')\" id=\"proc-allstar-lpf\" title=\"Low Pass Filter\">L</button><button class=\"proc-btn on\" onclick=\"toggleProc('allstar','notch')\" id=\"proc-allstar-notch\" title=\"Notch Filter\">N</button><button class=\"proc-btn on\" onclick=\"toggleProc('allstar','dfn')\" id=\"proc-allstar-dfn\" title=\"Neural Denoise (RNNoise)\">D</button><span class=\"proc-sep\"></span><button class=\"proc-btn out-btn\" onclick=\"toggleProc('allstar','pcm')\" id=\"proc-allstar-pcm\" title=\"Feed PCM stream\">P</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('allstar','mp3')\" id=\"proc-allstar-mp3\" title=\"Feed MP3 stream\">M</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('allstar','vad')\" id=\"proc-allstar-vad\" title=\"VAD gate\">V</button><button class=\"proc-btn out-btn on\" onclick=\"toggleProc('allstar','loop')\" id=\"proc-allstar-loop\" title=\"Loop record\">R</button><span class=\"flex-spacer\"></span><button class=\"mute-btn\" onclick=\"toggleBusMute('allstar')\" id=\"bus-mute-allstar\" title=\"Mute bus\">M</button></div><div class=\"dfn-mix-row\" id=\"dfn-mix-row-allstar\"><button class=\"dfn-engine-pill\" id=\"dfn-engine-allstar\" data-engine=\"rnnoise\" title=\"Click to swap denoise engine (RNNoise \u2194 DeepFilterNet)\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" ontouchstart=\"event.stopPropagation()\" onclick=\"event.stopPropagation(); toggleDfnEngine('allstar')\">RNN</button><span class=\"dfn-mix-label\">mix</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"1\" step=\"0.05\" value=\"0.55\" id=\"dfn-mix-allstar\" oninput=\"setDfnMix('allstar', this.value, true)\" onchange=\"setDfnMix('allstar', this.value, false)\" ondblclick=\"this.value=0.5;setDfnMix('allstar', 0.5, false)\"><span class=\"dfn-mix-val\" id=\"dfn-mix-val-allstar\">55%</span><span class=\"dfn-atten-wrap\" id=\"dfn-atten-wrap-allstar\" style=\"display:none\"><span class=\"dfn-mix-label\" title=\"Attenuation cap (dB). 0=unlimited, 15\u201325 typical. Stops pumping.\">cap</span><input type=\"number\" class=\"dfn-atten-input\" min=\"0\" max=\"60\" step=\"1\" value=\"18\" id=\"dfn-atten-allstar\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" onchange=\"setDfnAtten('allstar', this.value)\"><span class=\"dfn-mix-label\">dB</span></span></div><div class=\"dfn-mix-row\" id=\"delay-row-allstar\"><span class=\"dfn-mix-label\">delay</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"5000\" step=\"50\" value=\"0\" id=\"bus-delay-allstar\" oninput=\"setBusDelay('allstar', this.value, true)\" onchange=\"setBusDelay('allstar', this.value, false)\" ondblclick=\"this.value=0;setBusDelay('allstar', 0, false)\"><span class=\"dfn-mix-val\" id=\"bus-delay-val-allstar\">0 ms</span></div><div class=\"level-bar\" id=\"level-bus_allstar\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "1",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "26",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 306,
+            "pos_y": -65
+          },
+          "18": {
+            "id": 18,
+            "name": "solo",
+            "data": {
+              "id": "solo",
+              "type": "solo"
+            },
+            "class": "bus-solo",
+            "html": "<span class=\"rec-dot\" title=\"Loop recording\"></span><span class=\"bus-name\" data-bus=\"solo\" ondblclick=\"renameBus(this,'solo')\">solo</span> <span class=\"bus-type-tag\">(solo)</span>\n<div class=\"box\"><div class=\"proc-buttons\"><button class=\"proc-btn\" onclick=\"toggleProc('solo','gate')\" id=\"proc-solo-gate\" title=\"Noise Gate\">G</button><button class=\"proc-btn on\" onclick=\"toggleProc('solo','hpf')\" id=\"proc-solo-hpf\" title=\"High Pass Filter\">H</button><button class=\"proc-btn on\" onclick=\"toggleProc('solo','lpf')\" id=\"proc-solo-lpf\" title=\"Low Pass Filter\">L</button><button class=\"proc-btn\" onclick=\"toggleProc('solo','notch')\" id=\"proc-solo-notch\" title=\"Notch Filter\">N</button><button class=\"proc-btn\" onclick=\"toggleProc('solo','dfn')\" id=\"proc-solo-dfn\" title=\"Neural Denoise (RNNoise)\">D</button><span class=\"proc-sep\"></span><button class=\"proc-btn out-btn\" onclick=\"toggleProc('solo','pcm')\" id=\"proc-solo-pcm\" title=\"Feed PCM stream\">P</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('solo','mp3')\" id=\"proc-solo-mp3\" title=\"Feed MP3 stream\">M</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('solo','vad')\" id=\"proc-solo-vad\" title=\"VAD gate\">V</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('solo','loop')\" id=\"proc-solo-loop\" title=\"Loop record\">R</button><span class=\"flex-spacer\"></span><button class=\"mute-btn\" onclick=\"toggleBusMute('solo')\" id=\"bus-mute-solo\" title=\"Mute bus\">M</button></div><div class=\"dfn-mix-row dim-op\" id=\"dfn-mix-row-solo\"><button class=\"dfn-engine-pill\" id=\"dfn-engine-solo\" data-engine=\"rnnoise\" title=\"Click to swap denoise engine (RNNoise \u2194 DeepFilterNet)\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" ontouchstart=\"event.stopPropagation()\" onclick=\"event.stopPropagation(); toggleDfnEngine('solo')\">RNN</button><span class=\"dfn-mix-label\">mix</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"1\" step=\"0.05\" value=\"0.5\" id=\"dfn-mix-solo\" oninput=\"setDfnMix('solo', this.value, true)\" onchange=\"setDfnMix('solo', this.value, false)\" ondblclick=\"this.value=0.5;setDfnMix('solo', 0.5, false)\"><span class=\"dfn-mix-val\" id=\"dfn-mix-val-solo\">50%</span><span class=\"dfn-atten-wrap\" id=\"dfn-atten-wrap-solo\" style=\"display:none\"><span class=\"dfn-mix-label\" title=\"Attenuation cap (dB). 0=unlimited, 15\u201325 typical. Stops pumping.\">cap</span><input type=\"number\" class=\"dfn-atten-input\" min=\"0\" max=\"60\" step=\"1\" value=\"18\" id=\"dfn-atten-solo\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" onchange=\"setDfnAtten('solo', this.value)\"><span class=\"dfn-mix-label\">dB</span></span></div><div class=\"dfn-mix-row\" id=\"delay-row-solo\"><span class=\"dfn-mix-label\">delay</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"5000\" step=\"50\" value=\"0\" id=\"bus-delay-solo\" oninput=\"setBusDelay('solo', this.value, true)\" onchange=\"setBusDelay('solo', this.value, false)\" ondblclick=\"this.value=0;setBusDelay('solo', 0, false)\"><span class=\"dfn-mix-val\" id=\"bus-delay-val-solo\">0 ms</span></div><div class=\"level-bar\" id=\"level-bus_solo\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "4",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "29",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 315,
+            "pos_y": 551
+          },
+          "19": {
+            "id": 19,
+            "name": "listener",
+            "data": {
+              "id": "listener",
+              "type": "solo"
+            },
+            "class": "bus-solo recording",
+            "html": "<span class=\"rec-dot\" title=\"Loop recording\"></span><span class=\"bus-name\" data-bus=\"listener\" ondblclick=\"renameBus(this,'listener')\">listener</span> <span class=\"bus-type-tag\">(solo)</span>\n<div class=\"box\"><div class=\"proc-buttons\"><button class=\"proc-btn\" onclick=\"toggleProc('listener','gate')\" id=\"proc-listener-gate\" title=\"Noise Gate\">G</button><button class=\"proc-btn on\" onclick=\"toggleProc('listener','hpf')\" id=\"proc-listener-hpf\" title=\"High Pass Filter\">H</button><button class=\"proc-btn on\" onclick=\"toggleProc('listener','lpf')\" id=\"proc-listener-lpf\" title=\"Low Pass Filter\">L</button><button class=\"proc-btn on\" onclick=\"toggleProc('listener','notch')\" id=\"proc-listener-notch\" title=\"Notch Filter\">N</button><button class=\"proc-btn\" onclick=\"toggleProc('listener','dfn')\" id=\"proc-listener-dfn\" title=\"Neural Denoise (RNNoise)\">D</button><span class=\"proc-sep\"></span><button class=\"proc-btn out-btn on\" onclick=\"toggleProc('listener','pcm')\" id=\"proc-listener-pcm\" title=\"Feed PCM stream\">P</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('listener','mp3')\" id=\"proc-listener-mp3\" title=\"Feed MP3 stream\">M</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('listener','vad')\" id=\"proc-listener-vad\" title=\"VAD gate\">V</button><button class=\"proc-btn out-btn on\" onclick=\"toggleProc('listener','loop')\" id=\"proc-listener-loop\" title=\"Loop record\">R</button><span class=\"flex-spacer\"></span><button class=\"mute-btn\" onclick=\"toggleBusMute('listener')\" id=\"bus-mute-listener\" title=\"Mute bus\">M</button></div><div class=\"dfn-mix-row dim-op\" id=\"dfn-mix-row-listener\"><button class=\"dfn-engine-pill\" id=\"dfn-engine-listener\" data-engine=\"rnnoise\" title=\"Click to swap denoise engine (RNNoise \u2194 DeepFilterNet)\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" ontouchstart=\"event.stopPropagation()\" onclick=\"event.stopPropagation(); toggleDfnEngine('listener')\">RNN</button><span class=\"dfn-mix-label\">mix</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"1\" step=\"0.05\" value=\"0.5\" id=\"dfn-mix-listener\" oninput=\"setDfnMix('listener', this.value, true)\" onchange=\"setDfnMix('listener', this.value, false)\" ondblclick=\"this.value=0.5;setDfnMix('listener', 0.5, false)\"><span class=\"dfn-mix-val\" id=\"dfn-mix-val-listener\">50%</span><span class=\"dfn-atten-wrap\" id=\"dfn-atten-wrap-listener\" style=\"display:none\"><span class=\"dfn-mix-label\" title=\"Attenuation cap (dB). 0=unlimited, 15\u201325 typical. Stops pumping.\">cap</span><input type=\"number\" class=\"dfn-atten-input\" min=\"0\" max=\"60\" step=\"1\" value=\"18\" id=\"dfn-atten-listener\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" onchange=\"setDfnAtten('listener', this.value)\"><span class=\"dfn-mix-label\">dB</span></span></div><div class=\"dfn-mix-row\" id=\"delay-row-listener\"><span class=\"dfn-mix-label\">delay</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"5000\" step=\"50\" value=\"0\" id=\"bus-delay-listener\" oninput=\"setBusDelay('listener', this.value, true)\" onchange=\"setBusDelay('listener', this.value, false)\" ondblclick=\"this.value=0;setBusDelay('listener', 0, false)\"><span class=\"dfn-mix-val\" id=\"bus-delay-val-listener\">0 ms</span></div><div class=\"level-bar\" id=\"level-bus_listener\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "3",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "23",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 334,
+            "pos_y": 692
+          },
+          "20": {
+            "id": 20,
+            "name": "loop",
+            "data": {
+              "id": "loop",
+              "type": "solo"
+            },
+            "class": "bus-solo",
+            "html": "<span class=\"rec-dot\" title=\"Loop recording\"></span><span class=\"bus-name\" data-bus=\"loop\" ondblclick=\"renameBus(this,'loop')\">loop</span> <span class=\"bus-type-tag\">(solo)</span>\n<div class=\"box\"><div class=\"proc-buttons\"><button class=\"proc-btn\" onclick=\"toggleProc('loop','gate')\" id=\"proc-loop-gate\" title=\"Noise Gate\">G</button><button class=\"proc-btn\" onclick=\"toggleProc('loop','hpf')\" id=\"proc-loop-hpf\" title=\"High Pass Filter\">H</button><button class=\"proc-btn\" onclick=\"toggleProc('loop','lpf')\" id=\"proc-loop-lpf\" title=\"Low Pass Filter\">L</button><button class=\"proc-btn\" onclick=\"toggleProc('loop','notch')\" id=\"proc-loop-notch\" title=\"Notch Filter\">N</button><button class=\"proc-btn\" onclick=\"toggleProc('loop','dfn')\" id=\"proc-loop-dfn\" title=\"Neural Denoise (RNNoise)\">D</button><span class=\"proc-sep\"></span><button class=\"proc-btn out-btn\" onclick=\"toggleProc('loop','pcm')\" id=\"proc-loop-pcm\" title=\"Feed PCM stream\">P</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('loop','mp3')\" id=\"proc-loop-mp3\" title=\"Feed MP3 stream\">M</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('loop','vad')\" id=\"proc-loop-vad\" title=\"VAD gate\">V</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('loop','loop')\" id=\"proc-loop-loop\" title=\"Loop record\">R</button><span class=\"flex-spacer\"></span><button class=\"mute-btn\" onclick=\"toggleBusMute('loop')\" id=\"bus-mute-loop\" title=\"Mute bus\">M</button></div><div class=\"dfn-mix-row dim-op\" id=\"dfn-mix-row-loop\"><button class=\"dfn-engine-pill\" id=\"dfn-engine-loop\" data-engine=\"rnnoise\" title=\"Click to swap denoise engine (RNNoise \u2194 DeepFilterNet)\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" ontouchstart=\"event.stopPropagation()\" onclick=\"event.stopPropagation(); toggleDfnEngine('loop')\">RNN</button><span class=\"dfn-mix-label\">mix</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"1\" step=\"0.05\" value=\"0.5\" id=\"dfn-mix-loop\" oninput=\"setDfnMix('loop', this.value, true)\" onchange=\"setDfnMix('loop', this.value, false)\" ondblclick=\"this.value=0.5;setDfnMix('loop', 0.5, false)\"><span class=\"dfn-mix-val\" id=\"dfn-mix-val-loop\">50%</span><span class=\"dfn-atten-wrap\" id=\"dfn-atten-wrap-loop\" style=\"display:none\"><span class=\"dfn-mix-label\" title=\"Attenuation cap (dB). 0=unlimited, 15\u201325 typical. Stops pumping.\">cap</span><input type=\"number\" class=\"dfn-atten-input\" min=\"0\" max=\"60\" step=\"1\" value=\"18\" id=\"dfn-atten-loop\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" onchange=\"setDfnAtten('loop', this.value)\"><span class=\"dfn-mix-label\">dB</span></span></div><div class=\"dfn-mix-row\" id=\"delay-row-loop\"><span class=\"dfn-mix-label\">delay</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"5000\" step=\"50\" value=\"0\" id=\"bus-delay-loop\" oninput=\"setBusDelay('loop', this.value, true)\" onchange=\"setBusDelay('loop', this.value, false)\" ondblclick=\"this.value=0;setBusDelay('loop', 0, false)\"><span class=\"dfn-mix-val\" id=\"bus-delay-val-loop\">0 ms</span></div><div class=\"level-bar\" id=\"level-bus_loop\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "5",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "31",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 336,
+            "pos_y": 837
+          },
+          "21": {
+            "id": 21,
+            "name": "asl2",
+            "data": {
+              "id": "asl2",
+              "type": "solo"
+            },
+            "class": "bus-solo",
+            "html": "<span class=\"rec-dot\" title=\"Loop recording\"></span><span class=\"bus-name\" data-bus=\"asl2\" ondblclick=\"renameBus(this,'asl2')\">asl2</span> <span class=\"bus-type-tag\">(solo)</span>\n<div class=\"box\"><div class=\"proc-buttons\"><button class=\"proc-btn\" onclick=\"toggleProc('asl2','gate')\" id=\"proc-asl2-gate\" title=\"Noise Gate\">G</button><button class=\"proc-btn\" onclick=\"toggleProc('asl2','hpf')\" id=\"proc-asl2-hpf\" title=\"High Pass Filter\">H</button><button class=\"proc-btn\" onclick=\"toggleProc('asl2','lpf')\" id=\"proc-asl2-lpf\" title=\"Low Pass Filter\">L</button><button class=\"proc-btn\" onclick=\"toggleProc('asl2','notch')\" id=\"proc-asl2-notch\" title=\"Notch Filter\">N</button><button class=\"proc-btn\" onclick=\"toggleProc('asl2','dfn')\" id=\"proc-asl2-dfn\" title=\"Neural Denoise (RNNoise)\">D</button><span class=\"proc-sep\"></span><button class=\"proc-btn out-btn\" onclick=\"toggleProc('asl2','pcm')\" id=\"proc-asl2-pcm\" title=\"Feed PCM stream\">P</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('asl2','mp3')\" id=\"proc-asl2-mp3\" title=\"Feed MP3 stream\">M</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('asl2','vad')\" id=\"proc-asl2-vad\" title=\"VAD gate\">V</button><button class=\"proc-btn out-btn\" onclick=\"toggleProc('asl2','loop')\" id=\"proc-asl2-loop\" title=\"Loop record\">R</button><span class=\"flex-spacer\"></span><button class=\"mute-btn\" onclick=\"toggleBusMute('asl2')\" id=\"bus-mute-asl2\" title=\"Mute bus\">M</button></div><div class=\"dfn-mix-row dim-op\" id=\"dfn-mix-row-asl2\"><button class=\"dfn-engine-pill\" id=\"dfn-engine-asl2\" data-engine=\"rnnoise\" title=\"Click to swap denoise engine (RNNoise \u2194 DeepFilterNet)\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" ontouchstart=\"event.stopPropagation()\" onclick=\"event.stopPropagation(); toggleDfnEngine('asl2')\">RNN</button><span class=\"dfn-mix-label\">mix</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"1\" step=\"0.05\" value=\"0.5\" id=\"dfn-mix-asl2\" oninput=\"setDfnMix('asl2', this.value, true)\" onchange=\"setDfnMix('asl2', this.value, false)\" ondblclick=\"this.value=0.5;setDfnMix('asl2', 0.5, false)\"><span class=\"dfn-mix-val\" id=\"dfn-mix-val-asl2\">50%</span><span class=\"dfn-atten-wrap\" id=\"dfn-atten-wrap-asl2\" style=\"display:none\"><span class=\"dfn-mix-label\" title=\"Attenuation cap (dB). 0=unlimited, 15\u201325 typical. Stops pumping.\">cap</span><input type=\"number\" class=\"dfn-atten-input\" min=\"0\" max=\"60\" step=\"1\" value=\"18\" id=\"dfn-atten-asl2\" onmousedown=\"event.stopPropagation()\" onpointerdown=\"event.stopPropagation()\" onchange=\"setDfnAtten('asl2', this.value)\"><span class=\"dfn-mix-label\">dB</span></span></div><div class=\"dfn-mix-row\" id=\"delay-row-asl2\"><span class=\"dfn-mix-label\">delay</span><input type=\"range\" class=\"dfn-mix-slider\" min=\"0\" max=\"5000\" step=\"50\" value=\"0\" id=\"bus-delay-asl2\" oninput=\"setBusDelay('asl2', this.value, true)\" onchange=\"setBusDelay('asl2', this.value, false)\" ondblclick=\"this.value=0;setBusDelay('asl2', 0, false)\"><span class=\"dfn-mix-val\" id=\"bus-delay-val-asl2\">0 ms</span></div><div class=\"level-bar\" id=\"level-bus_asl2\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "15",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "output_1": {
+                "connections": [
+                  {
+                    "node": "24",
+                    "output": "input_1"
+                  }
+                ]
+              }
+            },
+            "pos_x": 348,
+            "pos_y": 1000
+          },
+          "22": {
+            "id": 22,
+            "name": "mumble",
+            "data": {
+              "id": "mumble"
+            },
+            "class": "sink",
+            "html": "Mumble [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('mumble')\" id=\"mute-mumble\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('mumble',this.value)\" ondblclick=\"this.value=100;setGain('mumble',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-mumble\">100%</span></div><div class=\"level-bar\" id=\"level-mumble\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 683,
+            "pos_y": 28
+          },
+          "23": {
+            "id": 23,
+            "name": "broadcastify",
+            "data": {
+              "id": "broadcastify"
+            },
+            "class": "sink",
+            "html": "Broadcastify\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('broadcastify')\" id=\"mute-broadcastify\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('broadcastify',this.value)\" ondblclick=\"this.value=100;setGain('broadcastify',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-broadcastify\">100%</span></div><div class=\"level-bar\" id=\"level-broadcastify\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "19",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {},
+            "pos_x": 695,
+            "pos_y": 291
+          },
+          "24": {
+            "id": 24,
+            "name": "speaker",
+            "data": {
+              "id": "speaker"
+            },
+            "class": "sink",
+            "html": "Speaker\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('speaker')\" id=\"mute-speaker\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('speaker',this.value)\" ondblclick=\"this.value=100;setGain('speaker',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-speaker\">100%</span></div><div class=\"level-bar\" id=\"level-speaker\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "21",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {},
+            "pos_x": 695,
+            "pos_y": 1117
+          },
+          "25": {
+            "id": 25,
+            "name": "transcription",
+            "data": {
+              "id": "transcription"
+            },
+            "class": "sink",
+            "html": "Transcription\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('transcription')\" id=\"mute-transcription\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('transcription',this.value)\" ondblclick=\"this.value=100;setGain('transcription',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-transcription\">100%</span></div><div class=\"level-bar\" id=\"level-transcription\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 695,
+            "pos_y": 1224
+          },
+          "26": {
+            "id": 26,
+            "name": "nul",
+            "data": {
+              "id": "nul"
+            },
+            "class": "sink node-muted",
+            "html": "NUL Sink\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn muted\" disabled title=\"NUL Sink: always muted\" id=\"mute-nul\">M</button></div><div class=\"level-bar\" id=\"level-nul\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "16",
+                    "input": "output_1"
+                  },
+                  {
+                    "node": "17",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {},
+            "pos_x": 693,
+            "pos_y": -95
+          },
+          "27": {
+            "id": 27,
+            "name": "remote_audio_tx",
+            "data": {
+              "id": "remote_audio_tx"
+            },
+            "class": "sink",
+            "html": "Remote Audio [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('remote_audio_tx')\" id=\"mute-remote_audio_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('remote_audio_tx',this.value)\" ondblclick=\"this.value=100;setGain('remote_audio_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-remote_audio_tx\">100%</span></div><div class=\"level-bar\" id=\"level-remote_audio_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 695,
+            "pos_y": 1010
+          },
+          "28": {
+            "id": 28,
+            "name": "aioc_tx",
+            "data": {
+              "id": "aioc_tx"
+            },
+            "class": "sink",
+            "html": "TH-9800 [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('aioc_tx')\" id=\"mute-aioc_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('aioc_tx',this.value)\" ondblclick=\"this.value=100;setGain('aioc_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-aioc_tx\">100%</span></div><div class=\"level-bar\" id=\"level-aioc_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 695,
+            "pos_y": 438
+          },
+          "29": {
+            "id": 29,
+            "name": "cm5_aioc_tx",
+            "data": {
+              "id": "cm5_aioc_tx"
+            },
+            "class": "sink",
+            "html": "Cm5 Aioc [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('cm5_aioc_tx')\" id=\"mute-cm5_aioc_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"167\" oninput=\"setGain('cm5_aioc_tx',this.value)\" ondblclick=\"this.value=100;setGain('cm5_aioc_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-cm5_aioc_tx\">167%</span></div><div class=\"level-bar\" id=\"level-cm5_aioc_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "18",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {},
+            "pos_x": 715,
+            "pos_y": 780
+          },
+          "30": {
+            "id": 30,
+            "name": "d75_tx",
+            "data": {
+              "id": "d75_tx"
+            },
+            "class": "sink",
+            "html": "D75Cm5 [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('d75_tx')\" id=\"mute-d75_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('d75_tx',this.value)\" ondblclick=\"this.value=100;setGain('d75_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-d75_tx\">100%</span></div><div class=\"level-bar\" id=\"level-d75_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 693,
+            "pos_y": 155
+          },
+          "31": {
+            "id": 31,
+            "name": "ic7100_tx",
+            "data": {
+              "id": "ic7100_tx"
+            },
+            "class": "sink",
+            "html": "Ic7100 [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('ic7100_tx')\" id=\"mute-ic7100_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('ic7100_tx',this.value)\" ondblclick=\"this.value=100;setGain('ic7100_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-ic7100_tx\">100%</span></div><div class=\"level-bar\" id=\"level-ic7100_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": [
+                  {
+                    "node": "20",
+                    "input": "output_1"
+                  }
+                ]
+              }
+            },
+            "outputs": {},
+            "pos_x": 708,
+            "pos_y": 608
+          },
+          "32": {
+            "id": 32,
+            "name": "usrp_tx",
+            "data": {
+              "id": "usrp_tx"
+            },
+            "class": "sink",
+            "html": "AllStar (USRP) [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('usrp_tx')\" id=\"mute-usrp_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('usrp_tx',this.value)\" ondblclick=\"this.value=100;setGain('usrp_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-usrp_tx\">100%</span></div><div class=\"level-bar\" id=\"level-usrp_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 701,
+            "pos_y": 897
+          },
+          "33": {
+            "id": 33,
+            "name": "usrp2_tx",
+            "data": {
+              "id": "usrp2_tx"
+            },
+            "class": "sink",
+            "html": "AllStar 2 (USRP) [TX]\n<div class=\"box\"><div class=\"node-controls\"><button class=\"mute-btn\" onclick=\"toggleMute('usrp2_tx')\" id=\"mute-usrp2_tx\">M</button><input type=\"range\" class=\"gain-slider\" min=\"0\" max=\"500\" value=\"100\" oninput=\"setGain('usrp2_tx',this.value)\" ondblclick=\"this.value=100;setGain('usrp2_tx',100)\" title=\"Gain (double-click to reset)\"><span class=\"gain-val\" id=\"gain-val-usrp2_tx\">100%</span></div><div class=\"level-bar\" id=\"level-usrp2_tx\"><div class=\"level-fill\"></div></div></div>",
+            "typenode": false,
+            "inputs": {
+              "input_1": {
+                "connections": []
+              }
+            },
+            "outputs": {},
+            "pos_x": 697,
+            "pos_y": 1332
+          }
+        }
+      }
+    }
+  }
+}

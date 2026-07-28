@@ -125,6 +125,10 @@ class BusManager:
         # them. Surfaced via get_sink_stats() and the bus_sink_stats MCP
         # tool. Memory rule: instrument first, debug after.
         self._sink_stats = {}     # sink_id -> dict (enqueued/drops/drained/...)
+        # Per-tick slots for the dual-channel Broadcastify feed. Written by
+        # _deliver_audio as each bus delivers, drained once per tick by
+        # _flush_broadcastify_stereo. Only ever touched from the tick thread.
+        self._bcfy_ch = {'left': None, 'right': None}
 
         # ── v3.5-D: tick-owned level meters ────────────────────────────────
         # Read-modify-write level state used to live on the gateway object
@@ -243,6 +247,39 @@ class BusManager:
             'depth_max': 0,        # peak queue depth observed at enqueue
             'last_send_mono': 0.0, # monotonic timestamp of last successful send
         }
+
+    def _flush_broadcastify_stereo(self, chunk_size):
+        """Interleave the per-tick broadcastify_l / broadcastify_r slots.
+
+        Called once at the END of the tick, after every bus has delivered, so
+        both channels describe the same 50 ms of wall-clock time. Emits a
+        single enqueue so the two channels can never be separated by the
+        bounded sink queue.
+
+        A side with no audio this tick is filled with silence rather than
+        skipped: MP3 has no way to express "this channel has nothing", and a
+        short write would leave the encoder mid-frame and swap the channels
+        for the rest of the connection.
+        """
+        left = self._bcfy_ch.get('left')
+        right = self._bcfy_ch.get('right')
+        if left is None and right is None:
+            return          # neither side routed this tick — keepalive covers it
+        self._bcfy_ch['left'] = None
+        self._bcfy_ch['right'] = None
+        n = chunk_size
+        out = np.zeros((n, 2), dtype=np.int16)
+        for idx, buf in ((0, left), (1, right)):
+            if not buf:
+                continue    # silence, already zero
+            samples = np.frombuffer(buf, dtype=np.int16)
+            # Trim or zero-pad to exactly one tick. Buses are expected to
+            # deliver chunk_size samples, but a source mid-restart can hand
+            # over a short buffer, and truncating one channel while the other
+            # is full length is precisely how the two drift apart.
+            k = min(len(samples), n)
+            out[:k, idx] = samples[:k]
+        self._enqueue_sink('broadcastify', (out.tobytes(),))
 
     def _enqueue_sink(self, sink_id, payload):
         """Stage a sink call to run off-tick on the per-sink drain thread.
@@ -1205,6 +1242,22 @@ class BusManager:
                 gw._speaker_enqueue(audio)
                 if _st:
                     _st.record(f'{bus_id}_deliver', 'speaker', audio)
+            elif sink_id in ('broadcastify_l', 'broadcastify_r') and ctx.stream_output is not None:
+                # Dual-channel feed. Park this side in a per-tick slot rather
+                # than enqueueing it — the two channels come from DIFFERENT
+                # buses and must be sample-aligned before interleaving.
+                # _flush_broadcastify_stereo() combines them at the end of the
+                # tick and enqueues ONE payload, so both channels always travel
+                # through a single bounded queue. That is what keeps them in
+                # sync: with a queue each, one side dropping a chunk (maxlen=8)
+                # would offset the channels permanently, and the drift would be
+                # invisible until someone noticed the two receivers had
+                # separated by seconds.
+                self._bcfy_ch['left' if sink_id.endswith('_l') else 'right'] = audio
+                if ctx.stream_output.connected:
+                    self._meters['stream_audio'] = _audio_level
+                if _st and _st.active:
+                    _st.record(f'{bus_id}_deliver', sink_id, audio, -1, 'slot')
             elif sink_id == 'broadcastify' and ctx.stream_output is not None:
                 # v3.5-A: send_audio runs off-tick on SinkDrain-broadcastify.
                 # Level meter still updates here so the UI tracks tick-aligned.
@@ -1543,6 +1596,18 @@ class BusManager:
                 except Exception as e:
                     print(f"  [BusManager] {bus_id} tick error: {e}")
                     import traceback; traceback.print_exc()
+
+            # ── Dual-channel Broadcastify: combine L/R for THIS tick ────────
+            # Must run after every bus has delivered, so both channels cover
+            # the same 50 ms. Outside the per-bus try/except on purpose: it is
+            # not owned by any one bus, and a failure here would otherwise be
+            # attributed to whichever bus happened to be last.
+            try:
+                self._flush_broadcastify_stereo(chunk_size)
+            except Exception as e:
+                if not hasattr(self, '_bcfy_err_logged'):
+                    self._bcfy_err_logged = True
+                    print(f"  [BusManager] broadcastify stereo combine error: {e}")
 
             # ── v3.5-D: publish tick-owned meters to gateway ───────────────
             # BusManager owns the canonical level values; one-shot mirror

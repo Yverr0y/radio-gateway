@@ -1524,8 +1524,21 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         sinks = []
         sinks.append({'id': 'mumble', 'name': 'Mumble [TX]', 'type': 'VoIP',
                       'enabled': bool(gw and gw.mumble)})
-        sinks.append({'id': 'broadcastify', 'name': 'Broadcastify', 'type': 'Stream',
-                      'enabled': bool(gw and getattr(gw, 'stream_output', None))})
+        # Broadcastify exposes EITHER one mono node or an L/R pair, never both.
+        # Making the channel mode an explicit config choice rather than
+        # inferring it from which nodes happen to be wired means the invalid
+        # combinations (mono AND left, or a "both" node fighting L/R) simply
+        # cannot be represented in the graph, so there is nothing to validate
+        # and nothing for the user to get wrong.
+        _bcfy_on = bool(gw and getattr(gw, 'stream_output', None))
+        if bool(getattr(gw.config, 'STREAM_DUAL_CHANNEL', True)) if gw else False:
+            sinks.append({'id': 'broadcastify_l', 'name': 'Broadcastify [L]',
+                          'type': 'Stream', 'enabled': _bcfy_on})
+            sinks.append({'id': 'broadcastify_r', 'name': 'Broadcastify [R]',
+                          'type': 'Stream', 'enabled': _bcfy_on})
+        else:
+            sinks.append({'id': 'broadcastify', 'name': 'Broadcastify',
+                          'type': 'Stream', 'enabled': _bcfy_on})
         _spk_mode = str(getattr(gw.config, 'SPEAKER_MODE', 'virtual')).lower() if gw else 'virtual'
         sinks.append({'id': 'speaker', 'name': 'Speaker', 'type': 'Local',
                       'enabled': True, 'speaker_mode': _spk_mode})

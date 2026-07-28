@@ -2607,7 +2607,19 @@ class StreamOutputSource:
         self.connected = False
         self._encoder = None      # ffmpeg subprocess
         self._icecast_sock = None  # TCP socket to Icecast
-        self._chunk_bytes = config.AUDIO_CHUNK_SIZE * 2  # 16-bit mono — used by keepalive silence
+        # Dual-channel (Broadcastify two-scanner) feed. When on, the bus manager
+        # combines the broadcastify_l / broadcastify_r sinks into interleaved
+        # stereo before enqueueing, and the encoder is told to expect 2 channels.
+        # Broadcastify specifies 16 kbps per scanner, so a dual feed is 32 kbps
+        # total — the same per-channel rate as the mono feed, not a step up in
+        # quality per channel.
+        self._dual = bool(getattr(config, 'STREAM_DUAL_CHANNEL', True))
+        self._channels = 2 if self._dual else 1
+        # Keepalive silence must match whatever the encoder expects, so it
+        # doubles in dual mode. Getting this wrong desynchronises the channels
+        # for the rest of the connection: a half-length write leaves the
+        # encoder mid-frame and every later sample lands in the wrong channel.
+        self._chunk_bytes = config.AUDIO_CHUNK_SIZE * 2 * self._channels
         self._lock = threading.Lock()
         # Serialise writes to the ffmpeg encoder's stdin. Two threads write
         # PCM into it: send_audio() (called from BusManager / sink-drain
@@ -2719,12 +2731,21 @@ class StreamOutputSource:
         try:
             self._encoder = sp.Popen([
                 'ffmpeg', '-hide_banner', '-loglevel', 'error',
-                # Input: raw PCM as the gateway produces it (48 kHz mono).
-                '-f', 's16le', '-ar', '48000', '-ac', '1', '-i', 'pipe:0',
+                # Input: raw PCM as the gateway produces it — 48 kHz, mono, or
+                # interleaved stereo when the dual-channel feed is enabled.
+                '-f', 's16le', '-ar', '48000', '-ac', str(self._channels),
+                '-i', 'pipe:0',
                 # Output: resampled — this -ar is AFTER -i so it sets the
                 # ENCODER rate, not the input rate. Without it the encoder runs
                 # at 48 kHz, forcing MPEG-1 and a 32 kbps floor. See out_rate.
                 '-c:a', 'libmp3lame', '-ar', str(out_rate), '-b:a', f'{bitrate}k',
+            ] + ([
+                # Two independent receivers are UNCORRELATED, so joint stereo
+                # (which codes mid/side to exploit L/R similarity) wastes bits
+                # and can smear one channel into the other. Plain stereo keeps
+                # them separate, which is the whole point of a dual feed.
+                '-joint_stereo', '0',
+            ] if self._dual else []) + [
                 '-flush_packets', '1',
                 '-fflags', '+nobuffer',
                 '-f', 'mp3', 'pipe:1'
