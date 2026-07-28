@@ -2648,6 +2648,18 @@ class StreamOutputSource:
         password = getattr(self.config, 'STREAM_PASSWORD', '')
         bitrate = int(getattr(self.config, 'STREAM_BITRATE', 16))
         name = getattr(self.config, 'STREAM_NAME', 'Radio Gateway')
+        # Encoder output sample rate. MUST stay below 32 kHz: at 32/44.1/48 kHz
+        # the encoder is MPEG-1 Layer III, whose LOWEST Layer III bitrate is
+        # 32 kbps, so lame silently clamps anything smaller and -b:a is ignored.
+        # Broadcastify specifies 16 kbps for a single scanner (32 kbps for a
+        # dual-channel feed, i.e. the same 16k per scanner), and 16 kbps only
+        # exists in MPEG-2 Layer III — 16/22.05/24 kHz. Measured 2026-07-28:
+        #   48 kHz  asked 16k -> 32.3 kbps   (and asked 32k -> 32.3 kbps too)
+        #   22.05kHz asked 16k -> 16.3 kbps  <- on spec
+        # 22.05 kHz carries 11 kHz of audio; narrowband FM voice is ~3 kHz, so
+        # nothing audible is lost — the old 48 kHz feed was spending half its
+        # bitrate on empty spectrum the radio never produced.
+        out_rate = int(getattr(self.config, 'STREAM_SAMPLE_RATE', 22050))
 
         if not server or not password:
             print("  ⚠ Broadcastify: missing server or password")
@@ -2707,8 +2719,12 @@ class StreamOutputSource:
         try:
             self._encoder = sp.Popen([
                 'ffmpeg', '-hide_banner', '-loglevel', 'error',
+                # Input: raw PCM as the gateway produces it (48 kHz mono).
                 '-f', 's16le', '-ar', '48000', '-ac', '1', '-i', 'pipe:0',
-                '-c:a', 'libmp3lame', '-b:a', f'{bitrate}k',
+                # Output: resampled — this -ar is AFTER -i so it sets the
+                # ENCODER rate, not the input rate. Without it the encoder runs
+                # at 48 kHz, forcing MPEG-1 and a 32 kbps floor. See out_rate.
+                '-c:a', 'libmp3lame', '-ar', str(out_rate), '-b:a', f'{bitrate}k',
                 '-flush_packets', '1',
                 '-fflags', '+nobuffer',
                 '-f', 'mp3', 'pipe:1'
