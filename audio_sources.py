@@ -2696,6 +2696,17 @@ class StreamOutputSource:
                 f"ice-name: {name}\r\n"
                 f"ice-public: 1\r\n"
                 f"ice-bitrate: {bitrate}\r\n"
+                # ice-audio-info is how a source DECLARES its format to Icecast.
+                # Without it the server has only the MP3 frames to go on and
+                # reports whatever it defaults to — Broadcastify's feed page
+                # showed "ch=1" while the stream itself was genuinely stereo
+                # (verified 2026-07-28 by capturing the live mount: channels=2,
+                # audio on L only while R stayed at exactly zero). The frames
+                # were always right; the metadata simply never mentioned
+                # channels or sample rate. Semicolon-separated per the Icecast
+                # convention used by ices/butt/liquidsoap.
+                f"ice-audio-info: ice-samplerate={out_rate};"
+                f"ice-bitrate={bitrate};ice-channels={self._channels}\r\n"
                 f"\r\n"
             )
             sock.sendall(headers.encode())
