@@ -78,6 +78,14 @@ class BusManager:
         self._config_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), 'routing_config.json')
         self._tick_interval = 0.05  # 50ms = 20 ticks/sec (matches main loop)
+        # Tick at which the one-shot startup collect+freeze runs (see _tick_loop).
+        # 1200 ticks = ~60 s: generous headroom over the ~2 s the transcriber
+        # needs to load Silero + Moonshine on its own thread, and over the
+        # "Loading moonshine/base... attempt 1/3" retry path, while still
+        # landing well before the first gen-2 at tick 12000 (~10 min). Must
+        # stay a multiple of 1200 so it consumes a gen-1 slot instead of
+        # adding a collect.
+        self._FREEZE_AT_TICK = 1200
         # Shared PCM/MP3 buffer — BusManager deposits mixed audio here,
         # main loop picks it up and mixes with listen bus output before pushing.
         self._pcm_queue = collections.deque(maxlen=8)  # thread-safe bounded deque
@@ -708,6 +716,18 @@ class BusManager:
         # routing reload spliced the tail of the old session's audio onto the
         # front of the new one.
         self._mumble_drain_buf = b''
+        # Deregister the GC callback the tick loop installed. _tick_loop appends
+        # it on every entry, so without this each routing reload left another
+        # live copy behind: every collect was then observed N times, inflating
+        # rg_gc_pause_ms_count and rg_gc_pause_overrun_total by the number of
+        # reloads and printing the overrun warning N times. Observed 2026-07-27
+        # with two registrations — the counter read 8 for 4 actual overruns.
+        # (Pause *averages* were unaffected; each copy timed the same collect.)
+        try:
+            while self._gc_callback in gc.callbacks:
+                gc.callbacks.remove(self._gc_callback)
+        except (ValueError, AttributeError):
+            pass
 
     def reload(self):
         """Reload config and recreate busses."""
@@ -1428,11 +1448,18 @@ class BusManager:
 
         # ── GC control: disable automatic collection in this hot path ──
         gc.disable()
-        # Sweep startup garbage once, then freeze the survivors into the
-        # permanent generation so the periodic full collections below don't
-        # re-scan every long-lived startup object.
-        gc.collect()
-        gc.freeze()
+        # The collect+freeze is DEFERRED to the tick body (_FREEZE_AT_TICK), not
+        # done here. Freezing at loop entry only captures what has been
+        # allocated by this instant, and the expensive graphs are allocated
+        # later: RadioTranscriber.start() returns immediately and loads Silero
+        # VAD + Moonshine ONNX on its own thread ~2 s afterwards, and
+        # discover_plugins() + reload() also run after start(). Measured
+        # 2026-07-27 over 2h23m with the freeze here: every one of 14 gen-2
+        # collects took ~63 ms against a 50 ms tick, i.e. delayed a tick every
+        # 10 minutes. Building those subsystems earlier does NOT fix it — the
+        # allocation is late, not the construction — so the freeze waits
+        # instead. See core/lifecycle.py for why the build order still matters
+        # for gen-0/gen-1.
         gc.callbacks.append(self._gc_callback)
         print("  [BusManager] GC disabled in tick loop; manual gen-0/5s, gen-1/60s, gen-2/10min")
 
@@ -1654,7 +1681,25 @@ class BusManager:
             # instead of landing at a random point mid-tick. Pauses are
             # recorded by _gc_callback (rg_gc_pause_ms) and an overrun past
             # the tick interval increments rg_gc_pause_overrun_total.
-            if _tick_num % 12000 == 0:      # ~10 min: full collect
+            if _tick_num == self._FREEZE_AT_TICK:
+                # One-shot: sweep everything startup allocated — including the
+                # async model loads that a freeze at loop entry misses — then
+                # move the survivors into the permanent generation so no later
+                # gen-2 walks them again. This full collect costs ~63 ms ONCE
+                # and will increment rg_gc_pause_overrun_total by 1 at startup;
+                # that single overrun is expected, not a regression. It takes
+                # this tick's slot in the chain rather than adding work: a full
+                # collect supersedes the gen-1 sweep that would otherwise run
+                # here (_FREEZE_AT_TICK is a multiple of the 1200-tick gen-1
+                # cadence). Anything allocated after this point stays
+                # collectable, which is correct — it is runtime state, not
+                # startup state.
+                gc.collect()
+                gc.freeze()
+                print(f"  [BusManager] GC: froze {gc.get_freeze_count()} startup "
+                      f"objects at tick {_tick_num} "
+                      f"({_tick_num * self._tick_interval:.0f}s)")
+            elif _tick_num % 12000 == 0:    # ~10 min: full collect
                 gc.collect(2)
             elif _tick_num % 1200 == 0:     # ~60 s: gen-1
                 gc.collect(1)

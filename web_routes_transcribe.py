@@ -155,6 +155,17 @@ def handle_transcribe_config(handler, parent):
         elif key == 'restart':
             gw = parent.gateway
             if gw:
+                # The transcriber is constructed before BusManager.start(), so
+                # its object graph (Silero VAD + Moonshine ONNX) is inside the
+                # permanent generation. Frozen objects are never scanned for
+                # cycles again, so swapping models without unfreezing would
+                # leak the outgoing session's cyclic garbage for the life of
+                # the process. Unfreeze, swap, then re-freeze the new steady
+                # state — the collect below is what actually reclaims the old
+                # model. This runs on an operator action, never on a hot path,
+                # so the ~65 ms full collection is free here.
+                import gc as _gc
+                _gc.unfreeze()
                 if gw.transcriber:
                     gw.transcriber.stop()
                 try:
@@ -164,6 +175,13 @@ def handle_transcribe_config(handler, parent):
                     result = {'ok': True}
                 except Exception as _re:
                     result = {'ok': False, 'error': str(_re)}
+                finally:
+                    # Re-freeze even if the swap failed — leaving the heap
+                    # unfrozen would put every long-lived startup object back
+                    # into every gen-2 sweep, which is the exact 65 ms tick
+                    # overrun this ordering exists to avoid.
+                    _gc.collect()
+                    _gc.freeze()
             else:
                 result = {'ok': False, 'error': 'gateway not ready'}
         else:

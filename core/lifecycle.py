@@ -601,42 +601,21 @@ class _LifecycleMixin:
         self._status_thread = threading.Thread(target=self.status_monitor_loop, daemon=True)
         self._status_thread.start()
 
-        # Start Bus Manager (additional busses from routing config)
-        try:
-            from bus_manager import BusManager
-            self.bus_manager = BusManager(self)
-            self.bus_manager.start()
-            self.mixer = self.bus_manager.listen_bus  # Backward compat for trace access
-            # Cache bus metadata for web UI (refreshed after routing saves)
-            self._bus_stream_flags = self.bus_manager.get_bus_stream_flags()
-            self._bus_sinks = self.bus_manager.get_bus_sinks()
-            self._listen_bus_id = self.bus_manager.get_listen_bus_id()
-            self._listen_bus_muted = self.bus_manager.is_bus_muted(self._listen_bus_id)
-            # Restore persisted source/sink gains
-            self._load_source_gains()
-            self._apply_source_gains()
-        except Exception as e:
-            print(f"  [BusManager] Failed to start: {e}")
-            self.bus_manager = None
-
-        # Load external plugins from plugins/ directory
-        self._external_plugins = {}
-        try:
-            from plugin_loader import discover_plugins
-            self._external_plugins = discover_plugins(self.config, self)
-            if self._external_plugins:
-                print(f"✓ Loaded {len(self._external_plugins)} external plugin(s)")
-                # Buses are built BEFORE plugin discovery, so a solo/duplex bus
-                # whose radio is an external plugin (e.g. AllStar usrp_tx sink)
-                # resolved to None at creation and never got its TX radio →
-                # put_audio was never called. Rebuild now that _external_plugins
-                # is populated — same mechanism endpoint registration uses
-                # (gateway_setup → bus_manager.reload()). reload() re-syncs the
-                # listen bus too, so it supersedes sync_listen_bus() here.
-                if self.bus_manager:
-                    self.bus_manager.reload()
-        except Exception as e:
-            print(f"  [Plugins] Discovery failed: {e}")
+        # ── Long-lived subsystems are built BEFORE BusManager.start() ──
+        # Building them here puts their object graphs in place early enough to
+        # be swept into the permanent generation by BusManager's startup freeze,
+        # so the frequent collections stop walking them. Measured 2026-07-27
+        # over 2h23m, moving these above start():
+        #     gen-0 avg 0.336 ms -> 0.212 ms
+        #     gen-1 avg 3.080 ms -> 1.016 ms   (3x)
+        # This does NOT fix the gen-2 overrun, and it never could: gen-2 is
+        # dominated by the transcriber's Silero VAD + Moonshine ONNX sessions,
+        # which RadioTranscriber.start() loads on its OWN thread ~2 s after
+        # returning. The allocation is late, not the construction — that is
+        # handled by deferring the freeze itself (bus_manager _FREEZE_AT_TICK).
+        # Keep this order for the gen-0/gen-1 win; don't expect more from it.
+        # A runtime transcriber swap must unfreeze first — see the 'restart'
+        # handler in web_routes_transcribe.py.
 
         # Initialize Loop Recorder (per-bus continuous recording)
         try:
@@ -675,6 +654,43 @@ class _LifecycleMixin:
             except Exception as e:
                 print(f"[Transcribe] Failed to start: {e}")
                 self.transcriber = None
+
+        # Start Bus Manager (additional busses from routing config)
+        try:
+            from bus_manager import BusManager
+            self.bus_manager = BusManager(self)
+            self.bus_manager.start()
+            self.mixer = self.bus_manager.listen_bus  # Backward compat for trace access
+            # Cache bus metadata for web UI (refreshed after routing saves)
+            self._bus_stream_flags = self.bus_manager.get_bus_stream_flags()
+            self._bus_sinks = self.bus_manager.get_bus_sinks()
+            self._listen_bus_id = self.bus_manager.get_listen_bus_id()
+            self._listen_bus_muted = self.bus_manager.is_bus_muted(self._listen_bus_id)
+            # Restore persisted source/sink gains
+            self._load_source_gains()
+            self._apply_source_gains()
+        except Exception as e:
+            print(f"  [BusManager] Failed to start: {e}")
+            self.bus_manager = None
+
+        # Load external plugins from plugins/ directory
+        self._external_plugins = {}
+        try:
+            from plugin_loader import discover_plugins
+            self._external_plugins = discover_plugins(self.config, self)
+            if self._external_plugins:
+                print(f"✓ Loaded {len(self._external_plugins)} external plugin(s)")
+                # Buses are built BEFORE plugin discovery, so a solo/duplex bus
+                # whose radio is an external plugin (e.g. AllStar usrp_tx sink)
+                # resolved to None at creation and never got its TX radio →
+                # put_audio was never called. Rebuild now that _external_plugins
+                # is populated — same mechanism endpoint registration uses
+                # (gateway_setup → bus_manager.reload()). reload() re-syncs the
+                # listen bus too, so it supersedes sync_listen_bus() here.
+                if self.bus_manager:
+                    self.bus_manager.reload()
+        except Exception as e:
+            print(f"  [Plugins] Discovery failed: {e}")
 
         # Main loop
         try:
