@@ -2701,6 +2701,10 @@ class StreamOutputSource:
             self._icecast_sock = None
             return
 
+        # Prometheus label for this stream. Resolved once per connect rather
+        # than per chunk — it cannot change without reconnecting.
+        _metric_stream = mount or 'icecast'
+
         # Reader thread: reads MP3 from ffmpeg, sends to Icecast
         def _reader():
             while self._encoder and self._encoder.poll() is None:
@@ -2712,6 +2716,27 @@ class StreamOutputSource:
                         if self._icecast_sock:
                             self._icecast_sock.sendall(data)
                             self._bytes_sent += len(data)
+                            # Count bytes HERE, at the point they actually go
+                            # out. This used to be done in
+                            # stream_stats.get_stream_stats(), which has no
+                            # background caller — it only runs when a web
+                            # request asks for gateway status. The counter
+                            # therefore sat flat between dashboard loads and
+                            # then jumped by the whole backlog at once (seen
+                            # 2026-07-28: flat 20 min, then +86,691,840 in one
+                            # step), so rate() read 0 for long stretches. That
+                            # made the 'broadcastify_stream_down' alert in
+                            # alerts.py fire 4-11 times a day on a perfectly
+                            # healthy stream, and made
+                            # manager_engine's stream_throughput_kbps equally
+                            # wrong. Never derive a rate metric from a
+                            # pull-driven status call.
+                            try:
+                                import metrics as _m
+                                _m.stream_bytes_sent_total.labels(
+                                    stream=_metric_stream).inc(len(data))
+                            except Exception:
+                                pass  # metrics must never break the stream
                 except (BrokenPipeError, OSError, ConnectionError) as e:
                     uptime_s = int(time.time() - self._connect_time) if self._connect_time else 0
                     print(f"  [Broadcastify] Connection lost after {uptime_s}s: {e}")
