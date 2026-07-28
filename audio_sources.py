@@ -2666,6 +2666,10 @@ class StreamOutputSource:
         password = getattr(self.config, 'STREAM_PASSWORD', '')
         bitrate = int(getattr(self.config, 'STREAM_BITRATE', 16))
         name = getattr(self.config, 'STREAM_NAME', 'Radio Gateway')
+        # ice-description is listed in the Icecast SOURCE spec alongside
+        # ice-name/ice-genre/ice-url; we had the config value all along
+        # and simply never sent it.
+        description = getattr(self.config, 'STREAM_DESCRIPTION', '') or name
         # Encoder output sample rate. MUST stay below 32 kHz: at 32/44.1/48 kHz
         # the encoder is MPEG-1 Layer III, whose LOWEST Layer III bitrate is
         # 32 kbps, so lame silently clamps anything smaller and -b:a is ignored.
@@ -2696,17 +2700,27 @@ class StreamOutputSource:
                 f"ice-name: {name}\r\n"
                 f"ice-public: 1\r\n"
                 f"ice-bitrate: {bitrate}\r\n"
-                # ice-audio-info is how a source DECLARES its format to Icecast.
-                # Without it the server has only the MP3 frames to go on and
-                # reports whatever it defaults to — Broadcastify's feed page
-                # showed "ch=1" while the stream itself was genuinely stereo
-                # (verified 2026-07-28 by capturing the live mount: channels=2,
-                # audio on L only while R stayed at exactly zero). The frames
-                # were always right; the metadata simply never mentioned
-                # channels or sample rate. Semicolon-separated per the Icecast
-                # convention used by ices/butt/liquidsoap.
-                f"ice-audio-info: ice-samplerate={out_rate};"
-                f"ice-bitrate={bitrate};ice-channels={self._channels}\r\n"
+                f"ice-description: {description}\r\n"
+                # ice-audio-info is how a source DECLARES its format. Without it
+                # the server has only the MP3 frames to go on: Broadcastify's
+                # feed page showed Sample Rate 0, Bitrate 0, Channels 1 — those
+                # zeros are "unknown", not a misread, since decoding the frames
+                # would have yielded 22050 and 32. The audio was always right
+                # (verified 2026-07-28 against the live mount: channels=2,
+                # audio on L while R stayed at exactly zero).
+                #
+                # BOTH key dialects are sent deliberately. Icecast's own docs
+                # give two real-world examples with different names —
+                #   LadioCast: samplerate=44100;quality=10%2e0;channels=2
+                #   Butt:      ice-bitrate=128;ice-channels=2;ice-samplerate=44100
+                # — and Icecast passes the pairs through rather than
+                # normalising them, so which one a downstream consumer reads is
+                # its own choice. Sending both costs a few bytes once per
+                # connect and removes the guess. Extra keys are ignored by a
+                # parser that does not know them.
+                f"ice-audio-info: samplerate={out_rate};channels={self._channels};"
+                f"bitrate={bitrate};ice-samplerate={out_rate};"
+                f"ice-channels={self._channels};ice-bitrate={bitrate}\r\n"
                 f"\r\n"
             )
             sock.sendall(headers.encode())
@@ -2769,7 +2783,8 @@ class StreamOutputSource:
                 '-flush_packets', '1',
                 '-fflags', '+nobuffer',
                 '-f', 'mp3', 'pipe:1'
-            ], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.DEVNULL)
+            ], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+            self._start_encoder_stderr_reader()
         except Exception as e:
             print(f"  ⚠ Broadcastify: ffmpeg encoder failed: {e}")
             self._note_error(f"ffmpeg encoder failed: {e}")
@@ -2927,6 +2942,44 @@ class StreamOutputSource:
             self.connected = False
         except Exception:
             pass
+
+    def _start_encoder_stderr_reader(self):
+        """Drain and log the encoder's stderr.
+
+        This used to be DEVNULL. When ffmpeg exited the reader loop simply saw
+        EOF and logged "Reader thread exited" with no reason — the one piece of
+        evidence that would explain an encoder death was being thrown away.
+
+        It MUST be drained, not merely redirected: a PIPE nobody reads fills its
+        64 KB kernel buffer and then blocks ffmpeg's next write forever, which
+        would wedge the encoder. That is a worse failure than the missing logs,
+        so the thread is started immediately after Popen and exits on EOF.
+
+        ffmpeg runs at -loglevel error, so in normal operation this produces
+        nothing at all.
+        """
+        enc = self._encoder
+        if enc is None or enc.stderr is None:
+            return
+
+        def _drain(pipe):
+            try:
+                for raw in iter(pipe.readline, b''):
+                    line = raw.decode('utf-8', errors='replace').strip()
+                    if not line:
+                        continue
+                    print(f"  [Broadcastify] ffmpeg: {line}")
+                    self._note_error(f"ffmpeg: {line}")
+            except Exception:
+                pass          # pipe closed under us during shutdown
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_drain, args=(enc.stderr,), daemon=True,
+                         name="Broadcastify-ffmpeg-err").start()
 
     def _note_error(self, msg):
         """Record the most recent stream failure for the dashboard."""
