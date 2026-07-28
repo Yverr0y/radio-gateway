@@ -2621,6 +2621,16 @@ class StreamOutputSource:
         self._bytes_sent = 0
         self._connect_time = 0
         self._reconnect_backoff = 5
+        # Longer wait used only after a "403 Mountpoint in use" rejection, i.e.
+        # when the server is still holding our own previous source connection.
+        # Measured clear time was under 10s; 15 gives headroom without making
+        # ordinary reconnects sluggish. Configurable because a different Icecast
+        # host may reap sources on a different schedule.
+        self._mount_wait = float(getattr(config, 'STREAM_MOUNT_WAIT', 15.0))
+        # True when the server may still be holding our previous source
+        # connection: set on a detected drop AND on a 403 mount-in-use refusal,
+        # cleared by a successful connect.
+        self._mount_in_use = False
         self._reconnect_count = 0
         self._last_drop_time = 0   # monotonic time of last connection drop
         self._was_connected = False  # True once first successful connection
@@ -2674,8 +2684,16 @@ class StreamOutputSource:
             resp_str = resp.decode(errors='replace')
             if '200' not in resp_str.split('\n')[0]:
                 print(f"  ⚠ Broadcastify: Icecast rejected connection: {resp_str.strip()}")
+                # "403 Mountpoint in use" is not a real failure — it means the
+                # server has not yet reaped OUR previous source connection, so
+                # retrying sooner cannot possibly work. Flag it so the reconnect
+                # worker waits for the mount to clear instead of burning an
+                # attempt. Any other rejection (bad password, wrong mount) is a
+                # genuine error and keeps the short retry.
+                self._mount_in_use = ('mountpoint in use' in resp_str.lower())
                 sock.close()
                 return
+            self._mount_in_use = False
 
             sock.settimeout(None)
             self._icecast_sock = sock
@@ -2742,6 +2760,11 @@ class StreamOutputSource:
                     print(f"  [Broadcastify] Connection lost after {uptime_s}s: {e}")
                     self.connected = False
                     self._last_drop_time = time.monotonic()
+                    # Our source connection just died, so the server may still
+                    # be holding the mount. Assume so until a connect proves
+                    # otherwise — retrying before it is reaped only earns a
+                    # "403 Mountpoint in use" and burns an attempt.
+                    self._mount_in_use = True
                     break
                 except Exception as e:
                     print(f"  [Broadcastify] Reader error: {e}")
@@ -2751,6 +2774,7 @@ class StreamOutputSource:
                 uptime_s = int(time.time() - self._connect_time) if self._connect_time else 0
                 print(f"  [Broadcastify] Reader thread exited (was connected {uptime_s}s)")
                 self._last_drop_time = time.monotonic()
+                self._mount_in_use = True   # same reasoning as above
             self.connected = False
 
         self._reader_thread = threading.Thread(target=_reader, daemon=True,
@@ -2784,7 +2808,25 @@ class StreamOutputSource:
                     pass
                 def _auto_reconnect():
                     try:
-                        time.sleep(5)
+                        # Wait for the mount to clear when our own source
+                        # connection may still be held server-side — set both
+                        # when a drop is detected (the reader thread) and when a
+                        # connect is refused with "403 Mountpoint in use".
+                        # Observed 2026-07-27 (11:12 and 11:27): drop ->
+                        # attempt #1 at +5s refused 403 -> attempt #2 at +10s
+                        # succeeded. The mount clears somewhere under 10s, so
+                        # the old flat 5s retry was racing it and spending an
+                        # attempt to learn nothing. Waiting up front costs ~5s
+                        # more dead air than the old two-attempt recovery but
+                        # reconnects on the FIRST try with no error logged.
+                        # The fast 5s path remains for connects that fail for
+                        # any other reason, where retrying sooner does help.
+                        delay = self._mount_wait if getattr(
+                            self, '_mount_in_use', False) else self._reconnect_backoff
+                        if delay != self._reconnect_backoff:
+                            print(f"  [Broadcastify] Mount still held by our previous "
+                                  f"connection — waiting {delay}s for it to clear")
+                        time.sleep(delay)
                         print(f"  [Broadcastify] Auto-reconnecting (attempt #{count})...")
                         try:
                             self.close()
