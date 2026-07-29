@@ -947,6 +947,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                     _rp.handle_transcription_query(self, parent)
                 elif self.path == '/transcribe_config':
                     _rp.handle_transcribe_config(self, parent)
+                elif self.path == '/transcribe_worker/register':
+                    _rp.handle_transcribe_worker_register(self, parent)
                 elif self.path == '/testloop':
                     _rp.handle_testloop(self, parent)
                 elif self.path == '/mixer':

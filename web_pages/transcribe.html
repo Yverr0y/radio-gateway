@@ -676,8 +676,18 @@ function poll() {
       _set('workers-meta', workers.length + ' worker' + (workers.length===1?'':'s') + ' · ' + mode);
       _set('res-workers-meta', workers.length + (workers.length===1?' worker':' workers'));
 
+      // Worker-supplied strings (name) land in innerHTML — escape them.
+      var _esc = function(t){
+        return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){
+          return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+      };
+      var reg = s.registration || {};
+
       if (workers.length === 0) {
-        grid.innerHTML = '<div class="panel"><div style="color:var(--t-text-mute);text-align:center;padding:var(--s-3);font-style:italic">No workers in pool</div></div>';
+        grid.innerHTML = '<div class="panel"><div style="color:var(--t-text-mute);text-align:center;padding:var(--s-3);font-style:italic">' +
+          (reg.allowed ? 'No workers in pool — waiting for workers to register'
+                       : 'No workers in pool') + '</div></div>';
         foot.style.display = 'none';
       } else {
         var cardsHtml = '';
@@ -688,7 +698,14 @@ function poll() {
           if (!w.model_loaded)                          { statusText = 'loading';     statusCls = 'warn'; }
           else if (w.type === 'remote' && !w.reachable) { statusText = 'unreachable'; statusCls = 'err'; }
           else                                          { statusText = 'ready';       statusCls = 'ok'; }
-          var whoLabel = w.type === 'local' ? 'LOCAL' : (w.url||'remote').replace(/^https?:\/\//, '');
+          // Self-registered workers announce a name; fall back to the URL for
+          // config-pinned ones, which have no name of their own.
+          var _urlLabel = (w.url||'remote').replace(/^https?:\/\//, '');
+          var whoLabel = w.type === 'local' ? 'LOCAL'
+                       : _esc((w.name && w.name !== w.url) ? w.name : _urlLabel);
+          var regBadge = w.registered
+            ? '<span class="tag" title="Self-registered at ' + _esc(w.url) +
+              '">self-reg</span>' : '';
           var engineLabel = (w.engine || '').toUpperCase();
           var modelLabel = w.model_key || '—';
           var tempCls = 'v', tempStr = '—';
@@ -712,9 +729,11 @@ function poll() {
             '<div class="worker-card' + (healthy ? '' : ' unhealthy') + '">' +
               '<div class="worker-head">' +
                 '<div class="who"><span class="engine">' + engineLabel + '</span>' + whoLabel + '</div>' +
+                regBadge +
                 '<span class="tag ' + statusCls + '">' + statusText + '</span>' +
               '</div>' +
-              '<div class="worker-meta">' + modelLabel + '</div>' +
+              '<div class="worker-meta">' + modelLabel +
+                (w.registered ? ' · ' + _esc(_urlLabel) : '') + '</div>' +
               '<div class="worker-stats">' +
                 '<div class="kv"><span class="k">Done</span><span class="v">' + doneStr + '</span></div>' +
                 '<div class="kv"><span class="k">Active</span><span class="v ' + (activeStr>0?'live':'dim') + '">' + activeStr + '</span></div>' +

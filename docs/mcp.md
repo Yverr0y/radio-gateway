@@ -1,6 +1,6 @@
 # MCP Server
 
-`gateway_mcp.py` is a stdio-based [MCP](https://modelcontextprotocol.io) server. It gives Claude (or any MCP-compatible AI client) full control of the gateway via its HTTP API. **155 tools** across status, radios, routing, transcription, packet, fleet management, and more.
+`gateway_mcp.py` is a stdio-based [MCP](https://modelcontextprotocol.io) server. It gives Claude (or any MCP-compatible AI client) full control of the gateway via its HTTP API. **156 tools** across status, radios, routing, transcription, packet, fleet management, and more.
 
 The Telegram bot, the Fleet Manager's hourly/daily Claude runs, and the voice control page all use these tools internally — the gateway itself reads its own state through this surface.
 
@@ -28,7 +28,7 @@ The MCP server is launched as a child process of the MCP client (Claude Code, vo
 | **SDR** | `sdr_tune`, `sdr_single_tune`, `sdr_restart`, `sdr_stop`, `sdr_set_mode`, `sdr_add_channel`, `sdr_remove_channel` |
 | **Routing** | `routing_status`, `routing_levels`, `routing_connect`, `routing_disconnect`, `bus_create`, `bus_delete`, `bus_mute`, `bus_rename`, `sink_mute`, `bus_toggle_processing`, `set_gain`, `bus_set_denoise_atten`, `bus_set_denoise_engine`, `bus_set_denoise_mix`, `bus_set_denoise_bypass`, `bus_set_delay`, `speaker_mode`, `mixer_control` (legacy per-source mixer) |
 | **Loop recorder** | `loop_recorder_status`, `loop_recorder_toggle`, `loop_recorder_retention`, `loop_recorder_summary`, `loop_recorder_activity`, `loop_recorder_export`, `loop_recorder_delete_all`, `loop_recorder_archive_all`, `loop_recorder_download_all`, `loop_playback_control`, `test_loop_toggle` |
-| **Transcription** | `transcription_status`, `transcription_config`, `transcription_log_query`, `transcription_log_recent` |
+| **Transcription** | `transcription_status`, `transcription_workers`, `transcription_config`, `transcription_log_query`, `transcription_log_recent` |
 | **Repeaters / GPS** | `nearby_repeaters`, `repeater_info`, `repeater_tune`, `repeater_refresh`, `gps_status` |
 | **Packet / Winlink** | `packet_status`, `packet_mode`, `packet_decoded`, `packet_aprs_stations`, `packet_send_aprs`, `packet_aprs_beacon`, `packet_log`, `packet_bbs_connect`, `packet_bbs_disconnect`, `packet_bbs_send`, `packet_bbs_buffer`, `packet_force_audio`, `packet_set_endpoint`, `winlink_compose`, `winlink_connect`, `winlink_gateways`, `winlink_messages`, `winlink_read`, `winlink_log` |
 | **Gateway link / endpoints** | `link_endpoint_status`, `link_endpoint_command`, `endpoint_ping`, `endpoint_reboot`, `endpoint_battery`, `endpoint_version`, `endpoint_ssh`, `endpoint_logs` |

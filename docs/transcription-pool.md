@@ -85,7 +85,7 @@ TRANSCRIBE_MODEL = moonshine/base
 
 # Remote worker URLs — comma-separated. When mode is remote or pool, each URL
 # is a transcribe_worker.py instance reachable over HTTP.
-TRANSCRIBE_REMOTE_URLS = http://192.168.2.109:9800
+TRANSCRIBE_REMOTE_URLS = http://192.168.2.143:9800
 
 # Length-based routing threshold in seconds (pool mode only).
 #   0  = least-busy across whole pool, no length routing
@@ -107,16 +107,68 @@ mkdir -p ~/transcribe
 # (scp transcribe_engine.py + transcribe_worker.py here)
 pip install --break-system-packages useful-moonshine-onnx faster-whisper
 
-# Manual smoke test
-python3 -u transcribe_worker.py --model whisper/medium.en --port 9800
+# Manual smoke test — --gateway makes the worker announce itself
+python3 -u transcribe_worker.py --model whisper/medium.en --port 9800 \
+    --gateway http://192.168.2.140:8080 --name macmini
 ```
 
 You should see:
 ```
 [worker] Loading whisper/medium.en...
+[worker] Registering with gateway http://192.168.2.140:8080 as macmini
 [worker] Listening on 0.0.0.0:9800
+[worker] Registered with gateway http://192.168.2.140:8080 as macmini (status=registered, url=http://192.168.2.143:9800, ttl=90s)
 [worker] Model ready
 ```
+
+### Self-registration (preferred)
+
+With `--gateway`, the worker dials into the gateway and announces itself —
+the same direction of travel as a link endpoint's REGISTER on :9700. The
+gateway takes the worker's address **off the socket**, so the worker never
+needs to know its own IP and the gateway never needs one in config. A DHCP
+move fixes itself on the next heartbeat.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--gateway URL` | *(unset — env `GATEWAY_URL`)* | Gateway base URL, e.g. `http://192.168.2.140:8080`. Registration is off when unset. |
+| `--name NAME` | hostname | Label shown on the `/transcribe` page and in `transcription_workers`. |
+| `--register-interval SECS` | 30 | Heartbeat period, auto-clamped to the gateway's TTL/3. |
+| `--gateway-password PW` | *(env `GATEWAY_PASSWORD`)* | Only needed if `WEB_CONFIG_PASSWORD` is set on the gateway. |
+
+How it behaves:
+
+- The first heartbeat goes out **while the model is still loading**, so the
+  worker shows up as present-but-loading rather than missing for ~30 s.
+- Heartbeats are unconditional and forever — the worker never assumes an
+  earlier registration stuck. A gateway restart re-populates the pool within
+  one heartbeat with nothing to do by hand.
+- Miss `TRANSCRIBE_WORKER_TTL_SECS` (default 90 s) of heartbeats and the
+  gateway drops the worker from the pool and logs `Worker expired:`.
+- **Config-pinned URLs are never expired.** A worker listed in
+  `TRANSCRIBE_REMOTE_URLS` stays in the pool showing `unreachable` when it's
+  down, because the operator asked for it explicitly. Registration and pinning
+  can coexist; a worker that registers a URL already pinned is a no-op.
+- Nothing discovered is written back to `.transcribe_settings.json` — that
+  would recreate the stale-address problem this exists to remove.
+
+Gateway-side knobs (`gateway_config.txt`):
+
+```ini
+# Accept worker self-registration (default true)
+TRANSCRIBE_ALLOW_WORKER_REGISTRATION = true
+# Drop a registered worker after this many seconds without a heartbeat
+TRANSCRIBE_WORKER_TTL_SECS = 90
+```
+
+Check who's in the pool from the gateway:
+
+```bash
+curl -s localhost:8080/transcriptions?since=0 | python3 -m json.tool | grep -A20 registration
+```
+
+or the `transcription_workers` MCP tool, which prints the pool plus the
+accept/refresh/expire/drop counters.
 
 ### Systemd user service
 
@@ -129,7 +181,8 @@ After=network.target
 [Service]
 WorkingDirectory=/home/user/transcribe
 Environment=WHISPER_CPU_THREADS=4
-ExecStart=/usr/bin/python3 -u transcribe_worker.py --model whisper/medium.en --port 9800
+ExecStart=/usr/bin/python3 -u transcribe_worker.py --model whisper/medium.en --port 9800 \
+    --gateway http://192.168.2.140:8080 --name macmini
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

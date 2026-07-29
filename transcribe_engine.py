@@ -207,9 +207,15 @@ class LocalInferenceEngine:
 class RemoteEngine:
     """Sends VAD-gated utterances to a transcribe_worker HTTP endpoint."""
 
-    def __init__(self, url: str, timeout: int = 60):
+    def __init__(self, url: str, timeout: int = 60,
+                 name: str = '', registered: bool = False):
         self._url = url.rstrip('/')
         self._timeout = timeout
+        # Identity. `registered` distinguishes workers that dialled in to
+        # /transcribe_worker/register (TTL-expired when they stop calling)
+        # from ones pinned in config (kept forever, even when unreachable).
+        self.name = name or self._url
+        self.registered = registered
         # Background polling state
         self._lock = threading.Lock()
         self._cached_status: dict = {}
@@ -223,12 +229,26 @@ class RemoteEngine:
         self.engine = 'remote'
         self.model_key = 'remote'
 
-    def start(self):
-        """Start background status-polling thread."""
+    def start(self, blocking_first_poll: bool = True):
+        """Start background status-polling thread.
+
+        blocking_first_poll=True polls once on the calling thread so
+        is_ready() is accurate immediately — right for gateway startup, where
+        blocking is free. Pass False when starting an engine from a request
+        handler: /status on an unreachable worker costs the full 5s socket
+        timeout, and a registration POST must never park a web thread (or
+        anything it holds a lock on) for that long.
+        """
         self._running = True
-        self._do_poll()  # immediate first poll so is_ready() is accurate fast
+        if blocking_first_poll:
+            self._do_poll()
+            _target = self._poll_loop
+        else:
+            def _target():
+                self._do_poll()   # still immediate, just off the caller's thread
+                self._poll_loop()
         self._poll_thread = threading.Thread(
-            target=self._poll_loop, daemon=True, name='RemoteEnginePoller')
+            target=_target, daemon=True, name='RemoteEnginePoller')
         self._poll_thread.start()
 
     def stop(self):
@@ -262,6 +282,8 @@ class RemoteEngine:
                 self._cached_status,
                 type='remote',
                 url=self._url,
+                name=self.name,
+                registered=self.registered,
                 reachable=self._poll_ok,
                 inflight=self._inflight,
                 dispatched=self._dispatched,

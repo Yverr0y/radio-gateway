@@ -40,6 +40,18 @@ from transcribe_engine import (
 _MAX_UTTERANCE_SECS = 60.0
 _SOFT_CAP_SECS = 50.0
 
+
+def _as_bool(value, default=False):
+    """Coerce a config value to bool. Config.load_config() already infers
+    bools for keys it recognises, but a value absent from the file arrives
+    as whatever default the caller passed, and a quoted value arrives as
+    str — handle both rather than trusting truthiness ('false' is truthy)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in ('true', 'yes', '1', 'on')
+
 # Silero VAD constants. 16 kHz, 512-sample frames (32 ms/frame), 64-sample
 # context window carried between calls.
 _SILERO_SR = 16000
@@ -392,13 +404,41 @@ class RadioTranscriber:
                         getattr(config, 'TRANSCRIBE_REMOTE_URL', '') or '').strip()
         self._remote_urls = [u.strip() for u in (_saved_urls or _cfg_urls).split(',') if u.strip()]
 
+        # Self-registering workers. Every other machine in the fleet dials
+        # into the gateway (link endpoints hit :9700 and REGISTER); remote
+        # transcribe workers were the one exception, so their address had to
+        # be pinned in config and a DHCP move silently broke the pool. Workers
+        # now POST /transcribe_worker/register and are added to the pool live.
+        # Config URLs still work and take precedence — a pinned worker is
+        # never TTL-expired.
+        self._allow_registration = _as_bool(
+            getattr(config, 'TRANSCRIBE_ALLOW_WORKER_REGISTRATION', True), True)
+        self._worker_ttl = float(getattr(config, 'TRANSCRIBE_WORKER_TTL_SECS', 90) or 90)
+        # url -> {'name', 'last_seen' (monotonic), 'engine', 'first_seen'}
+        self._registered: dict = {}
+        # Guards _pool and _registered. Registration arrives on an HTTP
+        # thread while the dispatch loop and get_status() both read the pool,
+        # so mutation can no longer be assumed single-threaded. Reentrant
+        # because _expire_workers() is called with it held.
+        self._pool_lock = threading.RLock()
+        # Instrumented from the first commit — when a worker "isn't showing
+        # up" these numbers say whether it ever arrived and why it left.
+        self._reg_stats = {
+            'accepted': 0,          # new workers added to the pool
+            'refreshed': 0,         # heartbeats from a known worker
+            'rejected': 0,          # bad payload / registration disabled / wrong mode
+            'expired': 0,           # dropped after TTL with no heartbeat
+            'dropped_no_worker': 0, # utterances discarded with an empty pool
+        }
+        self._last_no_worker_log = 0.0
+
         # Build worker pool
         self._pool: list = []
         if self._mode in ('local', 'pool'):
             self._pool.append(LocalInferenceEngine(self._model_key))
         if self._mode in ('remote', 'pool'):
             for _url in self._remote_urls:
-                self._pool.append(RemoteEngine(_url))
+                self._pool.append(RemoteEngine(_url, name=_url, registered=False))
 
         # Convenience for status/logging
         self._engine = (self._pool[0].engine
@@ -456,6 +496,96 @@ class RadioTranscriber:
             'log_results': self._log_results,
             'alert_keywords': self._alert_keywords,
         })
+        # NOTE: only self._remote_urls (config/UI-pinned) is persisted.
+        # Self-registered workers are deliberately NOT written back — writing
+        # a discovered address into the settings file would recreate exactly
+        # the stale-address problem registration exists to remove.
+
+    # -----------------------------------------------------------------
+    # Self-registering workers
+    # -----------------------------------------------------------------
+
+    def register_worker(self, url: str, name: str = '', meta: dict | None = None) -> dict:
+        """Add or refresh a self-registering remote worker.
+
+        Called from the web thread on POST /transcribe_worker/register.
+        Returns a dict suitable for the HTTP response — always includes
+        'ttl' so the worker knows how often it must heartbeat.
+        """
+        _resp = {'ok': False, 'ttl': self._worker_ttl}
+        url = (url or '').strip().rstrip('/')
+        if not self._allow_registration:
+            self._reg_stats['rejected'] += 1
+            return dict(_resp, error='worker registration disabled '
+                                     '(TRANSCRIBE_ALLOW_WORKER_REGISTRATION)')
+        if not url.startswith(('http://', 'https://')):
+            self._reg_stats['rejected'] += 1
+            return dict(_resp, error=f'bad url: {url!r}')
+        if self._mode not in ('remote', 'pool'):
+            # Not an error the worker can fix — it should keep heartbeating
+            # so it appears the moment the operator switches mode.
+            self._reg_stats['rejected'] += 1
+            return dict(_resp, error=f'mode is {self._mode!r}; '
+                                     f'remote workers only used in remote/pool')
+
+        with self._pool_lock:
+            _known = self._registered.get(url)
+            if _known is not None:
+                _known['last_seen'] = time.monotonic()
+                if name:
+                    _known['name'] = name
+                    _known['engine'].name = name
+                self._reg_stats['refreshed'] += 1
+                return dict(_resp, ok=True, status='refreshed', name=_known['name'])
+
+            # A URL already pinned in config stays pinned — refresh nothing,
+            # but report ok so the worker doesn't spin on a permanent error.
+            if any(getattr(e, '_url', None) == url for e in self._pool):
+                self._reg_stats['refreshed'] += 1
+                return dict(_resp, ok=True, status='already-configured', name=name or url)
+
+            _eng = RemoteEngine(url, name=name or url, registered=True)
+            # Non-blocking start: the first /status poll happens on the
+            # engine's own thread. Polling here would hold _pool_lock for the
+            # full socket timeout when a worker announces an address the
+            # gateway can't reach, stalling audio dispatch with it.
+            _eng.start(blocking_first_poll=False)
+            self._pool.append(_eng)
+            self._registered[url] = {
+                'name': name or url,
+                'engine': _eng,
+                'last_seen': time.monotonic(),
+                'first_seen': time.time(),
+                'meta': dict(meta or {}),
+            }
+            self._reg_stats['accepted'] += 1
+
+        print(f"  [Transcribe] Worker registered: {name or url} at {url} "
+              f"(pool now {len(self._pool)})", flush=True)
+        return dict(_resp, ok=True, status='registered', name=name or url)
+
+    def _expire_workers(self):
+        """Drop registered workers that stopped heartbeating. Config-pinned
+        engines are never touched — an operator-pinned worker that is down
+        should stay visible as unreachable, not silently vanish."""
+        if not self._registered:
+            return
+        _now = time.monotonic()
+        with self._pool_lock:
+            for _url, _info in list(self._registered.items()):
+                if _now - _info['last_seen'] <= self._worker_ttl:
+                    continue
+                _eng = _info['engine']
+                try:
+                    _eng.stop()
+                except Exception:
+                    pass
+                self._pool[:] = [e for e in self._pool if e is not _eng]
+                del self._registered[_url]
+                self._reg_stats['expired'] += 1
+                print(f"  [Transcribe] Worker expired: {_info['name']} at {_url} "
+                      f"(no heartbeat for {self._worker_ttl:.0f}s, "
+                      f"pool now {len(self._pool)})", flush=True)
 
     def stop(self):
         self._running = False
@@ -467,12 +597,16 @@ class RadioTranscriber:
         # Explicitly release local model memory — CTranslate2/ONNX hold native
         # allocations that survive Python GC unless the wrapper attrs are
         # cleared. Stops repeated restarts from accumulating GBs of RAM.
-        for _eng in self._pool:
-            _eng.stop()
-            if isinstance(_eng, LocalInferenceEngine):
-                _eng._model = None
-                _eng._tokenizer = None
-        self._pool = []
+        with self._pool_lock:
+            for _eng in self._pool:
+                _eng.stop()
+                if isinstance(_eng, LocalInferenceEngine):
+                    _eng._model = None
+                    _eng._tokenizer = None
+            self._pool = []
+            # Registrations don't survive a transcriber restart — workers
+            # re-announce on their next heartbeat, which is the whole point.
+            self._registered.clear()
         import gc
         gc.collect()
         # Return freed heap to OS — glibc's arena will hold it otherwise.
@@ -776,6 +910,11 @@ class RadioTranscriber:
                 'upstream': s.last_upstream_source,
             })
             s.vad_prob_peak = 0.0
+        # One snapshot for the whole payload — the pool can now be mutated by
+        # registration/expiry while this runs, and a status response that
+        # counted a worker in one field and not another would be confusing.
+        with self._pool_lock:
+            _pool_snapshot = list(self._pool)
         return {
             'running': self._running,
             'enabled': self._enabled,
@@ -783,7 +922,7 @@ class RadioTranscriber:
             'engine': self._engine,
             'vad_engine': 'silero',
             'model': self._model_key,
-            'model_loaded': any(e.is_ready() for e in self._pool) if self._pool else False,
+            'model_loaded': any(e.is_ready() for e in _pool_snapshot) if _pool_snapshot else False,
             'vad_open': any_open,
             'vad_prob': round(max(max_prob, max_env, max_peak), 3),
             'vad_db': round(max_db, 1),
@@ -797,16 +936,40 @@ class RadioTranscriber:
             'alert_keywords': self._alert_keywords,
             'pending': len(self._pending),
             'pending_audio_secs': round(sum(item['duration'] for item in self._pending), 1),
-            'inflight': sum(getattr(e, '_inflight', 0) for e in self._pool),
+            'inflight': sum(getattr(e, '_inflight', 0) for e in _pool_snapshot),
             'split_threshold_secs': self._split_threshold,
             'ram_mb': _get_rss_mb(),
             'total_transcriptions': len(self._results),
             'streams': streams_payload,
             'stats': self.get_stats(),
             'feed': self._get_feed_health(),
-            'workers': [e.get_status() for e in self._pool],
+            'workers': [e.get_status() for e in _pool_snapshot],
             'remote_worker': next(
-                (e.get_status() for e in self._pool if isinstance(e, RemoteEngine)), None),
+                (e.get_status() for e in _pool_snapshot if isinstance(e, RemoteEngine)), None),
+            'registration': self._get_registration_health(),
+        }
+
+    def _get_registration_health(self):
+        """Self-registration state — who dialled in, when they were last
+        heard from, and the accept/expire/drop counters."""
+        _now = time.monotonic()
+        with self._pool_lock:
+            _workers = [
+                {
+                    'name': _info['name'],
+                    'url': _url,
+                    'last_seen_secs': round(_now - _info['last_seen'], 1),
+                    'age_secs': round(time.time() - _info['first_seen'], 1),
+                    'meta': _info.get('meta', {}),
+                }
+                for _url, _info in self._registered.items()
+            ]
+        return {
+            'allowed': self._allow_registration,
+            'ttl_secs': self._worker_ttl,
+            'count': len(_workers),
+            'workers': _workers,
+            'counters': dict(self._reg_stats),
         }
 
     def _get_feed_health(self):
@@ -933,25 +1096,60 @@ class RadioTranscriber:
                 _eng.start()
                 _active.append(_eng)
 
-        self._pool[:] = _active
-        if not _active:
-            print(f"  [Transcribe] No engines available, stopping")
-            self._running = False
-            return
+        with self._pool_lock:
+            # Preserve anything that registered while models were loading —
+            # a worker heartbeat can land during the retry/backoff window.
+            _late = [e for e in self._pool if getattr(e, 'registered', False)]
+            self._pool[:] = _active + _late
+        if not self._pool:
+            if not self._allow_registration:
+                print(f"  [Transcribe] No engines available, stopping")
+                self._running = False
+                return
+            # Empty but live: workers may still dial in. Staying up means a
+            # worker coming back doesn't also need a transcriber restart.
+            print(f"  [Transcribe] No engines yet — waiting for workers to "
+                  f"register (ttl {self._worker_ttl:.0f}s)", flush=True)
 
         from concurrent.futures import ThreadPoolExecutor
-        _executor = ThreadPoolExecutor(max_workers=len(self._pool),
+        # Sized with headroom, not to the current pool: registration can grow
+        # the pool at runtime and the executor can't be resized. Threads are
+        # created lazily, so unused slots cost nothing. The floor also keeps
+        # max_workers >= 1 when the pool starts empty (0 raises ValueError).
+        _executor = ThreadPoolExecutor(max_workers=max(4, len(self._pool) + 4),
                                        thread_name_prefix='TxWorker',
                                        initializer=_inference_worker_init)
+        _next_expiry_sweep = time.monotonic()
         _in_flight: dict = {}  # future -> None
 
         try:
             while self._running:
+                # Expire silent workers. Cheap (dict scan) but no point doing
+                # it every loop iteration — the loop spins on audio activity.
+                if time.monotonic() >= _next_expiry_sweep:
+                    _next_expiry_sweep = time.monotonic() + 10.0
+                    self._expire_workers()
+
                 # Submit pending items to least-busy worker
                 while self._pending and self._running:
                     _item = self._pending.popleft()
-                    _eng = _pick_worker(self._pool, _item.get('duration', 0.0),
-                                        self._split_threshold)
+                    with self._pool_lock:
+                        _eng = _pick_worker(list(self._pool),
+                                            _item.get('duration', 0.0),
+                                            self._split_threshold)
+                    if _eng is None:
+                        # Pool is empty — every worker expired or none has
+                        # registered yet. Drop the utterance (queueing it
+                        # would just build a backlog of stale audio) and
+                        # count it, throttling the log to once a minute.
+                        self._reg_stats['dropped_no_worker'] += 1
+                        _now_log = time.monotonic()
+                        if _now_log - self._last_no_worker_log > 60:
+                            self._last_no_worker_log = _now_log
+                            print(f"  [Transcribe] No workers in pool — dropped "
+                                  f"{self._reg_stats['dropped_no_worker']} utterance(s) "
+                                  f"so far", flush=True)
+                        continue
                     _eng._inflight += 1
                     try:
                         import metrics as _m

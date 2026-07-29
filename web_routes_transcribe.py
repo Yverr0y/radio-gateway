@@ -42,6 +42,55 @@ def handle_transcription_query(handler, parent):
     except BrokenPipeError:
         pass
 
+def handle_transcribe_worker_register(handler, parent):
+    """POST /transcribe_worker/register
+
+    Body: {"name": "macmini", "port": 9800, "url": "http://host:9800",
+           "model": "whisper/medium.en", ...}
+
+    `url` is optional — when absent it is derived from the connecting
+    socket's address plus `port`, so a worker never has to know or
+    configure its own IP. This is the transcription-side equivalent of a
+    link endpoint's REGISTER on :9700: the worker dials in, the gateway
+    learns where it lives, and a DHCP move fixes itself on the next
+    heartbeat instead of breaking the pool until someone edits config.
+    """
+    length = int(handler.headers.get('Content-Length', 0))
+    body = handler.rfile.read(length).decode('utf-8') if length else '{}'
+    result = {'ok': False}
+    try:
+        data = json_mod.loads(body or '{}')
+        tx = parent.gateway.transcriber if parent.gateway else None
+        if not tx:
+            result = {'ok': False, 'error': 'transcriber not running'}
+        else:
+            _url = str(data.get('url', '') or '').strip()
+            if not _url:
+                # client_address is the socket peer — the authoritative
+                # answer to "where did this worker come from", and immune to
+                # the worker guessing the wrong interface.
+                _peer = handler.client_address[0]
+                _port = int(data.get('port', 9800) or 9800)
+                # IPv6 literals need brackets in a URL.
+                if ':' in _peer:
+                    _peer = f'[{_peer}]'
+                _url = f'http://{_peer}:{_port}'
+            _name = str(data.get('name', '') or '').strip()
+            _meta = {k: data[k] for k in ('model', 'engine', 'version', 'model_loaded')
+                     if k in data}
+            result = tx.register_worker(_url, _name, _meta)
+            result['url'] = _url
+    except Exception as e:
+        result = {'ok': False, 'error': str(e)}
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.end_headers()
+    try:
+        handler.wfile.write(json_mod.dumps(result).encode('utf-8'))
+    except BrokenPipeError:
+        pass
+
+
 def handle_transcribe_config(handler, parent):
     """POST /transcribe_config"""
     length = int(handler.headers.get('Content-Length', 0))

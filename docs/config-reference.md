@@ -63,7 +63,7 @@ The installer copies the example to `gateway_config.txt` if one doesn't exist. T
 
 Some features have keys that live OUTSIDE `gateway_config.txt` because they're host-specific or operationally tuned and shouldn't follow the user across machines. See the per-feature docs:
 
-- **Transcription pool** — `TRANSCRIBE_MODE`, `TRANSCRIBE_REMOTE_URLS`, `TRANSCRIBE_SPLIT_THRESHOLD_SECS` plus the live UI settings in `.transcribe_settings.json`. See [transcription-pool.md](transcription-pool.md).
+- **Transcription pool** — `TRANSCRIBE_MODE`, `TRANSCRIBE_REMOTE_URLS`, `TRANSCRIBE_SPLIT_THRESHOLD_SECS`, `TRANSCRIBE_ALLOW_WORKER_REGISTRATION` (default true), `TRANSCRIBE_WORKER_TTL_SECS` (default 90) plus the live UI settings in `.transcribe_settings.json`. Workers started with `--gateway` register themselves, so `TRANSCRIBE_REMOTE_URLS` is only for pinning a worker explicitly. See [transcription-pool.md](transcription-pool.md).
 - **Fleet Manager** — task docs are `hourly.md` / `daily.md` / `SYSTEM_MANIFEST.md`; engine state in `manager_state.json`; runtime reports in `manager_reports.jsonl`. See [fleet-manager.md](fleet-manager.md).
 - **Routing config** — bus topology lives in `routing_config.json`, edited via the visual editor at `/routing`. Not in the .ini.
 - **Loop recorder retention** — per-bus, edited in the routing UI.

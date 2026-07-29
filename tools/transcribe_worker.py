@@ -11,9 +11,16 @@ Endpoints:
                      response: {"text": "...", "proc_time": 1.23}
   GET  /status       response: model info + health stats
 
+With --gateway the worker also dials in and announces itself, the same way
+link endpoints REGISTER on :9700, so the gateway never has to be told the
+worker's address. The gateway reads the address off the socket, so DHCP
+moves resolve themselves on the next heartbeat.
+
 Usage:
   python3 transcribe_worker.py --model moonshine/base --port 9800
   python3 transcribe_worker.py --model whisper/medium.en --port 9800
+  python3 transcribe_worker.py --model whisper/medium.en \
+      --gateway http://192.168.2.140:8080 --name macmini
 """
 
 import argparse
@@ -205,6 +212,84 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 
 # ---------------------------------------------------------------------------
+# Gateway registration — the worker dials in, not the other way round
+# ---------------------------------------------------------------------------
+
+_REGISTER_PATH = '/transcribe_worker/register'
+
+
+def _register_once(gateway_url, payload, auth_header=None, timeout=5):
+    """POST one registration/heartbeat. Returns the parsed response dict,
+    or None if the gateway was unreachable or answered badly."""
+    import urllib.request
+    import urllib.error
+    body = json.dumps(payload).encode()
+    headers = {'Content-Type': 'application/json'}
+    if auth_header:
+        headers['Authorization'] = auth_header
+    req = urllib.request.Request(
+        gateway_url.rstrip('/') + _REGISTER_PATH,
+        data=body, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
+def _register_loop(gateway_url, name, port, interval, auth_header=None):
+    """Announce to the gateway on a fixed heartbeat.
+
+    Deliberately dumb and unconditional: it re-announces forever rather than
+    registering once and trusting it stuck. A one-shot register would go
+    stale the moment the gateway restarts — and a probe with no retry lies
+    permanently. Only state *changes* are logged, so a healthy worker stays
+    quiet in the journal.
+    """
+    last_ok = None
+    last_error_log = 0.0
+    while True:
+        with _engine_lock:
+            eng = _engine
+        payload = {
+            'name': name,
+            'port': port,
+            'model': getattr(eng, 'model_key', None) if eng else None,
+            'engine': getattr(eng, 'engine', None) if eng else None,
+            'model_loaded': bool(eng is not None and eng.is_loaded),
+        }
+        resp = _register_once(gateway_url, payload, auth_header)
+        ok = bool(resp and resp.get('ok'))
+        if ok != last_ok:
+            if ok:
+                print(f'[worker] Registered with gateway {gateway_url} '
+                      f'as {resp.get("name", name)} '
+                      f'(status={resp.get("status", "?")}, '
+                      f'url={resp.get("url", "?")}, ttl={resp.get("ttl", "?")}s)',
+                      flush=True)
+            else:
+                _why = (resp or {}).get('error', 'gateway unreachable')
+                print(f'[worker] Registration with {gateway_url} failed: {_why}',
+                      flush=True)
+                last_error_log = time.time()
+            last_ok = ok
+        elif not ok and time.time() - last_error_log > 600:
+            # Still down after 10 min — one line so a permanently broken
+            # registration doesn't look like a healthy worker in the log.
+            _why = (resp or {}).get('error', 'gateway unreachable')
+            print(f'[worker] Still not registered with {gateway_url}: {_why}',
+                  flush=True)
+            last_error_log = time.time()
+        # Heartbeat well inside the gateway's TTL. If the gateway told us its
+        # TTL, aim for a third of it so two lost heartbeats don't expire us.
+        _ttl = (resp or {}).get('ttl')
+        _sleep = interval
+        if isinstance(_ttl, (int, float)) and _ttl > 0:
+            _sleep = max(5.0, min(interval, _ttl / 3.0))
+        time.sleep(_sleep)
+
+
+# ---------------------------------------------------------------------------
 # Model loader thread
 # ---------------------------------------------------------------------------
 
@@ -280,6 +365,20 @@ def main():
                         help='HTTP port to listen on (default 9800)')
     parser.add_argument('--host', default='0.0.0.0',
                         help='Bind address (default 0.0.0.0)')
+    parser.add_argument('--gateway', default=os.environ.get('GATEWAY_URL', ''),
+                        help='Gateway base URL, e.g. http://192.168.2.140:8080. '
+                             'When set, the worker registers itself and '
+                             'heartbeats, so the gateway needs no worker '
+                             'address in config. Env: GATEWAY_URL')
+    parser.add_argument('--name', default='',
+                        help='Name shown on the gateway /transcribe page '
+                             '(default: this host\'s hostname)')
+    parser.add_argument('--register-interval', type=float, default=30.0,
+                        help='Seconds between registration heartbeats '
+                             '(default 30; clamped to the gateway TTL/3)')
+    parser.add_argument('--gateway-password', default=os.environ.get('GATEWAY_PASSWORD', ''),
+                        help='WEB_CONFIG_PASSWORD, if the gateway web UI has '
+                             'one set. Env: GATEWAY_PASSWORD')
     args = parser.parse_args()
 
     model_key = args.model
@@ -292,6 +391,23 @@ def main():
 
     loader = threading.Thread(target=_load_model, args=(model_key,), daemon=True)
     loader.start()
+
+    if args.gateway:
+        import socket as _socket
+        _name = args.name or _socket.gethostname()
+        _auth = None
+        if args.gateway_password:
+            import base64 as _b64
+            _auth = 'Basic ' + _b64.b64encode(
+                f'admin:{args.gateway_password}'.encode()).decode()
+        # Started before serve_forever so the first heartbeat goes out while
+        # the model is still loading — the gateway sees the worker as present
+        # but not ready, rather than missing entirely for the ~30s load.
+        threading.Thread(
+            target=_register_loop,
+            args=(args.gateway, _name, args.port, args.register_interval, _auth),
+            daemon=True, name='GatewayRegister').start()
+        print(f'[worker] Registering with gateway {args.gateway} as {_name}', flush=True)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f'[worker] Listening on {args.host}:{args.port}', flush=True)

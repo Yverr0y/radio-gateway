@@ -4,6 +4,40 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Added — transcription workers register themselves
+
+Remote transcribe workers were the only machines in the fleet the gateway had
+to be *told* about: link endpoints dial into :9700 and REGISTER, but a worker
+sat passive behind a URL pinned in `.transcribe_settings.json`. macmini's DHCP
+lease moved three times (`.109` → `.132` → `.143`) and each move silently
+emptied the remote half of the pool until someone edited a file — the daily
+fleet check spent weeks reporting "macmini SSH refused" while actually probing
+an address macmini had left.
+
+Workers started with `--gateway http://<gateway>:8080` now POST
+`/transcribe_worker/register` on a heartbeat, and the gateway takes the
+worker's address **off the socket** — so the worker never needs to know its own
+IP, and the gateway needs no worker address in config.
+
+- `RemoteEngine` gained `name` / `registered`; `start(blocking_first_poll=False)`
+  keeps the first `/status` poll off the caller's thread, so registering an
+  unreachable worker can't park a web thread (or the pool lock) for the 5 s
+  socket timeout.
+- The pool is now mutable at runtime under `_pool_lock`, and the executor is
+  sized with headroom because it can't be resized after construction.
+- TTL expiry (`TRANSCRIBE_WORKER_TTL_SECS`, default 90) drops silent workers.
+  Config-pinned URLs are never expired — an operator-pinned worker that is down
+  stays visible as `unreachable`.
+- Discovered addresses are deliberately **not** persisted to
+  `.transcribe_settings.json`; writing them back would recreate the same stale-
+  address failure.
+- With an empty pool the transcriber now stays up waiting for registrations
+  instead of stopping, and drops utterances with a counter rather than crashing
+  on `_pick_worker` returning `None`.
+- New: `transcription_workers` MCP tool, `registration` block in
+  `get_status()` (accept/refresh/reject/expire/drop counters), `self-reg` badge
+  on the `/transcribe` Workers row, `TRANSCRIBE_ALLOW_WORKER_REGISTRATION`.
+
 ### Fixed — three MCP tools dead since the 2026-05-28 split
 
 `config_read`, `automation_scheme_read` and `automation_scheme_edit` resolved

@@ -10,6 +10,7 @@ adding its name here.
 
 from web_routes_transcribe  import (
     handle_transcription_query, handle_transcribe_config,
+    handle_transcribe_worker_register,
 )
 from web_routes_radio  import (
     handle_d75cmd, handle_ic7100cmd, handle_kv4pcmd, handle_linkcmd, handle_catcmd,

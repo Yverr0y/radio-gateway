@@ -56,6 +56,47 @@ def transcription_status() -> str:
 
 
 @mcp.tool()
+def transcription_workers() -> str:
+    """
+    List the transcription worker pool — local engine plus every remote
+    worker, whether it was pinned in config or dialled in on its own, and
+    when each self-registered worker was last heard from.
+
+    Use this to answer "is macmini in the pool?" without SSHing anywhere.
+    A worker that moved address should reappear here within its heartbeat
+    interval with no config change.
+    """
+    result = _get('/transcriptions?since=0')
+    status = result.get('status', {})
+    workers = status.get('workers') or []
+    reg = status.get('registration') or {}
+    lines = [f"Mode: {status.get('mode', '?')}  Pool: {len(workers)} worker(s)"]
+    if not workers:
+        lines.append("  (empty)" + ("  — registration is enabled, waiting for workers"
+                                    if reg.get('allowed') else ""))
+    for w in workers:
+        _kind = 'local' if w.get('type') == 'local' else (
+            'self-reg' if w.get('registered') else 'config')
+        _state = ('ready' if w.get('model_loaded') else 'loading')
+        if w.get('type') == 'remote' and not w.get('reachable'):
+            _state = 'UNREACHABLE'
+        lines.append(
+            f"  {w.get('name') or w.get('url') or 'local':<28} {_kind:<9} {_state:<12} "
+            f"{w.get('model_key', '?')}  done={w.get('dispatched', 0)} "
+            f"inflight={w.get('inflight', 0)}")
+    lines.append(
+        f"\nRegistration: {'enabled' if reg.get('allowed') else 'DISABLED'}  "
+        f"ttl={reg.get('ttl_secs', '?')}s  registered={reg.get('count', 0)}")
+    for rw in reg.get('workers') or []:
+        lines.append(f"  {rw.get('name', '?'):<28} {rw.get('url', '?'):<32} "
+                     f"last seen {rw.get('last_seen_secs', '?')}s ago")
+    _c = reg.get('counters') or {}
+    if _c:
+        lines.append("Counters: " + '  '.join(f"{k}={v}" for k, v in _c.items()))
+    return '\n'.join(lines)
+
+
+@mcp.tool()
 def transcription_config(
     key: str,
     value: str,
