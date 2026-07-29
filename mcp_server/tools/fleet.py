@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL, _auth_headers
+from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL, GW_ROOT, _auth_headers
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +252,116 @@ def packet_decoded() -> str:
     if len(packets) > 20:
         lines.append(f"  ... {len(packets) - 20} older packets not shown")
     return '\n'.join(lines)
+
+
+@mcp.tool()
+def packet_aprs_beacon() -> str:
+    """
+    Send an APRS position beacon immediately, outside the scheduled beacon
+    interval. Requires packet mode 'aprs'.
+    """
+    result = _post('/packet/aprs_beacon', {'cmd': 'aprs_beacon'})
+    if result.get('ok'):
+        return "APRS beacon sent"
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def packet_bbs_connect(callsign: str) -> str:
+    """
+    Open an AX.25 connection to a packet BBS. Requires packet mode 'bbs'
+    (set it with packet_mode('bbs') first).
+
+    Args:
+        callsign: BBS callsign with SSID (e.g. 'N6ABC-1').
+    """
+    if not callsign.strip():
+        return "Error: BBS callsign required"
+    result = _post('/packet/bbs_connect',
+                   {'cmd': 'bbs_connect', 'callsign': callsign.strip().upper()})
+    if result.get('ok'):
+        return (f"Connecting to BBS {callsign.strip().upper()} — "
+                f"read the session with packet_bbs_buffer()")
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def packet_bbs_disconnect() -> str:
+    """Close the current packet BBS connection."""
+    result = _post('/packet/bbs_disconnect', {'cmd': 'bbs_disconnect'})
+    if result.get('ok'):
+        return "BBS disconnected"
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def packet_bbs_send(text: str) -> str:
+    """
+    Send a line of text to the connected packet BBS — a command, a menu
+    selection, or message body text, depending on where the session is.
+
+    Args:
+        text: The line to send. Read the reply with packet_bbs_buffer().
+    """
+    if not text.strip():
+        return "Error: text required"
+    result = _post('/packet/bbs_send', {'cmd': 'bbs_send', 'text': text})
+    if result.get('ok'):
+        return f"Sent to BBS: {text}"
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def packet_bbs_buffer(lines: int = 40) -> str:
+    """
+    Read the packet BBS session buffer — everything the BBS has sent back
+    since the connection opened.
+
+    Args:
+        lines: Number of recent lines to return (default 40).
+    """
+    data = _get('/packet/bbs_buffer')
+    buf = data.get('lines', [])
+    if not buf:
+        return "BBS buffer empty (not connected, or nothing received yet)"
+    return '\n'.join(buf[-lines:])
+
+
+@mcp.tool()
+def packet_force_audio() -> str:
+    """
+    Force the packet endpoint back to audio mode. Recovery escape hatch for
+    when the endpoint is stuck in a data mode with Direwolf holding the
+    sound card — packet_mode('idle') is the graceful path; this one tells
+    the endpoint directly.
+    """
+    result = _post('/packet/force_audio', {'cmd': 'force_audio'})
+    if result.get('ok'):
+        return "Endpoint forced back to audio mode"
+    return f"Failed: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def packet_set_endpoint(name: str = '') -> str:
+    """
+    Choose which connected link endpoint carries packet audio + PTT.
+
+    Args:
+        name: Endpoint name (e.g. 'celeron_aioc'). Pass '' to clear the
+              preference and go back to auto-select.
+
+    Any endpoint advertising the 'packet' capability flag is eligible —
+    selection is a capability choice, not a rewiring.
+    """
+    result = _post('/packet/setendpoint', {'name': name.strip()})
+    if result.get('ok'):
+        active = result.get('endpoint_active')
+        pref = result.get('endpoint_pref') or '(auto)'
+        if not active:
+            return (f"Preference set to {pref}, but no packet-capable endpoint "
+                    f"is currently connected")
+        return f"Packet endpoint preference: {pref} → active: {active}"
+    return f"Failed: {result.get('error', 'unknown')}"
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +638,7 @@ def automation_scheme_read() -> str:
     simple text format: one task per line with schedule, action, and options.
     """
     # Find scheme file path from config
-    cfg_path = os.path.join(os.path.dirname(__file__), 'gateway_config.txt')
+    cfg_path = os.path.join(GW_ROOT, 'gateway_config.txt')
     scheme_file = 'automation_scheme.txt'
     if os.path.isfile(cfg_path):
         with open(cfg_path) as f:
@@ -541,7 +651,7 @@ def automation_scheme_read() -> str:
                         scheme_file = v
                     break
     if not os.path.isabs(scheme_file):
-        scheme_file = os.path.join(os.path.dirname(__file__), scheme_file)
+        scheme_file = os.path.join(GW_ROOT, scheme_file)
     if not os.path.isfile(scheme_file):
         return f"Scheme file not found: {scheme_file}"
     try:
@@ -571,7 +681,7 @@ def automation_scheme_edit(content: str) -> str:
     Args:
         content: The complete new scheme file content.
     """
-    cfg_path = os.path.join(os.path.dirname(__file__), 'gateway_config.txt')
+    cfg_path = os.path.join(GW_ROOT, 'gateway_config.txt')
     scheme_file = 'automation_scheme.txt'
     if os.path.isfile(cfg_path):
         with open(cfg_path) as f:
@@ -584,7 +694,7 @@ def automation_scheme_edit(content: str) -> str:
                         scheme_file = v
                     break
     if not os.path.isabs(scheme_file):
-        scheme_file = os.path.join(os.path.dirname(__file__), scheme_file)
+        scheme_file = os.path.join(GW_ROOT, scheme_file)
     try:
         with open(scheme_file, 'w') as f:
             f.write(content)

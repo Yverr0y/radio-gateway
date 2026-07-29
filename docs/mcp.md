@@ -1,6 +1,6 @@
 # MCP Server
 
-`gateway_mcp.py` is a stdio-based [MCP](https://modelcontextprotocol.io) server. It gives Claude (or any MCP-compatible AI client) full control of the gateway via its HTTP API. **142 tools** across status, radios, routing, transcription, packet, fleet management, and more.
+`gateway_mcp.py` is a stdio-based [MCP](https://modelcontextprotocol.io) server. It gives Claude (or any MCP-compatible AI client) full control of the gateway via its HTTP API. **155 tools** across status, radios, routing, transcription, packet, fleet management, and more.
 
 The Telegram bot, the Fleet Manager's hourly/daily Claude runs, and the voice control page all use these tools internally — the gateway itself reads its own state through this surface.
 
@@ -26,21 +26,22 @@ The MCP server is launched as a child process of the MCP client (Claude Code, vo
 | **KV4P HT** | `kv4p_status`, `kv4p_command` |
 | **AllStar / USRP** | `usrp_nodes`, `usrp_status`, `usrp_connect`, `usrp_disconnect`, `usrp_disconnect_all`, `usrp_links`, `usrp_node_stats` |
 | **SDR** | `sdr_tune`, `sdr_single_tune`, `sdr_restart`, `sdr_stop`, `sdr_set_mode`, `sdr_add_channel`, `sdr_remove_channel` |
-| **Routing** | `routing_status`, `routing_levels`, `routing_connect`, `routing_disconnect`, `bus_create`, `bus_delete`, `bus_mute`, `bus_rename`, `sink_mute`, `bus_toggle_processing`, `set_gain`, `bus_set_denoise_atten`, `bus_set_denoise_engine`, `speaker_mode` |
+| **Routing** | `routing_status`, `routing_levels`, `routing_connect`, `routing_disconnect`, `bus_create`, `bus_delete`, `bus_mute`, `bus_rename`, `sink_mute`, `bus_toggle_processing`, `set_gain`, `bus_set_denoise_atten`, `bus_set_denoise_engine`, `bus_set_denoise_mix`, `bus_set_denoise_bypass`, `bus_set_delay`, `speaker_mode`, `mixer_control` (legacy per-source mixer) |
 | **Loop recorder** | `loop_recorder_status`, `loop_recorder_toggle`, `loop_recorder_retention`, `loop_recorder_summary`, `loop_recorder_activity`, `loop_recorder_export`, `loop_recorder_delete_all`, `loop_recorder_archive_all`, `loop_recorder_download_all`, `loop_playback_control`, `test_loop_toggle` |
 | **Transcription** | `transcription_status`, `transcription_config`, `transcription_log_query`, `transcription_log_recent` |
 | **Repeaters / GPS** | `nearby_repeaters`, `repeater_info`, `repeater_tune`, `repeater_refresh`, `gps_status` |
-| **Packet / Winlink** | `packet_status`, `packet_mode`, `packet_decoded`, `packet_aprs_stations`, `packet_send_aprs`, `packet_log`, `winlink_compose`, `winlink_connect`, `winlink_gateways`, `winlink_messages`, `winlink_read`, `winlink_log` |
+| **Packet / Winlink** | `packet_status`, `packet_mode`, `packet_decoded`, `packet_aprs_stations`, `packet_send_aprs`, `packet_aprs_beacon`, `packet_log`, `packet_bbs_connect`, `packet_bbs_disconnect`, `packet_bbs_send`, `packet_bbs_buffer`, `packet_force_audio`, `packet_set_endpoint`, `winlink_compose`, `winlink_connect`, `winlink_gateways`, `winlink_messages`, `winlink_read`, `winlink_log` |
 | **Gateway link / endpoints** | `link_endpoint_status`, `link_endpoint_command`, `endpoint_ping`, `endpoint_reboot`, `endpoint_battery`, `endpoint_version`, `endpoint_ssh`, `endpoint_logs` |
 | **Automation** | `automation_status`, `automation_history`, `automation_reload`, `automation_trigger`, `automation_scheme_read`, `automation_scheme_edit` |
+| **Fleet Manager** | `manager_status`, `manager_reports`, `manager_doc_read`, `manager_doc_write`, `manager_toggle`, `manager_config`, `manager_ack`, `manager_run` |
 | **Smart Announce** | `smart_announce_status`, `smart_announce_trigger` |
 | **Broadcastify / streaming** | `broadcastify_status`, `broadcastify_control` |
 | **Relay / GPIO** | `relay_status`, `relay_charger_toggle` |
-| **ADS-B** | `adsb_status` |
+| **ADS-B / Pi-hole** | `adsb_status`, `pihole_status` |
 | **Metrics** | `metrics_list`, `metrics_query` |
 | **Recordings** | `recordings_list`, `recordings_delete` |
-| **Cloud / GDrive** | `gdrive_status`, `gdrive_list_files`, `gdrive_publish_tunnel`, `cloudflare_status`, `tunnel_link_url`, `voice_view` |
-| **System / Diag** | `gateway_logs`, `gateway_restart`, `gateway_key`, `audio_trace_toggle`, `stream_trace_toggle`, `stream_trace_read`, `bus_sink_stats`, `bus_source_stats`, `config_read`, `process_control`, `processes_status` |
+| **Cloud / GDrive** | `gdrive_status`, `gdrive_list_files`, `gdrive_publish_tunnel`, `cloudflare_status`, `tunnel_link_url`, `voice_view`, `voice_status`, `voice_send` |
+| **System / Diag** | `gateway_logs`, `gateway_restart`, `gateway_key`, `audio_trace_toggle`, `stream_trace_toggle`, `stream_trace_read`, `bus_sink_stats`, `bus_source_stats`, `config_read`, `process_control`, `processes_status`, `usbip_status` |
 | **Telegram** | `telegram_reply`, `telegram_status` |
 
 ## Architecture

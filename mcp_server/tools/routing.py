@@ -287,3 +287,66 @@ def bus_set_denoise_engine(bus_id: str, engine: str) -> str:
     if result.get('ok'):
         return f"Bus {bus_id}: denoise engine → {result.get('engine')}"
     return f"Error: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def bus_set_denoise_mix(bus_id: str, mix: float) -> str:
+    """
+    Set the dry/wet mix of a bus's neural denoise filter.
+
+    Args:
+        bus_id: Bus id (e.g. 'main'). Run routing_status to list buses.
+        mix:    0.0 = fully dry (denoise bypassed in the blend), 1.0 = fully
+                wet (denoised only). Bounded to [0, 1].
+
+    Useful when full denoise sounds over-processed on weak signals — a mix
+    of 0.6–0.8 keeps some of the original texture. The filter must still be
+    enabled via bus_toggle_processing('denoise') for this to have any effect.
+    """
+    result = _post('/routing/cmd',
+                   {'cmd': 'set_dfn_mix', 'bus': bus_id, 'mix': mix})
+    if result.get('ok'):
+        return f"Bus {bus_id}: denoise mix → {result.get('mix')}"
+    return f"Error: {result.get('error', 'unknown')}"
+
+
+@mcp.tool()
+def bus_set_denoise_bypass(bus_id: str, bypass_db: float) -> str:
+    """
+    Set the denoise bypass threshold for a bus, in dBFS. Audio chunks whose
+    RMS falls below this level skip the denoise worker entirely.
+
+    Args:
+        bus_id:    Bus id (e.g. 'main'). Run routing_status to list buses.
+        bypass_db: Threshold in dBFS, bounded to [-90, -20]. -60 is the
+                   historical default.
+
+    This is a CPU knob, not a quality knob: on a mostly-idle bus the squelch
+    tail is silence, and denoising silence costs the same as denoising speech.
+    Raising the threshold (e.g. -50) skips more chunks and saves more CPU, at
+    the risk of clipping the quiet onset of a weak signal.
+    """
+    result = _post('/routing/cmd',
+                   {'cmd': 'set_dfn_bypass', 'bus': bus_id, 'bypass_db': bypass_db})
+    if result.get('ok'):
+        return f"Bus {bus_id}: denoise bypass → {result.get('bypass_db')} dBFS"
+    return f"Error: {result.get('error', 'unknown')}"
+
+
+# ---------------------------------------------------------------------------
+# Per-bus delay
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def bus_set_delay(bus_id: str, delay_ms: int) -> str:
+    """
+    Set a fixed output delay on a bus, in milliseconds (0-5000).
+
+    Used to time-align a bus against another path — e.g. holding a local
+    speaker bus back so it lines up with the latency of a streamed or
+    linked copy of the same audio. 0 disables the delay.
+    """
+    result = _post('/routing/cmd',
+                   {'cmd': 'set_bus_delay', 'bus': bus_id, 'delay_ms': delay_ms})
+    if result.get('ok'):
+        return f"Bus {bus_id}: delay → {result.get('delay_ms')} ms"
+    return f"Error: {result.get('error', 'unknown')}"

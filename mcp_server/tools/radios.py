@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL
+from mcp_server.server import mcp, _get, _post, _load_telegram_config, GW_BASE_URL, GW_ROOT
 
 
 # ---------------------------------------------------------------------------
@@ -604,7 +604,7 @@ def config_read(section: str | None = None) -> str:
         section: Optional INI section name to filter (e.g. 'audio', 'sdr',
                  'telegram', 'radio').  Omit to return all settings.
     """
-    cfg_path = os.path.join(os.path.dirname(__file__), 'gateway_config.txt')
+    cfg_path = os.path.join(GW_ROOT, 'gateway_config.txt')
     if not os.path.isfile(cfg_path):
         return 'Error: gateway_config.txt not found'
 

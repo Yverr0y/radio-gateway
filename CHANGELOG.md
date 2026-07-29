@@ -4,6 +4,55 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Fixed — three MCP tools dead since the 2026-05-28 split
+
+`config_read`, `automation_scheme_read` and `automation_scheme_edit` resolved
+repo files against their own `__file__`. The mega-refactor moved them from
+`gateway_mcp.py` at the root down into `mcp_server/tools/`, so they had been
+looking for `gateway_config.txt` and `automation_scheme.txt` two directories
+too deep for two months. Each failed with a *"not found"* string rather than an
+exception, which is exactly why nobody noticed.
+
+`mcp_server/server.py` now exports `GW_ROOT`, and every tool module resolves
+repo files against it. Secret redaction in `config_read` was verified against
+the real file once it could actually read it.
+
+### Added — 21 MCP tools (134 -> 155)
+
+Gaps found by diffing the routing command dispatch table, the packet plugin's
+`execute()` actions, and the served HTTP routes against the registered tools.
+
+- **Routing (3)** — `bus_set_denoise_mix`, `bus_set_denoise_bypass`,
+  `bus_set_delay`. All three were reachable from the routing UI only;
+  `set_dfn_bypass` is the CPU knob added in the 2026-07-27 review-fix pass.
+- **Packet (7)** — `packet_bbs_connect`, `packet_bbs_disconnect`,
+  `packet_bbs_send`, `packet_bbs_buffer`, `packet_aprs_beacon`,
+  `packet_force_audio`, `packet_set_endpoint`. `packet_mode('bbs')` could enter
+  BBS mode but nothing could then hold a session.
+- **Fleet Manager (8)** — new `mcp_server/tools/manager.py`: `manager_status`,
+  `manager_reports`, `manager_doc_read`, `manager_doc_write`, `manager_toggle`,
+  `manager_config`, `manager_ack`, `manager_run`. The subsystem has had a web
+  page since 2026-05-18 and zero MCP coverage. `manager_run` is documented as a
+  recursion hazard — it starts a Claude session, so it must not be looped on.
+- **Voice relay + USB/IP (3)** — `voice_status`, `voice_send`, `usbip_status`.
+
+### Changed
+
+- `broadcastify_status` was still written in DarkIce terms. There is no DarkIce
+  process any more — the audio is encoded in-process — so the tool now reports
+  the encoder format, the L/R dual-channel state, throughput and `last_error`
+  as named fields instead of dumping a raw JSON blob. The `darkice_*` keys in
+  `/status` keep their historical names; the tool relabels them.
+- Docs: the "142 MCP tools" figure in `README.md`, `docs/mcp.md` and the v4.0
+  changelog entry was never correct — the real count at v4.0.0 was 134. The
+  v4.0 entry is corrected to 134 and the current figures read 155. The category
+  table in `docs/mcp.md` now covers every registered tool (`mixer_control` and
+  `pihole_status` had never been listed).
+- `gateway_mcp.py`'s module map listed 4 of the 12 tool modules and described a
+  `routing.py` that still owned transcription, link endpoints and the loop
+  recorder — all split out on 2026-05-30. Rewritten, with a note that a new
+  module is invisible until it is added to `_register_all_tools`.
+
 ## [4.1.0] -- 2026-07-28
 
 Broadcastify goes dual-channel, and a round of measurement-led cleanup across the
@@ -140,7 +189,7 @@ The gateway can now bridge into the AllStar network as a first-class audio sourc
 - New config key: `KOKORO_DEFAULT_VOICE` (default `af_heart`). Smart Announce voice fields accept Kokoro IDs.
 - Model files (~340 MB) gitignored, downloaded by `scripts/install.sh` into `tools/models/kokoro/`.
 
-### Added — MCP tool overhaul (142 tools, up from 95+)
+### Added — MCP tool overhaul (134 tools, up from 95+)
 
 - **AllStar/USRP tools** (`mcp_server/tools/usrp.py`) — `usrp_nodes`, `usrp_status`, `usrp_connect`, `usrp_disconnect`, `usrp_disconnect_all`, `usrp_links`, `usrp_node_stats`. Cover both USRP instances via `node_id` param.
 - **Broadcastify tools** — `broadcastify_status`, `broadcastify_control` (start/stop/restart).

@@ -601,24 +601,55 @@ def gateway_restart() -> str:
 @mcp.tool()
 def broadcastify_status() -> str:
     """
-    Get Broadcastify / Icecast streaming status: whether the stream encoder
-    is connected, the server/mount, restart counts, and audio level.
+    Get Broadcastify / Icecast streaming status: connection state, the
+    server/mount, encoder format (bitrate, sample rate, mono vs the
+    dual-channel two-scanner feed), throughput, and the last error.
+
+    The audio is encoded in-process and written straight to Icecast — the
+    'darkice_*' key names below are historical, from when an external
+    DarkIce process did the encoding. There is no DarkIce here any more.
     """
     data = _get('/status')
     if 'error' in data:
         return f"Error: {data['error']}"
+    stats = data.get('darkice_stats') or {}
+
     lines = [
         f"streaming_enabled : {data.get('streaming_enabled', False)}",
         f"stream_connected  : {data.get('stream_connected', False)}",
-        f"darkice_running   : {data.get('darkice_running', False)}",
-        f"darkice_pid       : {data.get('darkice_pid')}",
-        f"darkice_restarts  : {data.get('darkice_restarts', 0)}",
+        f"encoder_running   : {data.get('darkice_running', False)}",
+        f"encoder_pid       : {data.get('darkice_pid')}",
+        f"encoder_restarts  : {data.get('darkice_restarts', 0)}",
         f"stream_restarts   : {data.get('stream_restarts', 0)}",
         f"stream_health     : {data.get('stream_health', False)}",
     ]
-    stats = data.get('darkice_stats') or {}
+
     if stats:
-        lines.append(f"stats             : {json.dumps(stats)}")
+        dual = stats.get('dual_channel')
+        # The dual-channel feed carries sdr1 on the left and sdr2 on the
+        # right. Broadcastify's own web player sums to mono, so a channel
+        # imbalance is invisible there — check with VLC.
+        channels = ('stereo — sdr1 = LEFT, sdr2 = RIGHT' if dual
+                    else 'mono' if dual is not None else '?')
+        lines += [
+            "",
+            f"server            : {stats.get('server', '?')}",
+            f"mount             : {stats.get('mount', '?')}",
+            f"channels          : {channels}",
+            f"format            : {stats.get('bitrate', '?')} kbps MP3 @ "
+            f"{stats.get('sample_rate', '?')} Hz",
+            f"uptime            : {stats.get('uptime', 0)} s",
+            f"bytes_sent        : {stats.get('bytes_sent', 0)}",
+            f"send_rate         : {stats.get('send_rate', '—')}",
+        ]
+        err = stats.get('last_error')
+        if err:
+            when = stats.get('last_error_time') or 0
+            when_s = (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(when))
+                      if when else 'unknown time')
+            lines.append(f"last_error        : {err}  (at {when_s})")
+        else:
+            lines.append("last_error        : none")
     return '\n'.join(lines)
 
 
@@ -745,6 +776,40 @@ def adsb_status() -> str:
         f"aircraft  : {data.get('aircraft', 0)} visible (last 60s)",
         f"messages  : {data.get('messages', 0)} total, {data.get('messages_rate', 0):.1f}/s",
     ]
+    return '\n'.join(lines)
+
+
+@mcp.tool()
+def usbip_status() -> str:
+    """
+    Get USB/IP status: whether the remote USB server is reachable and which
+    devices are currently attached over the network. Used to share a USB
+    radio interface (e.g. an AIOC) from another machine on the LAN.
+    """
+    data = _get('/usbipstatus')
+    if 'error' in data:
+        return f"Error: {data['error']}"
+    if not data.get('enabled'):
+        return "USB/IP not enabled (ENABLE_USBIP = false)"
+    # last_check is *age in seconds*, not a timestamp.
+    age = data.get('last_check')
+    lines = [
+        f"server     : {data.get('server', '?')}",
+        f"reachable  : {data.get('server_reachable', False)}",
+        f"last check : {f'{age:g}s ago' if age is not None else 'never'}",
+    ]
+    if data.get('last_error'):
+        lines.append(f"last error : {data['last_error']}")
+    devices = data.get('devices', [])
+    if not devices:
+        lines.append("devices    : none attached")
+    else:
+        lines.append(f"devices    : {len(devices)} attached")
+        for d in devices:
+            if isinstance(d, dict):
+                lines.append(f"   {d.get('busid', '?')}  {d.get('name', d.get('desc', ''))}")
+            else:
+                lines.append(f"   {d}")
     return '\n'.join(lines)
 
 

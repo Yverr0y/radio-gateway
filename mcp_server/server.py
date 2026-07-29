@@ -18,9 +18,16 @@ from mcp.server.fastmcp import FastMCP
 # Config — read from gateway_config.txt if present
 # ---------------------------------------------------------------------------
 
+# Gateway root — two levels above mcp_server/tools/, one above mcp_server/.
+# Tool modules must resolve repo files (gateway_config.txt, automation
+# scheme files) against this, NOT against their own dirname: the
+# 2026-05-28 split moved them down two directories, which silently broke
+# config_read and the automation_scheme_* tools for two months.
+GW_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def _load_config():
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                            'gateway_config.txt')
+    cfg_path = os.path.join(GW_ROOT, 'gateway_config.txt')
     port = 8080
     password = ''
     https = False
@@ -52,8 +59,7 @@ GW_BASE_URL, GW_PASSWORD = _load_config()
 def _load_telegram_config() -> dict:
     """Read Telegram settings from gateway_config.txt."""
     cfg = {'token': '', 'chat_id': 0, 'status_file': '/tmp/tg_status.json'}
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                            'gateway_config.txt')
+    cfg_path = os.path.join(GW_ROOT, 'gateway_config.txt')
     if not os.path.isfile(cfg_path):
         return cfg
     with open(cfg_path) as f:

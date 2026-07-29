@@ -28,6 +28,7 @@ def _register_all_tools():
         repeaters,
         metrics,
         usrp,
+        manager,
     )
 
 

@@ -1,6 +1,6 @@
 # Radio Gateway
 
-A full-stack Linux radio gateway that bridges analog and digital two-way radios to the internet: Mumble VoIP, Broadcastify streaming, Winlink email over packet radio, APRS tracking, Telegram bot control, AI-powered announcements, distributed AI transcription, and scheduled fleet health checks — all driven from a single Python process with a 20+ page web UI. Bus-based audio routing with a visual drag-and-drop editor, plugin-based radio support that scales across multiple machines via the link endpoint protocol, per-stream diagnostic tracing, and 142 MCP tools for AI control.
+A full-stack Linux radio gateway that bridges analog and digital two-way radios to the internet: Mumble VoIP, Broadcastify streaming, Winlink email over packet radio, APRS tracking, Telegram bot control, AI-powered announcements, distributed AI transcription, and scheduled fleet health checks — all driven from a single Python process with a 20+ page web UI. Bus-based audio routing with a visual drag-and-drop editor, plugin-based radio support that scales across multiple machines via the link endpoint protocol, per-stream diagnostic tracing, and 155 MCP tools for AI control.
 
 **Radios:** TH-9800 (AIOC USBIP), TH-D75 (Bluetooth RFCOMM + SCO), KV4P (USB serial), FTM-150 (remote AIOC endpoint), IC-7100 (CI-V remote endpoint), RSPduo dual SDR receiver.
 
@@ -36,7 +36,7 @@ More screenshots in `docs/screenshots/`.
 
 **Streaming** — Broadcastify / Icecast via internal ffmpeg pipe (no DarkIce, no ALSA loopback). Auto-reconnect. Cloudflare quick-tunnel for free public HTTPS with URL discovery via Google Drive.
 
-**Control surfaces** — 20+ page web UI, 142 MCP tools, Telegram bot (text routes through Claude Code + MCP; voice notes stream straight to radio TX), Mumble chat commands (`!speak`, `!cw`), web mic + Android room monitor.
+**Control surfaces** — 20+ page web UI, 155 MCP tools, Telegram bot (text routes through Claude Code + MCP; voice notes stream straight to radio TX), Mumble chat commands (`!speak`, `!cw`), web mic + Android room monitor.
 
 **Fleet Manager** — document-driven autonomous monitoring. Plain-English tasks in `hourly.md` / `daily.md` are handed to a Claude session on a schedule; structured reports come back with Telegram escalation on `elevated` severity. Auto-discovers nodes that change DHCP IP. See [docs/fleet-manager.md](docs/fleet-manager.md).
 
@@ -48,7 +48,7 @@ More screenshots in `docs/screenshots/`.
 
 See [CHANGELOG.md](CHANGELOG.md) for the detailed release history. Highlights:
 
-- **v4.0** (2026-06-26) — AllStarLink integration (USRP bridge + USRP2 dual-node, `/usrp` panel, link quality stats, AMI node control); Kokoro ONNX offline TTS (54 voices, 9 languages, new default engine); IC-7100 squelch underrun fix; MCP tool overhaul (142 tools, 13 new — AllStar, broadcastify, smart announce, relay, ADS-B); plugin platform made fully generic over discovered plugins.
+- **v4.0** (2026-06-26) — AllStarLink integration (USRP bridge + USRP2 dual-node, `/usrp` panel, link quality stats, AMI node control); Kokoro ONNX offline TTS (54 voices, 9 languages, new default engine); IC-7100 squelch underrun fix; MCP tool overhaul (134 tools, 13 new — AllStar, broadcastify, smart announce, relay, ADS-B); plugin platform made fully generic over discovered plugins.
 - **v3.7** (2026-05-18) — distributed transcription pool, audio meter unification (RG.vu), Fleet Manager docs, 6-hourly gdrive backup of operational docs, install.sh package-manager detection fix (#3).
 - **v3.6** (2026-05-08) — Fleet Manager: document-driven autonomous monitoring with scheduled Claude-driven checks, manifest-based fleet topology, Telegram escalation.
 - **v3.5** (2026-05-03) — persistent transcription log with FTS5 + plain-English search; tabbed dashboard; bus tick refactor with per-sink drain threads.
@@ -96,7 +96,7 @@ radio-gateway/
 ├── radio_gateway.py            entry point
 ├── gateway_core.py             RadioGateway class, main loop
 ├── gateway_setup.py            phased initialization helpers
-├── gateway_mcp.py              MCP server entry point (142 tools, stdio)
+├── gateway_mcp.py              MCP server entry point (155 tools, stdio)
 ├── web_server.py               HTTP/WS server + config UI
 ├── web_routes_*.py             per-domain POST handlers (transcribe / radio / audio / text / system / voice / manager / automation)
 ├── audio_bus.py, bus_manager.py        bus mixer
