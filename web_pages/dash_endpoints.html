@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — Endpoints</title>
+<link rel="stylesheet" href="/pages/common.css">
+<link rel="stylesheet" href="/pages/dash.css">
+</head>
+<body>
+
+<div id="toast-container" class="toast-stack"></div>
+
+<!-- ═══ Gateway Link endpoints ═══ -->
+<div id="link-panel" class="panel" style="display:none;">
+  <div class="panel-head">
+    <h2 class="panel-title">Gateway Link</h2>
+    <span id="link-status-badge" class="panel-meta"></span>
+  </div>
+  <div id="link-list"></div>
+</div>
+
+<!-- ═══ Transcribe workers ═══ -->
+<div id="workers-panel" class="panel" style="display:none;">
+  <div class="panel-head">
+    <h2 class="panel-title">Transcribe Workers</h2>
+    <span id="wk-badge" class="panel-meta"></span>
+  </div>
+  <div id="wk-list"></div>
+  <div id="wk-foot" class="panel-foot" style="display:none"></div>
+</div>
+
+<script src="/pages/common.js"></script>
+<script src="/pages/dash.js"></script>
+<script>
+// ══ Gateway Link ═══════════════════════════════════════════════════════════
+window._lastLinkEndpoints = [];
+function linkCmd(ep, cmd){ cmd.endpoint=ep; return postJson('/linkcmd',cmd).catch(function(){return{};}); }
+window._linkPttState = {};
+function linkPttToggle(ep) {
+  if(window._linkPttState[ep]===undefined){ for(var i=0;i<window._lastLinkEndpoints.length;i++){if(window._lastLinkEndpoints[i].name===ep){window._linkPttState[ep]=window._lastLinkEndpoints[i].ptt_active;break;}} }
+  var next=!window._linkPttState[ep]; window._linkPttState[ep]=next; linkCmd(ep,{cmd:'ptt',state:next});
+}
+function linkGain(ep,cmd,db){ linkCmd(ep,{cmd:cmd,db:parseInt(db)}); }
+function linkMuteToggle(ep,dir){ postJson('/mixer',{action:'toggle',source:'link_'+dir+':'+ep}).catch(function(){}); }
+function restartEndpoint(name) {
+  if(!confirm('Restart endpoint "'+name+'"?')) return;
+  postJson('/linkcmd',{endpoint:name,cmd:'restart'}).then(function(){ showToast(name+' restarting...','info'); }).catch(function(e){ showToast('Restart failed: '+e,'error'); });
+}
+function rebootEndpointHost(name) {
+  if(!confirm('Reboot host for endpoint "'+name+'"?\n\nThis will reboot the remote machine.')) return;
+  postJson('/linkcmd',{endpoint:name,cmd:'reboot_host'}).then(function(){ showToast(name+' host rebooting...','info'); }).catch(function(e){ showToast('Reboot failed: '+e,'error'); });
+}
+
+// Ask each endpoint to refresh its status payload periodically.
+function _pollLinkEndpoints() {
+  if(!window._lastLinkEndpoints||!window._lastLinkEndpoints.length) return;
+  for(var _ei=0;_ei<window._lastLinkEndpoints.length;_ei++) postJson('/linkcmd',{endpoint:window._lastLinkEndpoints[_ei].name,cmd:'status'}).catch(function(){});
+}
+setInterval(_pollLinkEndpoints, 10000);
+
+// The card skeleton (head + controls, with sliders) is rebuilt only when
+// endpoint identity/connection/PTT/mute state changes — rebuilding it every
+// poll would fight slider drags. The status row inside each card IS updated
+// every poll (string-diffed), and VU levels go through RG.vu every poll.
+var _lastLciKey = '';
+var _lastEpStatusHTML = {};
+
+function _epSafeId(name){ return name.replace(/[^\w-]/g,'_'); }
+
+function _epCardSkeleton(le) {
+  var ename = le.name, sid = _epSafeId(ename);
+  var est = le.endpoint_status || {};
+  var connCls = le.connected ? 'green' : 'red';
+  var rxGain = (est.rx_gain_db !== undefined) ? est.rx_gain_db : 0;
+  var txGain = (est.tx_gain_db !== undefined) ? est.tx_gain_db : 0;
+  var h = '<div class="ep-head">'
+    + '<span class="ep-tags"><span class="st-val white ep-name">'+esc(ename)+'</span>'
+    + '<span class="tag">'+esc(le.plugin||'')+'</span>'
+    + '<span class="tag '+(le.via_tunnel?'warn':'ok')+'">'+(le.via_tunnel?'CF':'LAN')+'</span>'
+    + '<span class="'+connCls+'">'+(le.connected?'connected':'offline')+'</span></span>'
+    + '<span class="ep-tool">'
+    + '<button class="rb rb-sm" title="Restart endpoint script" aria-label="Restart '+esc(ename)+' endpoint script" onclick="restartEndpoint(\''+esc(ename)+'\')"><span class="icon icon-refresh"></span></button>'
+    + '<button class="rb rb-sm" title="Reboot host" aria-label="Reboot '+esc(ename)+' host" onclick="rebootEndpointHost(\''+esc(ename)+'\')" style="margin-left:2px">&#x23FB;</button>'
+    + '</span></div>'
+    + '<div class="st-row" id="ep-status-'+sid+'"></div>'
+    + '<div class="link-ctrl-sep link-body">';
+  if (le.capabilities && le.capabilities.ptt)
+    h += '<button onclick="linkPttToggle(&quot;'+esc(ename)+'&quot;)" class="'+(le.ptt_active?'link-ptt on':'link-ptt')+'">'+(le.ptt_active?'PTT ON':'PTT')+'</button>';
+  h += '<div class="link-col">'
+    + '<div class="link-row"><span class="link-label">RX</span><div class="link-bar vu vu-tone-mono" data-vu-rx="'+esc(ename)+'"><div class="link-fill rx"></div></div></div>'
+    + '<div class="link-row"><span class="link-label">TX</span><div class="link-bar vu vu-tone-mono" data-vu-tx="'+esc(ename)+'"><div class="link-fill tx"></div></div></div>'
+    + '<div class="link-row mt-1"><button onclick="linkMuteToggle(&quot;'+esc(ename)+'&quot;,&quot;rx&quot;)" class="'+(le.rx_muted?'link-mute on':'link-mute')+'" aria-label="Mute '+esc(ename)+' RX">Mute</button><input type="range" min="-20" max="20" step="1" value="'+rxGain+'" class="link-slider" aria-label="'+esc(ename)+' RX gain" oninput="linkGain(&quot;'+esc(ename)+'&quot;,&quot;rx_gain&quot;,this.value)"><span class="link-gain-val">'+rxGain+' dB</span></div>'
+    + '<div class="link-row"><button onclick="linkMuteToggle(&quot;'+esc(ename)+'&quot;,&quot;tx&quot;)" class="'+(le.tx_muted?'link-mute on':'link-mute')+'" aria-label="Mute '+esc(ename)+' TX">Mute</button><input type="range" min="-20" max="20" step="1" value="'+txGain+'" class="link-slider" aria-label="'+esc(ename)+' TX gain" oninput="linkGain(&quot;'+esc(ename)+'&quot;,&quot;tx_gain&quot;,this.value)"><span class="link-gain-val">'+txGain+' dB</span></div>'
+    + '</div></div>';
+  return h;
+}
+
+function _epStatusRow(le) {
+  var est = le.endpoint_status || {};
+  var it = [];
+  // Percentage readout with green/amber/red thresholds (warn, err).
+  function pct(v, warn, err) { return stVal(v + '%', v > err ? 'red' : v > warn ? 'yellow' : 'green'); }
+  if(est.model) it.push(stItem('Type', stVal(esc(est.model), 'white')));
+  if(est.hostname) it.push(stItem('Host', stVal(esc(est.hostname), 'white')));
+  if(le.addr) it.push(stItem('IP', stVal(esc(le.addr.split(':')[0]), 'white')));
+  if(le.ping_ms>=0) it.push(stItem('Ping', stVal(le.ping_ms + 'ms', 'white')));
+  if(est.net_iface) it.push(stItem('NIC', stVal(esc(est.net_iface), 'white')));
+  var _ver=(est.code_version||'').substring(0,8);
+  if(_ver) it.push(stItem('Ver', stVal(esc(_ver), 'white')));
+  if(est.serial_connected!==undefined) it.push(stItem('Serial', stYesNo(est.serial_connected)));
+  if(est.bluetooth!==undefined) it.push(stItem('BT', stYesNo(est.bluetooth)));
+  if(est.audio_connected!==undefined) it.push(stItem('Audio', stYesNo(est.audio_connected)));
+  if(est.transmitting!==undefined) it.push(stItem('TX', stOnOff(est.transmitting)));
+  if(est.battery_level!==undefined) it.push(stItem('Batt', stVal(est.battery_level, est.battery_level>1?'green':'red')));
+  if(est.mode!==undefined) it.push(stItem('Mode', stVal(est.mode==='audio'?'Audio':'Data', est.mode==='audio'?'green':'yellow')));
+  if(est.hid_connected!==undefined) it.push(stItem('HID', stVal(est.hid_connected?'Yes':'No', est.hid_connected?'green':est.mode==='data'?'yellow':'red')));
+  if(est.ptt_active!==undefined) it.push(stItem('PTT', stOnOff(est.ptt_active)));
+  if(est.tx_allow_hf!==undefined) it.push(stItem('HF TX', stVal(est.tx_allow_hf?'Enabled':'Blocked', est.tx_allow_hf?'green':'red')));
+  if(est.tx_allow_vu!==undefined) it.push(stItem('V/U TX', stVal(est.tx_allow_vu?'Enabled':'Blocked', est.tx_allow_vu?'green':'red')));
+  if(est.input_active!==undefined&&est.audio_connected===undefined)
+    it.push(stItem('Audio', stVal((est.input_active?'In':'—')+'/'+(est.output_active?'Out':'—'),
+                                  est.input_active&&est.output_active?'green':'red')));
+  if(est.gate_enabled!==undefined) it.push(stItem('Gate', stVal(est.gate_open?'Open':'Closed', est.gate_open?'green':'yellow')));
+  if(est.rx_gain_db!==undefined) it.push(stItem('RX', stVal((est.rx_gain_db>=0?'+':'')+est.rx_gain_db.toFixed(1)+' dB', 'white')));
+  if(est.tx_gain_db!==undefined) it.push(stItem('TX', stVal((est.tx_gain_db>=0?'+':'')+est.tx_gain_db.toFixed(1)+' dB', 'white')));
+  if(est.cpu_pct!==undefined) it.push(stItem('CPU', pct(est.cpu_pct, 50, 80)));
+  if(est.cpu_temp_c!==undefined) it.push(stItem('Temp', stVal(est.cpu_temp_c+'&deg;', est.cpu_temp_c>70?'red':est.cpu_temp_c>55?'yellow':'green')));
+  if(est.ram_pct!==undefined) it.push(stItem('RAM', pct(est.ram_pct, 70, 85)));
+  if(est.disk_pct!==undefined) it.push(stItem('Disk', pct(est.disk_pct, 75, 90)));
+  if(est.uptime!==undefined) it.push(stItem('Up', stVal(Math.floor(est.uptime/3600)+'h'+Math.floor((est.uptime%3600)/60)+'m', 'white')));
+  if(est.band&&Array.isArray(est.band)){
+    var _isDual=(est.dual_band===0),_ab=(est.active_band||0),_tx=!!est.transmitting;
+    for(var b=0;b<est.band.length;b++){
+      if(!_isDual&&b!==_ab)continue;
+      var bd=est.band[b];
+      if(!bd.frequency)continue;
+      var _isActive=(_isDual&&b===_ab)||!_isDual;
+      var _fc=(_tx&&_isActive)?'red':(_isDual&&b===_ab?'yellow':'cyan');
+      it.push(stItem('Band '+(b===0?'A':'B'), stVal(esc(bd.frequency)+' MHz', _fc)));
+    }
+  }
+  return it.join('');
+}
+
+createStatusPoller(function(s) {
+  handleNotifications(s);
+  var linkPanel = document.getElementById('link-panel');
+  if (!s.link_enabled) { linkPanel.style.display = 'none'; return; }
+  linkPanel.style.display = '';
+  var eps = s.link_endpoints || [];
+  window._lastLinkEndpoints = eps;
+  var list = document.getElementById('link-list');
+
+  if (!eps.length) {
+    if (_lastLciKey !== 'empty') {
+      _lastLciKey = 'empty'; _lastEpStatusHTML = {};
+      list.innerHTML = '<div class="empty empty-live"><span class="empty-glyph">&#9675;</span>No endpoints connected<span class="empty-hint">Waiting for remote radio to come online</span></div>';
+    }
+    document.getElementById('link-status-badge').innerHTML = '<span class="dim">No endpoints</span>';
+    return;
+  }
+
+  // Rebuild card skeletons only when identity/connection/PTT/mute changes.
+  var lciKey = JSON.stringify(eps.map(function(e){
+    return {n:e.name, c:e.connected, p:e.ptt_active, m:e.rx_muted, m2:e.tx_muted, t:e.via_tunnel};
+  }));
+  if (lciKey !== _lastLciKey) {
+    _lastLciKey = lciKey; _lastEpStatusHTML = {};
+    var h = '';
+    for (var i = 0; i < eps.length; i++) {
+      h += '<div class="'+(i>0?'ep-sep':'')+'">'+_epCardSkeleton(eps[i])+'</div>';
+    }
+    list.innerHTML = h;
+  }
+
+  var connected = eps.filter(function(e){ return e.connected; }).length;
+  document.getElementById('link-status-badge').innerHTML =
+    '<span class="'+(connected?'green':'red')+'">'+connected+' / '+eps.length+' connected</span>';
+
+  // Per-poll updates: status rows (string-diffed) + VU levels.
+  for (var i = 0; i < eps.length; i++) {
+    var le = eps[i], sid = _epSafeId(le.name);
+    var row = document.getElementById('ep-status-' + sid);
+    if (row) {
+      var eh = _epStatusRow(le);
+      if (_lastEpStatusHTML[sid] !== eh) { _lastEpStatusHTML[sid] = eh; row.innerHTML = eh; }
+    }
+    var _rxEl = document.querySelector('[data-vu-rx="' + le.name + '"]');
+    var _txEl = document.querySelector('[data-vu-tx="' + le.name + '"]');
+    if (_rxEl && window.RG && RG.vu) RG.vu.set(_rxEl, le.level || 0);
+    if (_txEl && window.RG && RG.vu) RG.vu.set(_txEl, le.tx_level || 0);
+  }
+});
+
+// ══ Transcribe workers ══════════════════════════════════════════════════════
+// Same card grammar as the link endpoints above: head with identity tags,
+// st-row of readouts. Workers dial in like link endpoints do, so a worker
+// row reads the same way an endpoint row does.
+// since=2100 → status payload only, no transcript results.
+var _lastWkHTML = '';
+createPoller('/transcriptions?since=4102444800', 5000, function(d) {
+  var st = d.status || {};
+  var panel = document.getElementById('workers-panel');
+  if (!st.running) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+
+  var workers = st.workers || [];
+  var reg = st.registration || {};
+  var regByUrl = {};
+  (reg.workers || []).forEach(function(w){ regByUrl[w.url] = w; });
+
+  var ready = workers.filter(function(w){ return w.model_loaded && (w.type !== 'remote' || w.reachable); }).length;
+  document.getElementById('wk-badge').innerHTML =
+    '<span class="'+(workers.length && ready === workers.length ? 'green' : ready ? 'yellow' : 'red')+'">'
+    + ready + ' / ' + workers.length + ' ready</span> &middot; ' + esc(st.mode || '');
+
+  var h = '';
+  if (!workers.length) {
+    h = '<div class="empty empty-live"><span class="empty-glyph">&#9675;</span>No workers in pool'
+      + '<span class="empty-hint">' + (reg.allowed ? 'Waiting for workers to register' : 'Self-registration is disabled') + '</span></div>';
+  } else {
+    for (var i = 0; i < workers.length; i++) {
+      var w = workers[i];
+      var statusTxt, statusCls;
+      if (!w.model_loaded)                          { statusTxt = 'loading';     statusCls = 'warn'; }
+      else if (w.type === 'remote' && !w.reachable) { statusTxt = 'unreachable'; statusCls = 'err'; }
+      else                                          { statusTxt = 'ready';       statusCls = 'ok'; }
+      var urlLabel = (w.url || '').replace(/^https?:\/\//, '');
+      var who = w.type === 'local' ? 'local' : (w.name && w.name !== w.url) ? w.name : urlLabel;
+      var regInfo = w.url ? regByUrl[w.url] : null;
+
+      h += '<div class="'+(i>0?'ep-sep':'')+'">';
+      h += '<div class="ep-head"><span class="ep-tags">'
+        + '<span class="st-val white ep-name">'+esc(who)+'</span>'
+        + '<span class="tag">'+esc((w.engine||'').toUpperCase())+'</span>'
+        + (w.registered ? '<span class="tag accent" title="Self-registered">self-reg</span>' : '')
+        + '<span class="tag '+statusCls+'">'+statusTxt+'</span>'
+        + '</span></div>';
+      var it = [];
+      it.push(stItem('Model', stVal(esc(w.model_key||'—'), 'white')));
+      it.push(stItem('Done', stVal(w.dispatched!=null?w.dispatched:0, 'white')));
+      it.push(stItem('Active', stVal(w.inflight||0, (w.inflight||0)>0?'cyan':'dim')));
+      if (w.avg_ratio != null) it.push(stItem('Ratio', stVal(w.avg_ratio+'x', w.avg_ratio<1?'green':w.avg_ratio<=3?'yellow':'red')));
+      if (w.ram_mb != null) it.push(stItem('RAM', stVal(w.ram_mb+' MB', 'white')));
+      if (w.cpu_temp_c != null) it.push(stItem('Temp', stVal(w.cpu_temp_c+'&deg;', w.cpu_temp_c<75?'green':w.cpu_temp_c<90?'yellow':'red')));
+      if (w.fan_rpm != null) it.push(stItem('Fan', stVal(w.fan_rpm+' RPM', 'white')));
+      if (w.uptime_secs != null) it.push(stItem('Up', stVal(fmtSecs(w.uptime_secs), 'white')));
+      if (w.type === 'remote') {
+        it.push(stItem('URL', stVal(esc(urlLabel), 'white')));
+        if (w.last_poll_age != null) it.push(stItem('Polled', stVal(Math.round(w.last_poll_age)+'s ago', w.last_poll_age<30?'white':'yellow')));
+        if (regInfo) it.push(stItem('Heartbeat', stVal(Math.round(regInfo.last_seen_secs)+'s ago', regInfo.last_seen_secs<60?'green':'yellow')));
+      }
+      h += stRow(it);
+      if (w.last_switch_error) h += '<div class="st-line err">'+esc(w.last_switch_error)+'</div>';
+      h += '</div>';
+    }
+  }
+  if (h !== _lastWkHTML) { _lastWkHTML = h; document.getElementById('wk-list').innerHTML = h; }
+
+  var foot = document.getElementById('wk-foot');
+  var cnt = reg.counters || {};
+  if (reg.allowed !== undefined) {
+    foot.style.display = '';
+    foot.textContent = 'Self-registration ' + (reg.allowed ? 'on' : 'off')
+      + ' · TTL ' + (reg.ttl_secs || '—') + 's'
+      + ' · accepted ' + (cnt.accepted || 0)
+      + (cnt.expired ? ' · expired ' + cnt.expired : '')
+      + (cnt.rejected ? ' · rejected ' + cnt.rejected : '');
+  } else foot.style.display = 'none';
+});
+</script>
+
+</body>
+</html>

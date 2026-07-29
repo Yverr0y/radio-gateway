@@ -1,0 +1,253 @@
+/* Dashboard family — shared styles for /dashboard, /dashboard/endpoints,
+   /dashboard/services, /dashboard/operate. Extracted from the old
+   single-page dashboard.html so the sub-pages stay in lockstep.
+   Theme tokens come from common.css. */
+
+/* ── Panel-level tabs (input-mode switchers only — never status) ── */
+.panel-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--t-border);
+  margin-bottom: var(--s-3);
+}
+.panel-tab {
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent;
+  color: var(--t-text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--f-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: -1px;
+}
+.panel-tab:hover  { color: var(--t-text); background: var(--t-btn); border-color: var(--t-border); }
+.panel-tab.active { background: var(--t-panel); border-color: var(--t-border); border-bottom-color: var(--t-panel); color: var(--t-accent); }
+.panel-pane { display: none; }
+.panel-pane.active { display: block; }
+
+/* ── Status dots / misc ── */
+@keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
+.rec-indicator { animation: blink 1s infinite; }
+.dot { line-height:1; color:var(--t-text-mute); }
+.dot.ok  { color:var(--t-ok); }
+.dot.err { color:var(--t-err); }
+
+.trunc { font-size:var(--f-xs); color:var(--t-text-dim); margin-top:var(--s-1);
+         overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.panel-foot { margin-top:var(--s-2); color:var(--t-text-dim); font-size:var(--f-xs); }
+
+.dash-disclose > summary { padding:var(--s-1) 0; color:var(--t-accent);
+                           font-size:var(--f-sm); cursor:pointer; list-style:none; }
+.dash-disclose > summary::-webkit-details-marker { display:none; }
+.dash-disclose > summary::before { content:'\25B8 '; font-size:0.8em; opacity:0.7; }
+.dash-disclose[open] > summary::before { content:'\25BE '; }
+.history-scroll { max-height:300px; overflow-y:auto; font-size:var(--f-xs); margin-top:var(--s-1); }
+
+/* Disabled subsystem panel — kept on the page (discoverable) but ghosted. */
+.panel.panel-off { opacity: 0.45; }
+.panel.panel-off .panel-title::after { content: ' — not enabled'; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* ── Annunciator grid (Overview) — every subsystem is a labeled lamp,
+   always in the same position. Dark lamp = disabled, never hidden. ── */
+.chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s-2);
+}
+a.chip {
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  background: var(--t-btn);
+  border: 1px solid var(--t-border);
+  border-radius: var(--r-sm);
+  color: var(--t-text);
+  font-size: var(--f-sm);
+  text-decoration: none;
+  transition: border-color 0.12s, background 0.12s;
+}
+a.chip:hover { border-color: var(--t-border-hi); background: var(--t-panel-hi); text-decoration: none; }
+.chip .chip-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--t-text-mute);
+  flex-shrink: 0;
+}
+.chip.ok   .chip-dot { background: var(--t-ok);   box-shadow: 0 0 6px rgba(93,196,122,0.5); }
+.chip.warn .chip-dot { background: var(--t-warn); box-shadow: 0 0 6px rgba(232,157,60,0.5); }
+.chip.err  .chip-dot { background: var(--t-err);  box-shadow: 0 0 6px rgba(224,72,72,0.5); }
+.chip.live .chip-dot { animation: heartbeat 1.4s ease-in-out infinite; }
+.chip .chip-name {
+  color: var(--t-text-dim);
+  font-size: var(--f-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.chip .chip-val {
+  margin-left: auto;
+  font-size: var(--f-xs);
+  color: var(--t-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chip.off { opacity: 0.45; }
+.chip.off .chip-val { color: var(--t-text-mute); }
+
+/* ── Automation ── */
+.auto-current { margin-bottom:var(--s-2); padding:var(--s-2);
+                background:var(--t-panel-hi); border-radius:var(--r-sm); }
+.auto-current .panel-title { margin-bottom:var(--s-1); color:var(--t-accent); }
+#auto-tasks { margin-bottom:var(--s-2); }
+
+/* ── Endpoint / worker cards ── */
+.ep-head { display:flex; justify-content:space-between; align-items:center; gap:var(--s-2); margin-bottom:var(--s-1); }
+.ep-tool { display:flex; align-items:center; gap:var(--s-2); }
+.ep-sep  { border-top:1px solid var(--t-border); margin-top:var(--s-2); padding-top:var(--s-2); }
+.ep-name { font-weight:600; }
+.ep-tags { display:flex; gap:var(--s-1); align-items:center; }
+
+/* ── Loop recorder rows ── */
+.loop-list { display:flex; flex-direction:column; gap:var(--s-1); }
+.loop-bus  { display:flex; gap:var(--s-3); align-items:center; padding:2px 0; font-size:var(--f-sm); }
+.loop-bus .lb-name { color:var(--t-text); min-width:80px; }
+.loop-bus .lb-meta { color:var(--t-text-dim); min-width:60px; }
+.loop-bus .lb-disk { color:var(--t-ok); min-width:55px; }
+.loop-bus .lb-rate { color:var(--t-text-mute); font-size:var(--f-xs); }
+.loop-bus .lb-ret  { color:var(--t-text-mute); font-size:var(--f-xs); margin-left:auto; }
+
+/* ── GPS satellite chart ── */
+.sat-row   { display:flex; align-items:center; gap:var(--s-2); margin:2px 0; }
+.sat-prn   { min-width:42px; text-align:right; color:var(--t-text-dim); font-size:var(--f-xs); }
+.sat-track { flex:1; background:var(--t-bg); border:1px solid var(--t-border);
+             border-radius:var(--r-sm); height:14px; overflow:hidden; }
+.sat-fill  { height:100%; background:var(--t-ok); }
+.sat-fill.mid  { background:var(--t-warn); }
+.sat-fill.low  { background:var(--t-err); }
+.sat-fill.none { background:var(--t-text-mute); }
+.sat-snr   { min-width:28px; font-size:var(--f-xs); color:var(--t-text); }
+
+/* System bars (sysBar — CPU/RAM/Swap/Disk): a fixed-size three-zone
+   gradient anchored to the bar's reference width (100px). Because the
+   element's actual width is set to N px via style.width, only the
+   leftmost N px of the 100-px gradient is visible. So:
+     0–60 % : entirely green
+     60–80 %: green + amber strip from 60–N (no red yet)
+     80–100%: green + amber + red strip from 80–N
+   Amber and red can ONLY appear once the bar reaches their tick positions. */
+.bar.bar-rx, .bar.bar-tx {
+  background-color: var(--t-bg);
+  background-image: linear-gradient(to right,
+    var(--t-ok)   0px,   var(--t-ok)   60px,
+    var(--t-warn) 60px,  var(--t-warn) 80px,
+    var(--t-err)  80px,  var(--t-err)  100px);
+  background-size: 100px 100%;
+  background-position: left center;
+  background-repeat: no-repeat;
+  transition: width 220ms cubic-bezier(.06, .9, .25, 1);
+}
+/* Tone overrides — fixed colour regardless of level (e.g. RAM as accent). */
+.bar.bar-rx.tone-accent, .bar.bar-tx.tone-accent { background: var(--t-accent); }
+.bar.bar-rx.tone-warn,   .bar.bar-tx.tone-warn   { background: var(--t-warn); }
+/* Legacy whole-bar colours — kept for non-sysBar callers. */
+.bar.warn   { background:var(--t-warn); }
+.bar.err    { background:var(--t-err); }
+.bar.accent { background:var(--t-accent); }
+
+.metric-strip { display:flex; gap:var(--s-5); flex-wrap:wrap;
+  padding:var(--s-1) 0 var(--s-3); border-bottom:1px solid var(--t-border); margin-bottom:var(--s-3); }
+
+.usbip-list { margin-top:var(--s-2); font-size:var(--f-sm); color:var(--t-text); }
+.usbip-list .usbip-dev-status { color:var(--t-text-dim); font-size:var(--f-xs); }
+
+.dash-tbl { width:100%; border-collapse:collapse; font-size:var(--f-sm); }
+.dash-tbl th { text-align:left; padding:var(--s-1) var(--s-3); color:var(--t-text-dim); font-weight:500; border-bottom:1px solid var(--t-border); }
+.dash-tbl td { padding:var(--s-1) var(--s-3); }
+.dash-tbl tr.active td { background:var(--t-panel-hi); }
+.st-fixed { display:inline-block; min-width:7ch; font-variant-numeric:tabular-nums; }
+
+/* Two-column masonry on wide screens — opt-in via <body class="cols2"> */
+@media (min-width:1400px) {
+  body.cols2 { column-count:2; column-gap:var(--s-4); column-fill:balance; }
+  body.cols2 #top-panel, body.cols2 #toast-container { column-span:all; }
+  body.cols2 .panel { break-inside:avoid; display:block; }
+}
+
+/* ── Link endpoint level bars + controls ── */
+.link-body { display:flex; gap:var(--s-3); align-items:flex-start; }
+.link-ptt  { width:80px; height:50px; font-size:var(--f-sm); border:1px solid var(--t-border);
+             border-radius:var(--r-sm); background:var(--t-btn); color:var(--t-text); cursor:pointer; }
+.link-ptt.on { background:var(--t-btn-active); border-color:var(--t-accent); color:var(--t-accent); }
+.link-col  { flex:1; display:flex; flex-direction:column; gap:var(--s-1); }
+.link-row  { display:flex; align-items:center; gap:var(--s-2); }
+.link-label{ color:var(--t-text-dim); width:2em; text-align:right; font-size:var(--f-xs); }
+.link-bar  { flex:1; height:12px; background:var(--t-bg); border:1px solid var(--t-border);
+             border-radius:var(--r-sm); overflow:hidden; }
+.link-fill { height:100%; }
+.link-fill.rx { background:var(--t-ok); }
+.link-fill.tx { background:var(--t-err); }
+.link-ctrl-sep { border-top:1px solid var(--t-border); margin-top:var(--s-2); padding-top:var(--s-2); }
+.link-mute { width:3em; padding:var(--s-1); font-size:var(--f-xs); border:1px solid var(--t-border);
+             border-radius:var(--r-sm); background:var(--t-btn); color:var(--t-text); cursor:pointer; }
+.link-mute.on { background:color-mix(in srgb,var(--t-err) 20%,var(--t-panel)); border-color:var(--t-err); color:var(--t-err); }
+.link-gain-val { color:var(--t-text-dim); font-size:var(--f-xs); width:3.5em; font-variant-numeric:tabular-nums; }
+.link-slider   { flex:1; }
+.link-row.mt-1 { margin-top:var(--s-1); }
+.link-meta { font-size:var(--f-xs); color:var(--t-text-dim); margin-bottom:var(--s-2); }
+
+/* ── Control panels (Playback + Transmit) ── */
+.ctrl-btn {
+  padding:var(--s-1) var(--s-3); margin:2px;
+  border:1px solid var(--t-border); border-radius:var(--r-sm);
+  background:var(--t-btn); color:var(--t-text);
+  cursor:pointer; font-family:inherit; font-size:var(--f-xs);
+}
+.ctrl-btn:hover  { background:var(--t-btn-hover); border-color:var(--t-border-hi); }
+.ctrl-btn:active { background:var(--t-btn-active); }
+.ctrl-btn.active { background:var(--t-btn-active); border-color:var(--t-accent); color:var(--t-accent); }
+.ctrl-btn.muted  { background:color-mix(in srgb,var(--t-err) 20%,var(--t-panel)); border-color:var(--t-err); color:var(--t-err); }
+.ctrl-btn.dim    { opacity:0.4; }
+
+.ctrl-input {
+  background:var(--t-btn); color:var(--t-text);
+  border:1px solid var(--t-border); border-radius:var(--r-sm);
+  padding:var(--s-1) var(--s-2); font-family:inherit; font-size:var(--f-sm);
+}
+textarea.ctrl-input { width:100%; box-sizing:border-box; padding:var(--s-2); resize:vertical; }
+.ctrl-field { display:flex; gap:var(--s-1); align-items:center; }
+.ctrl-field label { color:var(--t-text-dim); font-size:var(--f-xs); white-space:nowrap; }
+.ctrl-field label.w4 { width:4em; }
+.ctrl-field label.w3 { width:3em; }
+.ctrl-field.wrap { flex-wrap:wrap; }
+.ctrl-stack { display:flex; flex-direction:column; gap:var(--s-1); }
+.ctrl-input.flex-grow { flex:1; min-width:0; }
+.ctrl-input.w-voice   { flex:1; min-width:90px; }
+.ctrl-input.w-55      { width:55px; }
+.btn-full { width:100%; }
+.btn-flex { flex:1; }
+
+.st-line { font-size:var(--f-sm); color:var(--t-text-dim); margin-top:var(--s-2); font-variant-numeric:tabular-nums; }
+.st-line.working { color:var(--t-warn); }
+.st-line.ok      { color:var(--t-ok); }
+.st-line.err     { color:var(--t-err); }
+
+/* Playback grid */
+.pb-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; }
+.pb-grid .ctrl-btn {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:2px; height:42px; padding:2px var(--s-1); overflow:hidden; margin:0;
+}
+.pb-key  { font-weight:700; font-size:var(--f-xs); line-height:1; }
+.pb-name { font-size:9px; color:var(--t-text-dim); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1; }
+.smart-row { display:flex; gap:3px; margin-top:var(--s-2); }
+.smart-row .ctrl-btn { flex:1; margin:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; height:42px; overflow:hidden; }
+
+/* AI options collapsible */
+details.tx-opts { margin-top:var(--s-1); }
+details.tx-opts summary { color:var(--t-text-dim); font-size:var(--f-xs); cursor:pointer; user-select:none; padding:var(--s-1) 0; list-style:none; }
+details.tx-opts summary::before { content:'▶ '; }
+details[open].tx-opts summary::before { content:'▼ '; }
+details.tx-opts summary:hover { color:var(--t-text); }
+details.tx-opts .tx-opts-body { display:flex; flex-direction:column; gap:var(--s-1); margin-top:var(--s-1); }

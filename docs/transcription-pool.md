@@ -132,7 +132,7 @@ move fixes itself on the next heartbeat.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--gateway URL` | *(unset — env `GATEWAY_URL`)* | Gateway base URL, e.g. `http://192.168.2.140:8080`. Registration is off when unset. |
-| `--name NAME` | hostname | Label shown on the `/transcribe` page and in `transcription_workers`. |
+| `--name NAME` | hostname | Label shown on the `/transcribe` page, the worker's card on `/dashboard/endpoints`, and in `transcription_workers`. |
 | `--register-interval SECS` | 30 | Heartbeat period, auto-clamped to the gateway's TTL/3. |
 | `--gateway-password PW` | *(env `GATEWAY_PASSWORD`)* | Only needed if `WEB_CONFIG_PASSWORD` is set on the gateway. |
 
@@ -235,7 +235,7 @@ Per-engine fields surface in `/transcriptions` → `status.workers[]`:
 | `fan_rpm` | ✓ | ✓ | First fan via `applesmc` or `hwmon` |
 | `last_switch_error` | — | ✓ | Surface failures from `/model` swaps |
 
-These render as cards in the Workers row of the `/transcribe` page with the unified VU-meter style. The Fleet Manager's hourly check pulls the same payload and flags elevated state on backlog, thermals, unreachable workers, etc.
+These render as cards in the Workers row of the `/transcribe` page with the unified VU-meter style, and as endpoint-style status cards on `/dashboard/endpoints` (each active worker gets the same card treatment as a Gateway Link endpoint, plus a Workers lamp on the `/dashboard` annunciator). The Fleet Manager's hourly check pulls the same payload and flags elevated state on backlog, thermals, unreachable workers, etc.
 
 ## Memory + thermal notes
 

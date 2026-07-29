@@ -1093,13 +1093,24 @@ class RadioTranscriber:
                           f"engine NOT in pool", flush=True)
             else:
                 print(f"  [Transcribe] Remote: {_eng._url}", flush=True)
-                _eng.start()
+                # Self-registered engines were already started by
+                # register_worker(); starting again would spawn a second
+                # poller thread for the same worker.
+                if not _eng._running:
+                    _eng.start()
                 _active.append(_eng)
 
         with self._pool_lock:
             # Preserve anything that registered while models were loading —
             # a worker heartbeat can land during the retry/backoff window.
-            _late = [e for e in self._pool if getattr(e, 'registered', False)]
+            # Identity-filter against _active: a worker that registered
+            # BEFORE the snapshot above is already in _active, and adding it
+            # again here put the same engine in the pool twice (an orphan
+            # twin that _expire_workers, which matches by identity via
+            # _registered, could never remove).
+            _late = [e for e in self._pool
+                     if getattr(e, 'registered', False)
+                     and not any(e is a for a in _active)]
             self._pool[:] = _active + _late
         if not self._pool:
             if not self._allow_registration:

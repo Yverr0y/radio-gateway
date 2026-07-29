@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — Services</title>
+<link rel="stylesheet" href="/pages/common.css">
+<link rel="stylesheet" href="/pages/dash.css">
+</head>
+<body class="cols2">
+
+<div id="toast-container" class="toast-stack"></div>
+
+<!-- ═══ Broadcastify ═══ -->
+<div class="panel" id="bc-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">Broadcastify</h2>
+    <span id="bc-status-badge" class="panel-meta"></span>
+  </div>
+  <div class="st-row" id="bc-stats"><span class="dim">Not enabled</span></div>
+  <div id="bc-spark-wrap" style="display:none;margin-top:var(--s-2)">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <span class="st-label">Bitrate, last hour</span>
+      <span id="bc-spark-now" class="st-val cyan" style="font-size:var(--f-sm)"></span>
+    </div>
+    <svg id="bc-spark" viewBox="0 0 300 44" preserveAspectRatio="none"
+         style="width:100%;height:44px;display:block"></svg>
+    <div style="display:flex;justify-content:space-between">
+      <span class="panel-meta" id="bc-spark-lo"></span>
+      <span class="panel-meta" id="bc-spark-hi"></span>
+    </div>
+  </div>
+  <div id="bc-lasterr" class="panel-foot" style="display:none"></div>
+</div>
+
+<!-- ═══ Loop Recorder ═══ -->
+<div class="panel" id="loop-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">Loop Recorder</h2>
+    <a href="/recorder" class="panel-meta">&rarr; Open Recorder</a>
+  </div>
+  <div id="loop-buses" class="loop-list"><span class="dim">Not enabled</span></div>
+  <div id="loop-summary" class="panel-foot"></div>
+</div>
+
+<!-- ═══ AllStar (USRP) ═══ -->
+<div class="panel" id="asl-panel">
+  <div class="panel-head"><h2 class="panel-title">AllStar (USRP)</h2></div>
+  <div id="asl-nodes-container"><span class="dim">Not enabled</span></div>
+</div>
+
+<!-- ═══ GPS ═══ -->
+<div class="panel" id="gps-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">GPS Receiver</h2>
+    <span id="gps-fix-badge" class="panel-meta"></span>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">Lat:</span><span id="gps-lat" class="st-val cyan">--</span></div>
+    <div class="st-item"><span class="st-label">Lon:</span><span id="gps-lon" class="st-val cyan">--</span></div>
+    <div class="st-item"><span class="st-label">Alt:</span><span id="gps-alt" class="st-val white">--</span><span class="st-label"> m</span></div>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">Speed:</span><span id="gps-speed" class="st-val white">--</span><span class="st-label"> km/h</span></div>
+    <div class="st-item"><span class="st-label">Heading:</span><span id="gps-heading" class="st-val white">--</span><span class="st-label">&deg;</span></div>
+    <div class="st-item"><span class="st-label">HDOP:</span><span id="gps-hdop" class="st-val white">--</span></div>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">Sats:</span><span id="gps-sats-used" class="st-val green">--</span></div>
+    <div class="st-item"><span class="st-label">Fix time:</span><span id="gps-fix-time" class="st-val white">--</span></div>
+    <div class="st-item"><span class="st-label">Port:</span><span id="gps-port" class="st-val white">--</span></div>
+    <div class="st-item"><a id="gps-map-link" href="#" target="_blank" class="panel-meta">View on Map &rarr;</a></div>
+  </div>
+  <details class="dash-disclose">
+    <summary>Satellites in View</summary>
+    <div id="gps-sat-chart"></div>
+  </details>
+</div>
+
+<!-- ═══ ADS-B ═══ -->
+<div class="panel" id="adsb-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">ADS-B</h2>
+    <a href="/aircraft" class="panel-meta">&rarr; Aircraft Map</a>
+  </div>
+  <div class="metric-strip">
+    <div class="metric metric-lg"><span class="metric-label">Aircraft</span><span id="adsb-aircraft" class="metric-value">--</span></div>
+    <div class="metric metric-lg"><span class="metric-label">Msg/s</span><span id="adsb-rate" class="metric-value">--</span></div>
+    <div class="metric metric-lg"><span class="metric-label">Total</span><span id="adsb-messages" class="metric-value">--</span></div>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">dump1090-fa:</span><span id="adsb-svc-d1090" class="st-val dot">&#x25cf;</span></div>
+    <div class="st-item"><span class="st-label">Web:</span><span id="adsb-svc-web" class="st-val dot">&#x25cf;</span></div>
+    <div class="st-item"><span class="st-label">fr24feed:</span><span id="adsb-svc-fr24" class="st-val dot">&#x25cf;</span></div>
+  </div>
+</div>
+
+<!-- ═══ USB/IP ═══ -->
+<div class="panel" id="usbip-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">USB/IP Remote Devices</h2>
+    <span id="usbip-server-label" class="panel-meta"></span>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">Server:</span><span id="usbip-server-dot" class="st-val dot">&#x25cf;</span></div>
+  </div>
+  <div id="usbip-devices-list" class="usbip-list">No devices</div>
+</div>
+
+<!-- ═══ Telegram ═══ -->
+<div class="panel" id="tg-panel">
+  <div class="panel-head">
+    <h2 class="panel-title">Telegram Bot</h2>
+    <span id="tg-bot-name" class="panel-meta"></span>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">Bot:</span><span id="tg-dot-bot" class="st-val dot">&#x25cf;</span></div>
+    <div class="st-item"><span class="st-label">Claude tmux:</span><span id="tg-dot-tmux" class="st-val dot">&#x25cf;</span> <button onclick="openTmux()" class="rb rb-sm">Open</button></div>
+    <div class="st-item"><span class="st-label">Session:</span><span id="tg-session" class="st-val white">--</span></div>
+  </div>
+  <div class="st-row">
+    <div class="st-item"><span class="st-label">Today:</span><span id="tg-msgs-today" class="st-val cyan">--</span><span class="st-label"> msgs</span></div>
+    <div class="st-item"><span class="st-label">Last in:</span><span id="tg-last-in" class="st-val white">--</span></div>
+    <div class="st-item"><span class="st-label">Last out:</span><span id="tg-last-out" class="st-val green">--</span></div>
+  </div>
+  <div id="tg-last-text" class="trunc"></div>
+</div>
+
+<script src="/pages/common.js"></script>
+<script src="/pages/dash.js"></script>
+<script>
+// Ghost a panel when its service is disabled — visible but clearly off.
+function setPanelOff(id, off) {
+  var p = document.getElementById(id);
+  if (p) p.classList.toggle('panel-off', !!off);
+}
+
+// ── Broadcastify (rides the 2s /status poll) ──
+// Sparkline reads Prometheus through the gateway's own /prometheus/ proxy.
+// Status polls every 2s; this pulls an hour of history, so it is throttled
+// hard — an hour-long graph gains nothing from sub-minute refresh.
+var _bcSparkLast = 0, _bcSparkBusy = false;
+function bcSparkMaybeRefresh(){
+  var now = Date.now();
+  if(_bcSparkBusy || now - _bcSparkLast < 60000) return;
+  _bcSparkLast = now; _bcSparkBusy = true;
+  var end = Math.floor(now/1000), start = end - 3600;
+  // rate() over 5m smooths the 4096-byte chunk quantisation that otherwise
+  // makes a correct CBR stream look like it is oscillating.
+  var q = 'rate(rg_stream_bytes_sent_total[5m])*8/1000';
+  fetch('/prometheus/api/v1/query_range?query='+encodeURIComponent(q)
+        +'&start='+start+'&end='+end+'&step=60')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      _bcSparkBusy = false;
+      var res = j && j.data && j.data.result;
+      var svg = document.getElementById('bc-spark');
+      if(!svg) return;
+      if(!res || !res.length){ svg.innerHTML=''; document.getElementById('bc-spark-now').textContent='no data'; return; }
+      var vals = res[0].values.map(function(v){ return parseFloat(v[1]); })
+                              .filter(function(v){ return isFinite(v); });
+      if(!vals.length){ svg.innerHTML=''; return; }
+      var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      // Pad a flat line so a rock-steady CBR feed draws mid-height rather
+      // than collapsing onto the axis and looking like it died.
+      if(hi - lo < 0.5){ var m=(hi+lo)/2; lo=m-1; hi=m+1; }
+      var W=300, H=44, n=vals.length, pts=[];
+      for(var i=0;i<n;i++){
+        var x = n>1 ? (i/(n-1))*W : W/2;
+        var y = H - 3 - ((vals[i]-lo)/(hi-lo))*(H-6);
+        pts.push(x.toFixed(1)+','+y.toFixed(1));
+      }
+      var area = '0,'+H+' '+pts.join(' ')+' '+W+','+H;
+      svg.innerHTML =
+        '<polygon points="'+area+'" fill="currentColor" opacity="0.12"/>'
+      + '<polyline points="'+pts.join(' ')+'" fill="none" stroke="currentColor"'
+      + ' stroke-width="1.5" vector-effect="non-scaling-stroke"/>';
+      svg.style.color = 'var(--cyan, #4dd0e1)';
+      document.getElementById('bc-spark-now').textContent = vals[vals.length-1].toFixed(1)+' kbps';
+      document.getElementById('bc-spark-lo').textContent  = lo.toFixed(1)+' kbps';
+      document.getElementById('bc-spark-hi').textContent  = hi.toFixed(1)+' kbps';
+    })
+    .catch(function(){ _bcSparkBusy = false; });
+}
+
+createStatusPoller(function(s) {
+  handleNotifications(s);
+  setPanelOff('bc-panel', !s.streaming_enabled);
+  if(s.streaming_enabled){
+    var ds=s.darkice_stats||{};
+    var conn=ds.connected||s.stream_connected;
+    document.getElementById('bc-status-badge').innerHTML='<span class="'+(conn?'green':'red')+(conn?' pulse':'')+flashCls('bc_conn',!!conn)+'">'+(conn?'LIVE':'OFF')+'</span>';
+    var bh='';
+    if(ds.bitrate) bh+='<div class="st-item"><span class="st-label">Bitrate:</span><span class="st-val cyan">'+ds.bitrate+' kbps MP3</span></div>';
+    if(ds.uptime){var u=ds.uptime;bh+='<div class="st-item"><span class="st-label">Uptime:</span><span class="st-val white">'+Math.floor(u/3600)+'h '+('0'+Math.floor((u%3600)/60)).slice(-2)+'m '+('0'+Math.floor(u%60)).slice(-2)+'s</span></div>';}
+    if(ds.bytes_sent){var kb=ds.bytes_sent/1024;var mb=kb/1024;bh+='<div class="st-item"><span class="st-label">Sent:</span><span class="st-val cyan">'+(mb>=1?mb.toFixed(1)+' MB':kb.toFixed(0)+' KB')+'</span></div>';}
+    if(ds.send_rate) bh+='<div class="st-item"><span class="st-label">Rate:</span><span class="st-val cyan">'+ds.send_rate+'</span></div>';
+    if(ds.server) bh+='<div class="st-item st-item-wide"><span class="st-label">Server:</span><span class="st-val white">'+ds.server+ds.mount+'</span></div>';
+    if(ds.dual_channel) bh+='<div class="st-item"><span class="st-label">Mode:</span><span class="st-val white">Dual L/R</span></div>';
+    if(ds.sample_rate) bh+='<div class="st-item"><span class="st-label">Sample:</span><span class="st-val white">'+(ds.sample_rate/1000).toFixed(2)+' kHz</span></div>';
+    document.getElementById('bc-stats').innerHTML=bh||'<span class="dim">Stopped</span>';
+    // Last error persists after recovery on purpose — "it dropped at 03:12
+    // and came back" is what you want to see hours later.
+    var le=document.getElementById('bc-lasterr');
+    if(ds.last_error && ds.last_error_time){
+      var d=new Date(ds.last_error_time*1000);
+      var ago=Math.max(0,(Date.now()/1000)-ds.last_error_time);
+      var agoTxt = ago<90 ? Math.round(ago)+'s ago'
+                 : ago<5400 ? Math.round(ago/60)+'m ago'
+                 : ago<172800 ? Math.round(ago/3600)+'h ago'
+                 : Math.round(ago/86400)+'d ago';
+      le.style.display='';
+      le.innerHTML='<span class="st-label">Last error:</span> '
+        +'<span class="'+(conn?'dim':'red')+'">'+esc(ds.last_error)+'</span>'
+        +'<br><span class="panel-meta">'+d.toLocaleString()+' &middot; '+agoTxt
+        +(conn?' &middot; recovered':'')+'</span>';
+    } else { le.style.display='none'; }
+    document.getElementById('bc-spark-wrap').style.display='';
+    bcSparkMaybeRefresh();
+  } else {
+    document.getElementById('bc-status-badge').innerHTML='';
+    document.getElementById('bc-stats').innerHTML='<span class="dim">Not enabled</span>';
+    document.getElementById('bc-lasterr').style.display='none';
+    document.getElementById('bc-spark-wrap').style.display='none';
+  }
+});
+
+// ── Loop Recorder ──
+var _lastLoopHTML='',_lastLoopSummary='';
+createPoller('/loop/buses', 5000, function(buses){
+  setPanelOff('loop-panel', !buses || buses.length===0);
+  if(!buses||buses.length===0){document.getElementById('loop-buses').innerHTML='<span class="dim">Not enabled</span>';document.getElementById('loop-summary').textContent='';_lastLoopHTML='';_lastLoopSummary='';return;}
+  var html='',totalSegs=0,totalMB=0;
+  for(var i=0;i<buses.length;i++){
+    var b=buses[i]; totalSegs+=b.segments; totalMB+=(b.disk_mb||0);
+    var dot='<span class="dot '+(b.active?'err pulse':'')+'">●</span>';
+    var durStr='--';
+    if(b.segments>0){var durSec=b.latest-b.earliest;durStr=Math.floor(durSec/3600)+'h '+Math.floor((durSec%3600)/60)+'m';}
+    var diskStr=(b.disk_mb||0)>=1024?(b.disk_mb/1024).toFixed(1)+' GB':(b.disk_mb||0).toFixed(0)+' MB';
+    var rateStr=(b.segments>0&&b.latest>b.earliest)?((b.disk_mb||0)/((b.latest-b.earliest)/3600)).toFixed(0)+' MB/h':'';
+    html+='<div class="loop-bus">'+dot+' <span class="lb-name">'+(b.name||b.id)+'</span><span class="lb-meta">'+b.segments+' segs</span><span class="lb-meta">'+durStr+'</span><span class="lb-disk">'+diskStr+'</span>'+(rateStr?'<span class="lb-rate">'+rateStr+'</span>':'')+'<span class="lb-ret">ret '+(b.retention_hours||24)+'h</span></div>';
+  }
+  if(html!==_lastLoopHTML){_lastLoopHTML=html;document.getElementById('loop-buses').innerHTML=html;}
+  var totalStr=totalMB>=1024?(totalMB/1024).toFixed(1)+' GB':totalMB.toFixed(0)+' MB';
+  var summary=buses.length+' bus'+(buses.length>1?'es':'')+' recording, '+totalSegs+' segments, '+totalStr+' total';
+  if(summary!==_lastLoopSummary){_lastLoopSummary=summary;document.getElementById('loop-summary').textContent=summary;}
+});
+
+// ── AllStar (USRP) — dynamic multi-node ──
+var _aslPollers = {};
+function _aslNodeCard(inst) {
+  return '<div class="asl-node-card" id="asl-card-'+inst.id+'" style="margin-bottom:var(--s-3)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--s-1)">'
+    +'<span style="font-weight:600;font-size:var(--f-sm)">'+inst.name+'</span>'
+    +'<span id="asl-nodelbl-'+inst.id+'" class="panel-meta" style="font-size:var(--f-xs)"></span>'
+    +'<a href="'+inst.panel_url+'" style="font-size:var(--f-xs);color:var(--c-link)">Panel &#x2197;</a>'
+    +'</div>'
+    +'<div class="st-row">'
+    +'<div class="st-item"><span class="st-label">AMI:</span><span id="asl-ami-'+inst.id+'" class="st-val dot">&#x25cf;</span></div>'
+    +'<div class="st-item"><span class="st-label">RX:</span><span id="asl-rx-'+inst.id+'" class="st-val dot">&#x25cf;</span></div>'
+    +'<div class="st-item"><span class="st-label">TX:</span><span id="asl-tx-'+inst.id+'" class="st-val dot">&#x25cf;</span></div>'
+    +'<div class="st-item"><span class="st-label">Pkts:</span><span id="asl-pkts-'+inst.id+'" class="st-val cyan">--</span></div>'
+    +'</div>'
+    +'<div id="asl-links-'+inst.id+'" class="usbip-list" style="margin-top:var(--s-1)">--</div>'
+    +'</div>';
+}
+function _aslStartPoller(inst) {
+  if (_aslPollers[inst.id]) return;
+  _aslPollers[inst.id] = createPoller(inst.status_url, 5000, function(d) {
+    var card = document.getElementById('asl-card-'+inst.id);
+    if (!card) return;
+    var lbl = document.getElementById('asl-nodelbl-'+inst.id);
+    if (lbl) lbl.textContent = (d.node && d.node !== '0') ? 'node '+d.node : '';
+    var ami = document.getElementById('asl-ami-'+inst.id);
+    if (ami) { flashDotOnChange(ami, !!d.ami_ready); ami.textContent='●'; ami.classList.toggle('ok',!!d.ami_ready); ami.classList.toggle('err',!d.ami_ready); ami.title=d.ami_ready?('AMI '+(d.ami||'')):'AMI not configured'; }
+    function act(id,on,title){var el=document.getElementById(id);if(!el)return;el.textContent='●';el.classList.toggle('ok',!!on);el.classList.remove('err');el.title=title;}
+    act('asl-rx-'+inst.id, d.rx_keyed, d.rx_keyed?'receiving':'idle');
+    act('asl-tx-'+inst.id, d.tx_keyed, d.tx_keyed?'transmitting':'idle');
+    var pkts = document.getElementById('asl-pkts-'+inst.id);
+    if (pkts) setFlash(pkts, (d.pkts_rx||0)+' / '+(d.pkts_tx||0));
+    var list = document.getElementById('asl-links-'+inst.id);
+    if (list) { var ns=d.links||[]; list.innerHTML=ns.length?('<span class="dot ok">&#x25cf;</span> Connected: <b>'+ns.join('</b>, <b>')+'</b>'):'<div class="empty"><span class="empty-glyph">&#9675;</span>No nodes connected</div>'; }
+  });
+}
+function _aslRefresh() {
+  fetch('/usrp/nodes').then(function(r){return r.json();}).then(function(insts){
+    var any = insts && insts.length && insts.some(function(i){return i.enabled;});
+    setPanelOff('asl-panel', !any);
+    var container = document.getElementById('asl-nodes-container');
+    if (!container || !insts || !insts.length) return;
+    if (container.firstElementChild && !container.querySelector('.asl-node-card')) container.innerHTML = '';
+    insts.forEach(function(inst) {
+      if (!document.getElementById('asl-card-'+inst.id)) {
+        container.insertAdjacentHTML('beforeend', _aslNodeCard(inst));
+      }
+      _aslStartPoller(inst);
+    });
+  }).catch(function(){});
+}
+_aslRefresh();
+setInterval(_aslRefresh, 15000);
+
+// ── GPS ──
+var _lastGpsSatHTML='';
+createPoller('/gpsstatus', 3000, function(d){
+  setPanelOff('gps-panel', !d.enabled);
+  if(!d.enabled)return;
+  var fixBadge=document.getElementById('gps-fix-badge');
+  var fixKey=!d.connected?'disc':('fix'+d.fix); var fixFlash=flashCls('gps_fix',fixKey);
+  if(!d.connected)fixBadge.innerHTML='<span class="red'+fixFlash+'">Disconnected</span>';
+  else if(d.fix===0)fixBadge.innerHTML='<span class="yellow'+fixFlash+'">No Fix</span>';
+  else if(d.fix===1)fixBadge.innerHTML='<span class="green'+fixFlash+'">GPS Fix</span>';
+  else fixBadge.innerHTML='<span class="green'+fixFlash+'">DGPS Fix</span>';
+  setText(document.getElementById('gps-lat'),d.fix>0?d.lat.toFixed(6):'--');
+  setText(document.getElementById('gps-lon'),d.fix>0?d.lon.toFixed(6):'--');
+  setText(document.getElementById('gps-alt'),d.fix>0?d.alt.toFixed(1):'--');
+  setText(document.getElementById('gps-speed'),d.fix>0?d.speed.toFixed(1):'--');
+  setText(document.getElementById('gps-heading'),d.fix>0?d.heading.toFixed(0):'--');
+  setText(document.getElementById('gps-hdop'),d.fix>0?d.hdop.toFixed(1):'--');
+  setFlash(document.getElementById('gps-sats-used'),d.satellites_used||0);
+  setText(document.getElementById('gps-fix-time'),d.last_fix_time||'--');
+  setText(document.getElementById('gps-port'),d.port||'--');
+  var mapLink=document.getElementById('gps-map-link');
+  if(d.fix>0){mapLink.href='https://www.openstreetmap.org/?mlat='+d.lat+'&mlon='+d.lon+'#map=15/'+d.lat+'/'+d.lon;mapLink.style.display='';}else{mapLink.style.display='none';}
+  var sats=d.satellites||[]; var ch='';
+  for(var i=0;i<sats.length;i++){var s=sats[i];var pct=Math.min(100,Math.round(s.snr*100/50));var fillCls=s.snr===0?'none':s.snr>=35?'':s.snr>=20?'mid':'low';ch+='<div class="sat-row"><span class="sat-prn">PRN '+s.prn+'</span><div class="sat-track"><div class="sat-fill '+fillCls+'" style="width:'+pct+'%"></div></div><span class="sat-snr">'+s.snr+'</span></div>';}
+  if(!ch)ch='<div class="empty"><span class="empty-glyph">&#9675;</span>No satellites in view</div>';
+  if(ch!==_lastGpsSatHTML){_lastGpsSatHTML=ch;document.getElementById('gps-sat-chart').innerHTML=ch;}
+});
+
+// ── ADS-B ──
+createPoller('/adsbstatus',3000,function(d){
+  setPanelOff('adsb-panel', !d.enabled);
+  if(!d.enabled)return;
+  function svcDot(el,ok){flashDotOnChange(el,!!ok);el.textContent='●';el.classList.toggle('ok',!!ok);el.classList.toggle('err',!ok);el.title=ok?'running':'stopped';}
+  svcDot(document.getElementById('adsb-svc-d1090'),d.dump1090);
+  svcDot(document.getElementById('adsb-svc-web'),d.web);
+  svcDot(document.getElementById('adsb-svc-fr24'),d.fr24feed);
+  setFlash(document.getElementById('adsb-aircraft'),d.aircraft);
+  setFlash(document.getElementById('adsb-messages'),d.messages.toLocaleString());
+  document.getElementById('adsb-rate').textContent=d.messages_rate>0?d.messages_rate.toFixed(1):'0.0';
+});
+
+// ── USB/IP ──
+createPoller('/usbipstatus',10000,function(d){
+  setPanelOff('usbip-panel', !d.enabled);
+  if(!d.enabled)return;
+  document.getElementById('usbip-server-label').textContent=d.server||'';
+  var dot=document.getElementById('usbip-server-dot');
+  flashDotOnChange(dot,!!d.server_reachable); dot.textContent='●';
+  dot.classList.toggle('ok',!!d.server_reachable); dot.classList.toggle('err',!d.server_reachable);
+  dot.title=d.server_reachable?'reachable':(d.last_error||'unreachable');
+  var list=document.getElementById('usbip-devices-list');
+  if(!d.devices||d.devices.length===0){list.innerHTML=d.server_reachable?'<div class="empty"><span class="empty-glyph">&#9675;</span>No exported devices</div>':'<div class="empty err"><span class="empty-glyph">&#9888;</span>Server unreachable</div>';}
+  else{list.innerHTML=d.devices.map(function(dev){return'<span class="dot '+(dev.attached?'ok':'err')+'">&#x25cf;</span> <b>'+dev.bus_id+'</b> &nbsp;'+dev.description+' <span class="usbip-dev-status">'+(dev.attached?'attached':'not attached')+'</span>';}).join('<br>');}
+});
+
+// ── Telegram ──
+createPoller('/telegramstatus',5000,function(d){
+  setPanelOff('tg-panel', !d.enabled);
+  if(!d.enabled)return;
+  function dot(id,ok,title){var el=document.getElementById(id);flashDotOnChange(el,!!ok);el.textContent='●';el.classList.toggle('ok',!!ok);el.classList.toggle('err',!ok);el.title=title||(ok?'ok':'offline');}
+  dot('tg-dot-bot',d.bot_running,d.bot_running?'bot running':'bot not running');
+  dot('tg-dot-tmux',d.tmux_active,d.tmux_active?'session active':'session not found');
+  document.getElementById('tg-bot-name').textContent=d.bot_username||'';
+  document.getElementById('tg-session').textContent=d.tmux_session||'--';
+  setFlash(document.getElementById('tg-msgs-today'),d.messages_today!=null?d.messages_today:'--');
+  setFlash(document.getElementById('tg-last-in'),fmtTimestamp(d.last_message_time));
+  document.getElementById('tg-last-out').textContent=fmtTimestamp(d.last_reply_time);
+  document.getElementById('tg-last-text').textContent=d.last_message_text?'» '+d.last_message_text:'';
+});
+</script>
+
+</body>
+</html>

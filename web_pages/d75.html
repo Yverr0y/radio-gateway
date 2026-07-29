@@ -758,12 +758,17 @@ function d75LoadMemories() {
     count.textContent = channels.length + ' channels';
     _d75RenderMemList();
   }).catch(function(e) {
-    list.innerHTML = '<span class="d75-val err">Scan failed: ' + e + '</span>';
+    list.innerHTML = '<span class="d75-val err">Scan failed: ' + _d75esc(e) + '</span>';
   }).finally(function() {
     btn.disabled = false;
     btn.textContent = 'Scan';
   });
 }
+
+// Channel fields come from the radio's memory over the link endpoint —
+// remote-supplied text, so escape before innerHTML.
+function _d75esc(t){ return String(t==null?'':t).replace(/[&<>"']/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
 function _d75RenderMemList() {
   var list = document.getElementById('d75-mem-list');
@@ -778,18 +783,21 @@ function _d75RenderMemList() {
   _d75Channels.forEach(function(c) {
     var toneCls = c.tone ? 'green' : 'dim';
     var shiftCls = c.shift==='X' ? 'red' : c.shift==='S' ? 'dim' : 'yellow';
+    // Channel number rides into an inline onclick \u2014 keep it strictly
+    // word chars so it can't break out of the JS string.
+    var chSafe = String(c.ch).replace(/[^\w.-]/g, '');
     h += '<tr class="mem-row">';
-    h += '<td class="cyan">' + c.ch + '</td>';
+    h += '<td class="cyan">' + _d75esc(c.ch) + '</td>';
     h += '<td class="white d75-freq-cell">' + c.freq.toFixed(4) + '</td>';
-    h += '<td>' + (c.name || '') + '</td>';
-    h += '<td class="yellow">' + c.mode + '</td>';
-    h += '<td class="' + toneCls + '">' + (c.tone || '\u2014') + '</td>';
-    h += '<td class="' + shiftCls + '">' + (c.shift==='X'?'Xband':c.shift) + '</td>';
-    h += '<td>' + (c.offset || '') + '</td>';
+    h += '<td>' + _d75esc(c.name || '') + '</td>';
+    h += '<td class="yellow">' + _d75esc(c.mode) + '</td>';
+    h += '<td class="' + toneCls + '">' + _d75esc(c.tone || '\u2014') + '</td>';
+    h += '<td class="' + shiftCls + '">' + _d75esc(c.shift==='X'?'Xband':c.shift) + '</td>';
+    h += '<td>' + _d75esc(c.offset || '') + '</td>';
     h += '<td class="yellow">' + (_pn[c.power] || '') + '</td>';
     h += '<td class="d75-cell-nowrap">';
-    h += '<button class="rb rb-sm' + (aOk?'':' dim') + '"' + (aOk?'':' disabled') + ' onclick="' + (aOk?"d75GoChannel(0,'"+c.ch+"')":'') + '">A</button> ';
-    h += '<button class="rb rb-sm' + (bOk?'':' dim') + '"' + (bOk?'':' disabled') + ' onclick="' + (bOk?"d75GoChannel(1,'"+c.ch+"')":'') + '">B</button>';
+    h += '<button class="rb rb-sm' + (aOk?'':' dim') + '"' + (aOk?'':' disabled') + ' onclick="' + (aOk?"d75GoChannel(0,'"+chSafe+"')":'') + '">A</button> ';
+    h += '<button class="rb rb-sm' + (bOk?'':' dim') + '"' + (bOk?'':' disabled') + ' onclick="' + (bOk?"d75GoChannel(1,'"+chSafe+"')":'') + '">B</button>';
     h += '</td></tr>';
   });
   h += '</table>';

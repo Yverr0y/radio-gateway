@@ -153,6 +153,26 @@ function setText(el, val) { if (el && el.textContent !== String(val)) el.textCon
 function setClass(el, cls) { if (el && el.className !== cls) el.className = cls; }
 function setHTML(el, html) { if (el && el.innerHTML !== html) el.innerHTML = html; }
 
+// ── Status-row builders ────────────────────────────────────────────────────
+// Shared renderers for the label/value readout grammar (.st-row / .st-item /
+// .st-label / .st-val) so pages stop hand-assembling the same spans.
+// valueHtml is trusted HTML — the CALLER escapes any remote-supplied string.
+function stVal(text, cls) {
+  return '<span class="st-val' + (cls ? ' ' + cls : '') + '">' + text + '</span>';
+}
+function stItem(label, valueHtml) {
+  return '<div class="st-item"><span class="st-label">' + label + ':</span>'
+       + valueHtml + '</div>';
+}
+function stRow(items, extraCls) {
+  return '<div class="st-row' + (extraCls ? ' ' + extraCls : '') + '">'
+       + (Array.isArray(items) ? items.join('') : items) + '</div>';
+}
+// Common value idioms: yes/no (green when yes) and ON/off where ON is the
+// alarming state (PTT, TX — red when keyed, green when idle).
+function stYesNo(v) { return stVal(v ? 'Yes' : 'No', v ? 'green' : 'red'); }
+function stOnOff(v) { return stVal(v ? 'ON' : 'off', v ? 'red' : 'green'); }
+
 // ── Audio meter physics (RG.vu) ────────────────────────────────────────
 // rAF-driven interpolator that gives real VU-meter behavior to any bar.
 //

@@ -501,7 +501,10 @@ createPoller('/status', 1000, function(s) {
       if (sk === '0') continue;
       var sv = s.smart_activity[sk];
       var sClr = sv === 'Done' ? 'green' : (sv.startsWith('Error') || sv.startsWith('No ') || sv.startsWith('Dropped')) ? 'red' : 'yellow';
-      parts.push('<span class="' + sClr + '">#' + sk + ': ' + sv + '</span>');
+      // Activity strings can embed upstream error text — escape them.
+      var svEsc = String(sv).replace(/[&<>"']/g, function(c){
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
+      parts.push('<span class="' + sClr + '">#' + sk + ': ' + svEsc + '</span>');
     }
     smSt.className = 'st-line';
     setHTML(smSt, parts.length ? parts.join(' ') : '');

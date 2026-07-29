@@ -93,11 +93,11 @@ recordings/loop/
 - 24 hours: ~1.35 GB per bus
 - Waveform data: ~170 KB per 24 hours (negligible)
 
-The dashboard shows per-bus disk usage and write rate in the Loop Recorder panel.
+The dashboard's Services page (`/dashboard/services`) shows per-bus disk usage and write rate in the Loop Recorder panel.
 
 ## Dashboard Panel
 
-The dashboard shows a Loop Recorder status panel with:
+`/dashboard/services` shows a Loop Recorder status panel with:
 - Per-bus recording indicator (red dot = active)
 - Segment count and recording duration
 - Disk usage (MB/GB) and write rate (MB/h)

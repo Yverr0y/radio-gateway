@@ -48,6 +48,8 @@ More screenshots in `docs/screenshots/`.
 
 See [CHANGELOG.md](CHANGELOG.md) for the detailed release history. Highlights:
 
+- **v4.2** (2026-07-29) — transcribe workers self-register with the gateway (no worker address in config; DHCP-proof); dashboard split into four sub-pages (Overview with subsystem annunciator / Endpoints with worker cards / Services / Operate); Radios nav driven by live plugin state; single shared `/status` poll; table-driven route dispatch; 156 MCP tools.
+- **v4.1** (2026-07-28) — dual-channel Broadcastify feed (a different receiver on each of L/R); measurement-led audio-path cleanup — metrics fed from the wrong place, a stream bitrate that was never applied, and stream metadata that was never sent.
 - **v4.0** (2026-06-26) — AllStarLink integration (USRP bridge + USRP2 dual-node, `/usrp` panel, link quality stats, AMI node control); Kokoro ONNX offline TTS (54 voices, 9 languages, new default engine); IC-7100 squelch underrun fix; MCP tool overhaul (134 tools, 13 new — AllStar, broadcastify, smart announce, relay, ADS-B); plugin platform made fully generic over discovered plugins.
 - **v3.7** (2026-05-18) — distributed transcription pool, audio meter unification (RG.vu), Fleet Manager docs, 6-hourly gdrive backup of operational docs, install.sh package-manager detection fix (#3).
 - **v3.6** (2026-05-08) — Fleet Manager: document-driven autonomous monitoring with scheduled Claude-driven checks, manifest-based fleet topology, Telegram escalation.
@@ -82,6 +84,7 @@ Start at **[docs/index.md](docs/index.md)** — pages grouped by audience (insta
 
 A few that are likely the most useful:
 
+- [docs/web-ui.md](docs/web-ui.md) — the shell + the four dashboard sub-pages (Overview / Endpoints / Services / Operate)
 - [docs/transcription-pool.md](docs/transcription-pool.md) — distributed ASR architecture + deploying a remote worker
 - [docs/fleet-manager.md](docs/fleet-manager.md) — document-driven monitoring with worked English-task examples
 - [docs/gateway_link.md](docs/gateway_link.md) — link endpoint protocol for remote radios
@@ -108,7 +111,7 @@ radio-gateway/
 ├── loop_recorder.py            per-bus continuous recording
 ├── packet_radio.py             Direwolf TNC + Pat client
 ├── smart_announce.py, radio_automation.py
-├── web_pages/                  HTML pages + common.css/.js (the shell)
+├── web_pages/                  HTML pages + common.css/.js (shell) + dash.css/.js (dashboard family)
 ├── docs/                       feature docs grouped by audience (see docs/index.md)
 ├── scripts/                    install.sh + systemd unit templates
 ├── tools/                      telegram_bot.py, transcribe_worker.py, link_endpoint.py

@@ -38,9 +38,6 @@
   .nav-group.open > .nav-label,
   .nav-group.has-active > .nav-label { color: var(--t-accent); text-decoration: none; }
   #shell-bar a.active { color: var(--t-accent); }
-  #shell-bar a.nav-disabled {
-    color: var(--t-text-mute); cursor: default; pointer-events: none;
-  }
 
   .shell-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0; }
   .shell-nav > a + a,
@@ -261,21 +258,24 @@
       <span class="id-sep">&middot;</span>
       <span class="id-clock" id="id-clock">--:--</span>
     </div>
-    <a href="/dashboard" target="content" onclick="setActive(this)">Dashboard</a><div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Audio</span><div class="nav-drop">
+    <div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Dashboard</span><div class="nav-drop">
+      <a href="/dashboard" target="content" onclick="setActive(this)">Overview</a>
+      <a href="/dashboard/endpoints" target="content" onclick="setActive(this)">Endpoints</a>
+      <a href="/dashboard/services" target="content" onclick="setActive(this)">Services</a>
+      <a href="/dashboard/operate" target="content" onclick="setActive(this)">Operate</a>
+    </div></div><div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Audio</span><div class="nav-drop">
       <a href="/routing" target="content" onclick="setActive(this)">Routing</a>
       <a href="/monitor" target="content" onclick="setActive(this)">Monitor</a>
       <a href="/recordings" target="content" onclick="setActive(this)">Recordings</a>
       <a href="/recorder" target="content" onclick="setActive(this)">Loop Recorder</a>
       <a href="/transcribe" target="content" onclick="setActive(this)">Transcribe</a>
       <a href="/txlog" target="content" onclick="setActive(this)">Tx Log</a>
-    </div></div><div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Radios</span><div class="nav-drop">
-      <a href="/radio" target="content" onclick="setActive(this)" id="nav-radio">TH-9800</a>
-      <a href="/d75" target="content" onclick="setActive(this)" id="nav-d75">TH-D75</a>
-      <a href="/ic7100" target="content" onclick="setActive(this)" id="nav-ic7100">IC-7100</a>
-      <a href="/kv4p" target="content" onclick="setActive(this)" id="nav-kv4p">KV4P</a>
-      <a href="/sdr" target="content" onclick="setActive(this)" id="nav-sdr">SDR</a>
-      <a href="/usrp" target="content" onclick="setActive(this)" id="nav-usrp">AllStar 1</a>
-      <a href="/usrp2" target="content" onclick="setActive(this)" id="nav-usrp2">AllStar 2</a>
+    </div></div><div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Radios</span><div class="nav-drop" id="radios-drop">
+      <a href="/radio" target="content" onclick="setActive(this)" id="nav-radio" style="display:none">TH-9800</a>
+      <a href="/d75" target="content" onclick="setActive(this)" id="nav-d75" style="display:none">TH-D75</a>
+      <a href="/ic7100" target="content" onclick="setActive(this)" id="nav-ic7100" style="display:none">IC-7100</a>
+      <a href="/kv4p" target="content" onclick="setActive(this)" id="nav-kv4p" style="display:none">KV4P</a>
+      <a href="/sdr" target="content" onclick="setActive(this)" id="nav-sdr" style="display:none">SDR</a>
     </div></div><div class="nav-group" onclick="toggleGroup(this)"><span class="nav-label">Data</span><div class="nav-drop">
       <a href="/gps" target="content" onclick="setActive(this)" id="nav-gps">GPS</a>
       <a href="/repeaters" target="content" onclick="setActive(this)" id="nav-repeaters">Repeaters</a>
@@ -293,9 +293,9 @@
     </div></div>
     <span class="shell-pcm">
       <button id="play-btn" class="rb rb-caps rb-sm" onclick="toggleStream()"><span class="icon icon-play"></span> MP3</button>
-      <input id="vol-slider" type="range" min="0" max="100" value="50" oninput="setVolume(this.value)">
+      <input id="vol-slider" type="range" min="0" max="100" value="50" aria-label="MP3 stream volume" oninput="setVolume(this.value)">
       <button id="ws-btn" class="rb rb-caps rb-sm" onclick="toggleWS()"><span class="icon icon-play"></span> PCM</button>
-      <input id="ws-vol" type="range" min="0" max="100" value="50" oninput="setWSVol(this.value)">
+      <input id="ws-vol" type="range" min="0" max="100" value="50" aria-label="PCM stream volume" oninput="setWSVol(this.value)">
       <button id="mic-btn" class="rb rb-caps rb-sm" onclick="toggleMic()"><span class="icon icon-mic"></span> MIC</button>
     </span>
   </div>
@@ -311,18 +311,41 @@ function setActive(el) {
   // Close all dropdowns after clicking a link
   document.querySelectorAll('.nav-group').forEach(function(g){ g.classList.remove('open'); });
 }
+function _syncGroupAria() {
+  document.querySelectorAll('.nav-group').forEach(function(x) {
+    var l = x.querySelector('.nav-label');
+    if (l) l.setAttribute('aria-expanded', x.classList.contains('open') ? 'true' : 'false');
+  });
+}
 function toggleGroup(g) {
   // If the click was on an <a> inside the dropdown, don't toggle
   if (event && event.target.tagName === 'A') return;
   var wasOpen = g.classList.contains('open');
   document.querySelectorAll('.nav-group').forEach(function(x){ x.classList.remove('open'); });
   if (!wasOpen) g.classList.add('open');
+  _syncGroupAria();
 }
 // Close dropdowns when clicking outside
 document.addEventListener('click', function(e) {
   if (!e.target.closest('.nav-group')) {
     document.querySelectorAll('.nav-group').forEach(function(g){ g.classList.remove('open'); });
+    _syncGroupAria();
   }
+});
+// Keyboard access — the dropdown labels are spans, so give them button
+// semantics: Tab reaches them, Enter/Space toggles, Escape closes.
+document.querySelectorAll('.nav-group > .nav-label').forEach(function(l) {
+  l.setAttribute('tabindex', '0');
+  l.setAttribute('role', 'button');
+  l.setAttribute('aria-haspopup', 'true');
+  l.setAttribute('aria-expanded', 'false');
+  l.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(l.parentElement); }
+    else if (e.key === 'Escape') {
+      document.querySelectorAll('.nav-group').forEach(function(g){ g.classList.remove('open'); });
+      _syncGroupAria();
+    }
+  });
 });
 
 // Identity: site name from /sysinfo (poll slowly), local clock ticks locally.
@@ -740,6 +763,14 @@ function _sbUpdateDual(key, label, rxRaw, txRaw, muted) {
   requestAnimationFrame(tick);
 })();
 createPoller('/status', 1000, function(s) {
+    // Broadcast the payload into the content iframe so dash pages don't
+    // run their own /status poll on top of this one (dash.js listens and
+    // only fetches for itself when no broadcast has arrived recently).
+    var _fr = document.getElementById('shell-frame');
+    if (_fr && _fr.contentWindow) {
+      try { _fr.contentWindow.postMessage({type: 'rg-status', status: s}, location.origin); } catch(e) {}
+    }
+    updateNavFromStatus(s);
     _sbOrder = [];
     // Dual-lane bars: each full-duplex radio gets its own RX+TX compound bar.
     _sbUpdateDual('aioc', 'AIOC', s.radio_rx, s.radio_tx, false);
@@ -780,34 +811,60 @@ createPoller('/status', 1000, function(s) {
     }
   });
 
-// Grey out nav links for disabled radios
-function _updateNav() {
-  getJson('/status').then(function(s) {
-    var checks = {
-      'nav-radio': s.cat_enabled !== false,
-      'nav-d75': s.d75_enabled !== false,
-      'nav-kv4p': s.kv4p_enabled !== false,
-      'nav-sdr': s.sdr1_enabled !== false,
-      'nav-usrp': s.usrp_enabled !== false,
-      'nav-usrp2': s.usrp2_enabled !== false,
-      'nav-gps': s.gps_enabled !== false,
-      'nav-repeaters': s.repeater_db_enabled !== false,
-      'nav-adsb': s.adsb_enabled !== false,
-      'nav-telegram': s.telegram_enabled !== false
-    };
-    for (var id in checks) {
+// Nav entries follow their subsystem's live state (from the same /status
+// poll that drives the meter bars) instead of a hardcoded menu. Sticky:
+// once a subsystem has reported enabled this session, its entry stays —
+// an endpoint reboot shouldn't make menu items flicker in and out.
+var _navSeen = {};
+function _navShow(id, on) {
+  if (on) _navSeen[id] = true;
+  var el = document.getElementById(id);
+  if (el) el.style.display = _navSeen[id] ? '' : 'none';
+}
+function updateNavFromStatus(s) {
+  var eps = s.link_endpoints || [];
+  function hasPlugin(p) {
+    for (var i = 0; i < eps.length; i++) if (eps[i].plugin === p) return true;
+    return false;
+  }
+  _navShow('nav-radio', s.cat_enabled !== false);
+  _navShow('nav-d75', s.d75_enabled !== false);
+  _navShow('nav-ic7100', hasPlugin('ic7100'));
+  _navShow('nav-kv4p', s.kv4p_enabled === true || hasPlugin('kv4p'));
+  _navShow('nav-sdr', s.sdr1_enabled !== false || !!s.sdr2_enabled);
+  _navShow('nav-gps', s.gps_enabled !== false);
+  _navShow('nav-repeaters', s.repeater_db_enabled !== false);
+  _navShow('nav-adsb', s.adsb_enabled !== false);
+  _navShow('nav-telegram', s.telegram_enabled !== false);
+}
+
+// AllStar entries come from /usrp/nodes — discovered plugin instances get
+// menu items automatically instead of hardcoded "AllStar 1/2" links.
+function _navRefreshAsl() {
+  fetch('/usrp/nodes').then(function(r){ return r.json(); }).then(function(insts) {
+    var drop = document.getElementById('radios-drop');
+    if (!drop || !insts) return;
+    insts.forEach(function(inst) {
+      var id = 'nav-' + inst.id;
+      if (!inst.enabled && !_navSeen[id]) return;
       var el = document.getElementById(id);
-      if (el) {
-        if (checks[id]) {
-          el.classList.remove('nav-disabled');
-        } else {
-          el.classList.add('nav-disabled');
-        }
+      if (!el) {
+        el = document.createElement('a');
+        el.id = id;
+        el.href = inst.panel_url;
+        el.target = 'content';
+        el.textContent = 'AllStar ' + (inst.node && inst.node !== '0'
+                          ? inst.node : (inst.id.replace(/^usrp/, '') || '1'));
+        el.onclick = function(){ setActive(el); };
+        drop.appendChild(el);
       }
-    }
+      _navSeen[id] = true;
+      el.style.display = '';
+    });
   }).catch(function(){});
 }
-_updateNav();
+setInterval(_navRefreshAsl, 30000);
+_navRefreshAsl();
 
 // Manager alert dot — poll every 30s, light up if unread alerts
 function pollManagerAlert() {

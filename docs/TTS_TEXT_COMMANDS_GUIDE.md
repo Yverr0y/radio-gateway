@@ -50,7 +50,7 @@ PTT_TTS_DELAY = 0.5             # PTT pre-key settle time before audio starts
 
 ## Kokoro Voice List
 
-The voice dropdown in `/controls` and `/dashboard` is populated automatically from the active engine. For reference, all 54 Kokoro voices:
+The voice dropdown in `/controls` and the dashboard's Operate page (`/dashboard/operate`) is populated automatically from the active engine. For reference, all 54 Kokoro voices:
 
 ### American English (prefix `a`)
 | Voice ID | Description |

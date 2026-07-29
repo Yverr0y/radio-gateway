@@ -169,6 +169,23 @@ def handle_exit(handler, parent):
         parent.gateway.running = False
     return
 
+def handle_gdrive_publish_tunnel(handler, parent):
+    """POST /api/gdrive/publish-tunnel — push the current tunnel URL to
+    Google Drive for endpoint discovery. Runs off-thread; the write can
+    take seconds and must not park a web thread."""
+    gw = parent.gateway if parent else None
+    if gw and gw.gdrive:
+        _thr.Thread(target=gw._publish_tunnel_url, daemon=True).start()
+        body = json_mod.dumps({'ok': True}).encode()
+    else:
+        body = json_mod.dumps({'ok': False, 'error': 'GDrive not configured'}).encode()
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.send_header('Content-Length', str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 def handle_config_form(handler, parent):
     """POST fallback -- config form save"""
     import urllib.parse

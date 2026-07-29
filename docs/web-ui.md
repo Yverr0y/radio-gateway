@@ -1,0 +1,83 @@
+# Web UI — shell and dashboard family
+
+The gateway's web UI: a persistent shell (nav, live audio players, meter
+strip) framing 20+ feature pages, with the dashboard split into four
+sub-pages so no status hides behind a tab.
+
+## Why this exists
+
+The original single `/dashboard` accreted panels until most of its state was
+invisible — seven services shared one tab strip, System and Status hid behind
+another, and endpoint status and controls lived on separate tabs. v4.2 split
+it into sub-pages organised by what you're doing, and put a subsystem
+annunciator on the landing page so everything is visible at one glance.
+
+## Architecture
+
+```
+┌ shell.html  (loaded at /) ─────────────────────────────────────────┐
+│ nav bar · identity plate · MP3/PCM players · web mic               │
+│ level-meter strip  (1 s /status poll drives VU bars)               │
+│ ┌ iframe name="content" ───────────────────────────────────────┐  │
+│ │ /dashboard              Overview  (default)                  │  │
+│ │ /dashboard/endpoints    Endpoints                            │  │
+│ │ /dashboard/services     Services                             │  │
+│ │ /dashboard/operate      Operate                              │  │
+│ │ /routing /transcribe /radio ...   feature pages               │  │
+│ └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+- **One `/status` poll.** The shell polls `/status` at 1 s for the meter
+  strip and **broadcasts each payload into the iframe** via `postMessage`
+  (`{type:'rg-status'}`, same-origin). Dashboard pages consume the broadcast
+  through `createStatusPoller()` in `dash.js` and only fetch `/status`
+  themselves when no broadcast has arrived for 5 s (page opened standalone).
+- **Live nav.** The Radios menu is derived from `/status` enable flags and
+  `/usrp/nodes` — entries appear when their subsystem reports enabled and
+  stay for the session (sticky, so an endpoint reboot doesn't flicker the
+  menu). Discovered AllStar plugin instances get menu items automatically.
+- **Shared assets.** `common.css`/`common.js` serve every page (theme tokens,
+  `RG.vu` meter physics, `stItem`/`stRow` status-row builders);
+  `dash.css`/`dash.js` add the dashboard-family layer (toasts, panel tabs,
+  annunciator chips, the status-poller wrapper).
+
+## The four dashboard pages
+
+| Page | Job |
+|------|-----|
+| **Overview** (`/dashboard`) | System bars (CPU/RAM/swap/disk/net/temps), gateway status flags (PTT, Mumble, CAT, D75, smart countdowns…), and the subsystem **annunciator** — one lamp per subsystem, always present, dark when disabled, each linking to its sub-page. |
+| **Endpoints** (`/dashboard/endpoints`) | One card per Gateway Link endpoint: status readouts plus PTT / RX-TX VU bars / mute / gain sliders together. Below, one card per **transcribe worker** (local + remote): engine/model tags, ready state, done/active counts, ratio, RAM/temp/fan, URL + heartbeat for self-registered workers. |
+| **Services** (`/dashboard/services`) | Broadcastify (uptime, throughput, last error, bitrate sparkline from Prometheus), Loop Recorder buses, AllStar nodes, GPS fix + satellites, ADS-B, USB/IP devices, Telegram bot. All visible; disabled services ghost out. |
+| **Operate** (`/dashboard/operate`) | Playback soundboard grid, Smart Announce slots, Transmit (TTS / CW / AI / Fart tabs), Automation engine tasks + history. |
+
+## Notes from running it
+
+- Endpoint/worker card skeletons (which hold sliders) rebuild only when an
+  identity key changes (name / connected / PTT / mutes); the status rows
+  inside re-render every poll, string-diffed. Rebuilding sliders per poll
+  fights the user's drag.
+- Remote-supplied strings (endpoint hostnames, worker names, radio memory
+  channel names) are escaped before `innerHTML` — fleet machines are trusted,
+  but their status payloads shouldn't be an injection vector into the
+  gateway UI.
+- Static pages are read from disk per request: editing a page under
+  `web_pages/` goes live on refresh. Adding a **route** means editing
+  `_STATIC_PAGES` (pages) or the `_GET_*`/`_POST_*` dispatch tables
+  (handlers) in `web_server.py`, which needs a service restart.
+- Route dispatch is table-driven: exact-match dict → query-stripped exact →
+  ordered prefix list, then plugin-contributed routes (`web_routes()` hook),
+  then 404 (GET) / config-form fallback (POST).
+
+## Source pointers
+
+| File | What |
+|------|------|
+| `web_pages/shell.html` | Shell: nav, players, meter strip, status broadcast |
+| `web_pages/dashboard.html` | Overview + annunciator |
+| `web_pages/dash_endpoints.html` | Endpoint + transcribe worker cards |
+| `web_pages/dash_services.html` | Service panels |
+| `web_pages/dash_operate.html` | Playback / Transmit / Automation |
+| `web_pages/dash.css`, `dash.js` | Dashboard-family shared styles + helpers |
+| `web_pages/common.css`, `common.js` | Theme tokens, VU engine, st* builders |
+| `web_server.py` | `_STATIC_PAGES`, dispatch tables, auth, HTTPS |

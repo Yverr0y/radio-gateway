@@ -546,7 +546,7 @@ No other gateway dependencies are needed.
 - N simultaneous endpoint connections (dict keyed by name)
 - Dynamic LinkAudioSource creation/destruction per endpoint
 - Per-endpoint controls on controls page (PTT, RX/TX bars, gain, mute)
-- Per-endpoint status on dashboard with live endpoint state
+- Per-endpoint status card on `/dashboard/endpoints` with live endpoint state + inline PTT/gain controls
 - Per-endpoint audio bars in shell frame
 - Gateway settings persistence (~/.config/radio-gateway/link_endpoints.json)
 - Bidirectional heartbeat (5s) with dead peer detection (15s)

@@ -2,7 +2,81 @@
 
 All notable changes to Radio Gateway.
 
-## [Unreleased]
+## [4.2.0] -- 2026-07-29
+
+Transcribe workers now dial into the gateway like every other fleet machine,
+and the dashboard — which had grown status panels stacked behind tabs behind
+more tabs — is split into four sub-pages where nothing is hidden. Plus a round
+of web-layer cleanup: one `/status` poll instead of two, a nav that reflects
+what's actually plugged in, dispatch tables instead of a 100-branch elif
+chain, and escaping for the remote-supplied strings that reach `innerHTML`.
+
+### Added — dashboard split into four sub-pages
+
+The single `/dashboard` page had reached the point where most of its state was
+invisible: seven services shared one tab strip, System and Status hid behind
+another, and the Gateway Link panel split status and controls across two more.
+The Dashboard nav item is now a group of four pages:
+
+- **Overview** (`/dashboard`) — system bars and gateway status flags side by
+  side, plus a subsystem **annunciator**: every subsystem (Link, Workers,
+  Stream, Loop, AllStar, GPS, ADS-B, USB/IP, Telegram, Automation) is a
+  status lamp that is always present — lit when running, dark when disabled,
+  never hidden — and links to its sub-page.
+- **Endpoints** (`/dashboard/endpoints`) — each Gateway Link endpoint is one
+  card with its status readouts *and* its PTT/mute/gain controls together.
+  Below it, **transcribe workers get the same endpoint-style cards**: engine
+  and model tags, ready/loading/unreachable state, done/active counts,
+  processing ratio, RAM/temp/fan, and for remote workers the URL, poll age
+  and registration heartbeat. Card skeletons (which hold sliders) rebuild
+  only on identity changes so a poll can't fight a drag.
+- **Services** (`/dashboard/services`) — Broadcastify (with bitrate
+  sparkline), Loop Recorder, AllStar, GPS, ADS-B, USB/IP and Telegram as
+  visible panels. Disabled services ghost out instead of disappearing.
+- **Operate** (`/dashboard/operate`) — Playback grid, Transmit (TTS / CW /
+  AI / Fart tabs — input modes, not status), Automation engine.
+
+Shared `web_pages/dash.css` + `dash.js` keep the four pages in lockstep;
+`common.js` gained `stItem`/`stVal`/`stRow`/`stYesNo`/`stOnOff` builders so
+pages stop hand-assembling the same status-row spans.
+
+### Changed — web layer
+
+- **One `/status` poll, not two.** The shell already polls at 1 s for the
+  meter strip; it now broadcasts each payload into the content iframe via
+  `postMessage`, and dashboard pages consume the broadcast instead of running
+  their own 2 s poll. A page opened outside the shell falls back to fetching
+  after 5 s of silence, and offline-detect/auto-reload behaviour carries over.
+- **The Radios menu reflects reality.** Nav entries are driven by the same
+  `/status` payload (sticky per session, so an endpoint reboot doesn't make
+  menu items flicker), and AllStar entries are built from `/usrp/nodes` —
+  discovered plugin instances get menu items automatically. Retired hardware
+  (KV4P's old slot) no longer occupies a greyed-out entry forever.
+- **`web_server.py` route dispatch is now table-driven.** The ~60-branch
+  `do_GET` and ~45-branch `do_POST` elif chains became exact-match /
+  query-stripped / ordered-prefix tables with one shared dispatcher. Route
+  parity was replay-verified against the old chains (105 routes). The inline
+  gdrive-publish block moved to `web_routes_system.handle_gdrive_publish_tunnel`.
+- **Accessibility**: transmit tabs carry `role=tablist/tab/tabpanel` with
+  `aria-selected` maintained; icon-only buttons and gain/volume sliders have
+  `aria-label`s; the shell nav dropdowns are keyboard-operable (Tab, Enter /
+  Space, Escape, `aria-expanded`).
+
+### Fixed
+
+- A worker that self-registered **before** the transcriber's `_run()` took its
+  pool snapshot ended up in the pool twice — once via the snapshot (which also
+  started a second status-poller thread for it) and once via the late-
+  registrant rescue, which only filtered on `registered=True`. The orphan twin
+  was unexpirable because TTL expiry matches engines by identity through the
+  registration map, which only held one of the two. The rescue now identity-
+  filters against the loaded set, and already-running engines are not started
+  twice.
+- The TH-D75 memory-channel table interpolated radio-supplied channel names
+  into `innerHTML` unescaped — remote content from a fleet device reaching the
+  gateway UI. Now escaped, along with `/controls` smart-announce activity
+  strings (which can embed upstream error text). The `ic7100` and `kv4p`
+  pages were audited and only render locally-computed values.
 
 ### Added — transcription workers register themselves
 

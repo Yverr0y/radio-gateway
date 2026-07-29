@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — Operate</title>
+<link rel="stylesheet" href="/pages/common.css">
+<link rel="stylesheet" href="/pages/dash.css">
+</head>
+<body class="cols2">
+
+<div id="toast-container" class="toast-stack"></div>
+
+<!-- ═══ Playback ═══ -->
+<div id="playback-panel" class="panel" style="display:none;">
+  <div class="panel-head">
+    <h2 class="panel-title">Playback</h2>
+  </div>
+  <div class="pb-grid">
+    <button class="ctrl-btn" onclick="sendKey('1')" id="btn-f1"><span class="pb-key">1</span><span class="pb-name" id="pb-name-1"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('2')" id="btn-f2"><span class="pb-key">2</span><span class="pb-name" id="pb-name-2"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('3')" id="btn-f3"><span class="pb-key">3</span><span class="pb-name" id="pb-name-3"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('4')" id="btn-f4"><span class="pb-key">4</span><span class="pb-name" id="pb-name-4"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('5')" id="btn-f5"><span class="pb-key">5</span><span class="pb-name" id="pb-name-5"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('6')" id="btn-f6"><span class="pb-key">6</span><span class="pb-name" id="pb-name-6"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('7')" id="btn-f7"><span class="pb-key">7</span><span class="pb-name" id="pb-name-7"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('8')" id="btn-f8"><span class="pb-key">8</span><span class="pb-name" id="pb-name-8"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('9')" id="btn-f9"><span class="pb-key">9</span><span class="pb-name" id="pb-name-9"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('0')" id="btn-f0"><span class="pb-key">ID</span><span class="pb-name" id="pb-name-0"></span></button>
+    <button class="ctrl-btn" onclick="sendKey('-')">Stop</button>
+    <button class="ctrl-btn" onclick="refreshSounds()" title="Refresh random sounds" aria-label="Refresh random sounds" style="grid-column:1">&#x21bb;</button>
+    <button class="ctrl-btn" onclick="toggleTestLoop(this)" id="btn-test-loop">Loop</button>
+  </div>
+  <div class="smart-row" id="smart-announce-group">
+    <button class="ctrl-btn" onclick="sendKey('[')"><span class="pb-key">Smart #1</span><span class="pb-name" id="smart-st-1"></span></button>
+    <button class="ctrl-btn" onclick="sendKey(']')"><span class="pb-key">Smart #2</span><span class="pb-name" id="smart-st-2"></span></button>
+    <button class="ctrl-btn" onclick="sendKey(String.fromCharCode(92))"><span class="pb-key">Smart #3</span><span class="pb-name" id="smart-st-3"></span></button>
+  </div>
+</div>
+
+<!-- ═══ Transmit ═══ -->
+<div id="transmit-panel" class="panel" style="display:none;">
+  <div class="panel-head"><h2 class="panel-title">Transmit</h2></div>
+  <div class="panel-tabs" role="tablist" aria-label="Transmit mode">
+    <button class="panel-tab active" role="tab" aria-selected="true" aria-controls="tx-tts" onclick="switchPanelTab('transmit-panel','tx-tts',this)">TTS</button>
+    <button class="panel-tab" role="tab" aria-selected="false" aria-controls="tx-cw" onclick="switchPanelTab('transmit-panel','tx-cw',this)">CW</button>
+    <button class="panel-tab" role="tab" aria-selected="false" aria-controls="tx-ai" onclick="switchPanelTab('transmit-panel','tx-ai',this)">AI</button>
+    <button class="panel-tab" role="tab" aria-selected="false" aria-controls="tx-fart" onclick="switchPanelTab('transmit-panel','tx-fart',this)" title="Fart Machine">&#x1F4A8; Fart</button>
+  </div>
+
+  <div id="tx-tts" class="panel-pane active" role="tabpanel">
+    <div class="ctrl-stack">
+      <textarea id="tts-text" class="ctrl-input" rows="3" placeholder="Enter text to speak..." aria-label="Text to speak"></textarea>
+      <div class="ctrl-field">
+        <select id="tts-voice" class="ctrl-input btn-flex">
+          <option value="af_heart">Heart (US F) ★★★★</option>
+        </select>
+        <button class="ctrl-btn btn-flex" onclick="sendTTS()" id="btn-tts-send">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tx-cw" class="panel-pane" role="tabpanel">
+    <div class="ctrl-stack">
+      <textarea id="cw-text" class="ctrl-input" rows="3" placeholder="Enter text for CW..." aria-label="Text for CW"></textarea>
+      <div class="ctrl-field"><label class="w3">WPM</label><input id="cw-wpm" class="ctrl-input w-55" type="number" min="5" max="60" value="20"></div>
+      <div class="ctrl-field"><label class="w3">Freq</label><input id="cw-freq" class="ctrl-input w-55" type="number" min="200" max="1200" value="600"><label>Hz</label></div>
+      <div class="ctrl-field"><label class="w3">Vol</label><input id="cw-vol" class="ctrl-input w-55" type="number" min="0.1" max="2.0" step="0.1" value="1.0"></div>
+      <button class="ctrl-btn btn-full" onclick="sendCW()" id="btn-cw-send">Send CW</button>
+    </div>
+  </div>
+
+  <div id="tx-ai" class="panel-pane" role="tabpanel">
+    <div class="ctrl-stack">
+      <textarea id="ai-text" class="ctrl-input" rows="3" placeholder="Enter prompt for AI to research and speak..." aria-label="Prompt for AI announcement"></textarea>
+      <details class="tx-opts">
+        <summary>Options</summary>
+        <div class="tx-opts-body">
+          <div class="ctrl-field"><label class="w4">Top text</label><input id="ai-top" class="ctrl-input flex-grow" type="text" value="QST"></div>
+          <div class="ctrl-field"><label class="w4">Tail</label><input id="ai-tail" class="ctrl-input flex-grow" type="text" value="Callsign"></div>
+          <div class="ctrl-field wrap">
+            <label>Secs</label><input id="ai-secs" class="ctrl-input w-55" type="number" value="30" min="5" max="120">
+            <label>Voice</label>
+            <select id="ai-voice" class="ctrl-input w-voice">
+              <option value="af_heart">Heart (US F) ★★★★</option>
+            </select>
+          </div>
+        </div>
+      </details>
+      <button class="ctrl-btn btn-full" onclick="sendAIText()" id="btn-ai-send">Send to AI</button>
+    </div>
+  </div>
+
+  <div id="tx-fart" class="panel-pane" role="tabpanel">
+    <div class="ctrl-stack">
+      <div class="ctrl-field"><label class="w4">Pitch spread</label><input id="fart-variation" class="ctrl-input flex-grow" type="range" min="0" max="0.4" step="0.01" value="0.12" oninput="fartLabel()"><span id="fart-variation-v" class="w3"></span></div>
+      <div class="ctrl-field">
+        <button class="ctrl-btn btn-flex" onclick="fartPreview()" title="Audition a random fart in your browser only (no transmit)">&#x1F50A; Preview</button>
+        <button class="ctrl-btn btn-flex" id="fart-rip" onclick="fartSend(this)" title="Transmit a random fart over the air">&#x1F4A8; LET IT RIP</button>
+      </div>
+      <div id="fart-status" class="st-line"></div>
+    </div>
+  </div>
+
+  <div id="tx-status" class="st-line">Ready</div>
+</div>
+
+<!-- ═══ Automation ═══ -->
+<div id="automation-panel" class="panel" style="display:none;">
+  <div class="panel-head">
+    <h2 class="panel-title">Automation Engine</h2>
+    <div id="auto-header-status" class="panel-meta"></div>
+  </div>
+  <div id="auto-current" class="auto-current" style="display:none;">
+    <div class="panel-title">Now Running</div>
+    <div id="auto-current-detail"></div>
+  </div>
+  <div id="auto-tasks"></div>
+  <details id="auto-history-details" class="dash-disclose">
+    <summary>Recent History</summary>
+    <div id="auto-history" class="history-scroll"></div>
+  </details>
+</div>
+
+<script src="/pages/common.js"></script>
+<script src="/pages/dash.js"></script>
+<script>
+// ── Fart machine (real samples) ──
+var _fartAudio = null;
+function fartVariation() { return parseFloat(document.getElementById('fart-variation').value); }
+function fartLabel() { var e = document.getElementById('fart-variation-v'); if (e) e.textContent = Math.round(fartVariation() * 100) + '%'; }
+function fartStatus(m, c) { var el = document.getElementById('fart-status'); if (!el) return; el.textContent = m || ''; el.className = 'st-line' + (c ? ' ' + c : ''); }
+function fartPreview() {
+  fartStatus('…', 'working');
+  fetch('/fart/preview', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({variation: fartVariation()})})
+    .then(function(r){ if (!r.ok) throw new Error('failed'); return r.blob(); })
+    .then(function(b){ if (_fartAudio) { try { _fartAudio.pause(); } catch(e){} URL.revokeObjectURL(_fartAudio.src); }
+      _fartAudio = new Audio(URL.createObjectURL(b)); _fartAudio.play(); fartStatus('▶ preview (browser only)', 'ok'); })
+    .catch(function(e){ fartStatus('preview error: ' + e.message, 'err'); });
+}
+function fartSend(btn) {
+  if (btn) btn.disabled = true;
+  fartStatus('transmitting…', 'working');
+  postJson('/fart/send', {variation: fartVariation()}).then(function(d){
+    if (d && d.ok) fartStatus('📡 ' + (d.fart || 'sent') + ' → air', 'ok');
+    else fartStatus('send failed: ' + ((d && d.error) || '?'), 'err');
+  }).catch(function(){ fartStatus('send error', 'err'); })
+    .finally(function(){ if (btn) setTimeout(function(){ btn.disabled = false; }, 400); });
+}
+fartLabel();
+
+// ── Transmit helpers ──
+function setTxStatus(text, cls) {
+  var el = document.getElementById('tx-status');
+  if (!el) return;
+  el.className = 'st-line' + (cls ? ' ' + cls : '');
+  el.textContent = text;
+}
+function sendTTS() {
+  var text = document.getElementById('tts-text').value.trim(); if (!text) return;
+  var btn = document.getElementById('btn-tts-send'); btn.disabled = true;
+  setTxStatus('Generating...', 'working');
+  postJson('/tts', {text:text, voice:document.getElementById('tts-voice').value})
+    .then(function(d){ setTxStatus(d.ok?'Sent — playing':'Error: '+(d.error||'failed'), d.ok?'ok':'err'); btn.disabled=false; setTimeout(function(){setTxStatus('Ready');},5000); })
+    .catch(function(){ setTxStatus('Network error','err'); btn.disabled=false; });
+  if(document.activeElement) document.activeElement.blur();
+}
+function sendCW() {
+  var text = document.getElementById('cw-text').value.trim(); if (!text) return;
+  var btn = document.getElementById('btn-cw-send'); btn.disabled = true;
+  setTxStatus('Sending...', 'working');
+  postJson('/cw', {text:text, wpm:parseFloat(document.getElementById('cw-wpm').value)||20, freq:parseFloat(document.getElementById('cw-freq').value)||600, vol:parseFloat(document.getElementById('cw-vol').value)||1.0})
+    .then(function(d){ setTxStatus(d.ok?'Sent — playing':'Error: '+(d.error||'failed'), d.ok?'ok':'err'); btn.disabled=false; setTimeout(function(){setTxStatus('Ready');},5000); })
+    .catch(function(){ setTxStatus('Network error','err'); btn.disabled=false; });
+  if(document.activeElement) document.activeElement.blur();
+}
+function sendAIText() {
+  var text = document.getElementById('ai-text').value.trim(); if (!text) return;
+  var btn = document.getElementById('btn-ai-send'); btn.disabled = true;
+  setTxStatus('Submitted — processing...', 'working');
+  postJson('/aitext', {text:text, target_secs:parseInt(document.getElementById('ai-secs').value)||30, voice:parseInt(document.getElementById('ai-voice').value)||1, top_text:document.getElementById('ai-top').value.trim(), tail_text:document.getElementById('ai-tail').value.trim()})
+    .then(function(d){ setTxStatus(d.ok?'Running — check Smart Announce status':'Error: '+(d.error||'failed'), d.ok?'ok':'err'); btn.disabled=false; setTimeout(function(){setTxStatus('Ready');},15000); })
+    .catch(function(){ setTxStatus('Network error','err'); btn.disabled=false; });
+  if(document.activeElement) document.activeElement.blur();
+}
+function refreshSounds() {
+  postJson('/refreshsounds',{}).then(function(d){ if(d.ok){var n=d.count; alert('Refreshed '+n+' sound'+(n!=1?'s':'')); } });
+}
+function toggleTestLoop(btn) {
+  postJson('/testloop',{}).then(function(d){ btn.classList.toggle('muted',!!d.looping); btn.textContent=d.looping?'Stop Loop':'Loop'; if(d.error)alert(d.error); });
+}
+
+// ── /status: panel visibility, playback files, smart announce, voices ──
+createStatusPoller(function(s) {
+  handleNotifications(s);
+  function showIf(id,cond){var e=document.getElementById(id);if(e)e.style.display=cond?'':'none';}
+  showIf('playback-panel', s.playback_enabled);
+  showIf('smart-announce-group', s.smart_announce_enabled);
+  showIf('transmit-panel', s.tts_enabled);
+
+  // Populate voice dropdowns from server-provided list (engine-aware)
+  if (s.tts_voices && s.tts_voices.length) {
+    var voices = s.tts_voices;
+    var key = voices.map(function(v){return v.value;}).join(',');
+    if (window._ttsVoiceKey !== key) {
+      window._ttsVoiceKey = key;
+      ['tts-voice','ai-voice'].forEach(function(id) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        var cur = sel.value;
+        sel.innerHTML = voices.map(function(v) {
+          return '<option value="'+v.value+'"'+(v.value===cur?' selected':'')+'>'+v.label+'</option>';
+        }).join('');
+        if (!sel.value && voices.length) sel.value = voices[0].value;
+      });
+    }
+  }
+
+  // Clear smart status spans, then repopulate from activity + countdowns
+  for(var _si=1;_si<=3;_si++){var _sp=document.getElementById('smart-st-'+_si);if(_sp){_sp.textContent='';_sp.style.color='';}}
+  if(s.smart_activity){
+    for(var sk in s.smart_activity){
+      if(sk==='0') continue;
+      var sv=s.smart_activity[sk]; if(!sv) continue;
+      var sCol=sv==='Done'?'var(--t-ok)':(sv.startsWith('Error')||sv.startsWith('No ')||sv.startsWith('Dropped'))?'var(--t-err)':'var(--t-warn)';
+      var span=document.getElementById('smart-st-'+sk);
+      if(span){span.textContent=sv; span.className='pb-name'; span.style.color=sCol;}
+    }
+  }
+  // Show countdown in button if no activity text set
+  if(s.smart_countdowns){
+    for(var i=0;i<s.smart_countdowns.length;i++){
+      var sc=s.smart_countdowns[i];
+      var span=document.getElementById('smart-st-'+sc.id);
+      if(span&&!span.textContent){span.textContent=sc.remaining; span.className='pb-name'; span.style.color='var(--t-text-dim)';}
+    }
+  }
+  if(s.files){
+    for(var fk in s.files){
+      var fb=document.getElementById('btn-f'+fk); var fn=document.getElementById('pb-name-'+fk); var fi=s.files[fk];
+      if(fb){fb.classList.toggle('muted',!!fi.playing); fb.classList.toggle('dim',!fi.loaded); if(fi.name)fb.title=fi.name;}
+      if(fn) fn.textContent=fi.loaded&&fi.name?fi.name.replace(/\.[^.]+$/,'').substring(0,11):'';
+    }
+  }
+});
+
+// ── Automation ──
+var _autoBusy=false,_autoHistBusy=false,_autoHistTick=0;
+var _lastAutoTasksHTML='',_lastAutoHistHTML='';
+function updateAutomation(){
+  if(_autoBusy)return; _autoBusy=true;
+  var _ac=new AbortController();setTimeout(function(){_ac.abort();},5000);
+  fetch('/automationstatus',{signal:_ac.signal}).then(r=>r.json()).then(function(a){
+    var panel=document.getElementById('automation-panel');
+    if(!a.enabled){panel.style.display='none';return;} panel.style.display='';
+    var hdr='<span class="'+(a.running?'green':'red')+flashCls('auto_running',!!a.running)+'">'+(a.running?'Running':'Stopped')+'</span>';
+    hdr+=' &mdash; '+a.tasks.length+' tasks, '+a.repeater_count+' repeaters';
+    if(a.radios.length)hdr+=', radios: '+a.radios.join(', ');else hdr+=', <span class="red">no radios</span>';
+    if(a.recording)hdr+=' &mdash; <span class="red rec-indicator">REC</span>';
+    document.getElementById('auto-header-status').innerHTML=hdr;
+    var curDiv=document.getElementById('auto-current');
+    if(a.current_task){curDiv.style.display='';var ct=null;for(var i=0;i<a.tasks.length;i++){if(a.tasks[i].name===a.current_task){ct=a.tasks[i];break;}}var d='<span class="white'+flashCls('auto_current',a.current_task)+'">'+a.current_task+'</span>';if(ct)d+=' &mdash; <span class="yellow">'+ct.action+'</span> on <span class="cyan">'+ct.radio+'</span>';if(a.recording)d+=' <span class="red">[RECORDING]</span>';document.getElementById('auto-current-detail').innerHTML=d;}else{curDiv.style.display='none';}
+    var t='<table class="dash-tbl"><tr><th>Task</th><th>Action</th><th>Radio</th><th>Next</th><th>Last</th></tr>';
+    for(var i=0;i<a.tasks.length;i++){var tk=a.tasks[i];var active=(tk.name===a.current_task);var next=tk.schedule_type==='interval'?fmtSecs(tk.next_run_secs):('at '+tk.at+(tk.last_run_date?' (done)':''));var last=tk.last_run_ago!==null?fmtSecs(tk.last_run_ago)+' ago':'--';t+='<tr'+(active?' class="active"':'')+'><td class="white">'+(active?'&#9654; ':'')+tk.name+'</td><td class="yellow">'+tk.action+'</td><td class="cyan">'+tk.radio+'</td><td>'+next+'</td><td class="dim">'+last+'</td></tr>';}
+    t+='</table>';
+    if(t!==_lastAutoTasksHTML){_lastAutoTasksHTML=t;document.getElementById('auto-tasks').innerHTML=t;}
+    _autoHistTick++;
+    if(_autoHistTick%3===0) _fetchAutoHistory();
+  }).catch(function(){}).finally(function(){_autoBusy=false;});
+}
+function _fetchAutoHistory(){
+  if(_autoHistBusy)return; _autoHistBusy=true;
+  var _ac=new AbortController();setTimeout(function(){_ac.abort();},5000);
+  fetch('/automationhistory',{signal:_ac.signal}).then(r=>r.json()).then(function(hist){
+    if(!hist.length){var e='<div class="empty"><span class="empty-glyph">&#9675;</span>No completed tasks yet</div>';if(e!==_lastAutoHistHTML){_lastAutoHistHTML=e;document.getElementById('auto-history').innerHTML=e;}return;}
+    var h='<table class="dash-tbl"><tr><th>Time</th><th>Task</th><th>Radio</th><th>Duration</th><th>Result</th></tr>';
+    for(var i=0;i<Math.min(hist.length,20);i++){var e=hist[i];var res='';if(e.result){if(e.result.error)res='<span class="red">ERR: '+e.result.error+'</span>';else if(e.result.frequency){res=e.result.frequency+' MHz';if(e.result.recording)res+=' <span class="green">recorded</span>';if(e.result.signal&&e.result.signal.has_signal)res+=' <span class="green">signal</span>';}else if(e.result.scanned)res=e.result.scanned+' scanned, '+e.result.active+' active';else if(e.result.text)res='TTS: '+e.result.text.substring(0,30)+'...';}h+='<tr><td class="dim">'+e.time+'</td><td class="white">'+e.task+'</td><td class="cyan">'+e.radio+'</td><td>'+e.elapsed+'s</td><td>'+res+'</td></tr>';}
+    h+='</table>';
+    if(h!==_lastAutoHistHTML){_lastAutoHistHTML=h;document.getElementById('auto-history').innerHTML=h;}
+  }).catch(function(){}).finally(function(){_autoHistBusy=false;});
+}
+setInterval(updateAutomation,5000);
+updateAutomation();
+</script>
+
+</body>
+</html>

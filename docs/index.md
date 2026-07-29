@@ -15,6 +15,7 @@ Pick the path that matches what you're trying to do.
 
 | Doc | What it covers |
 |-----|---------------|
+| [web-ui.md](web-ui.md) | The shell + dashboard sub-pages (Overview / Endpoints / Services / Operate) |
 | [fleet-manager.md](fleet-manager.md) | Document-driven autonomous monitoring + repairs |
 | [transcription-pool.md](transcription-pool.md) | Multi-machine ASR (Moonshine + Whisper) |
 | [audio-routing.md](audio-routing.md) | Bus mixer, processing chain, streaming, speaker modes |

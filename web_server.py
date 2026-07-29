@@ -728,6 +728,9 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             _STATIC_PAGES = {
                 '/': 'shell.html',
                 '/dashboard': 'dashboard.html',
+                '/dashboard/endpoints': 'dash_endpoints.html',
+                '/dashboard/services': 'dash_services.html',
+                '/dashboard/operate': 'dash_operate.html',
                 '/controls': 'controls.html',
                 '/sdr': 'sdr.html',
                 '/d75': 'd75.html',
@@ -755,10 +758,121 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 '/test': 'test.html',
             }
 
+            # ── Route tables ─────────────────────────────────────────────
+            # Values are 'module:function' — g=web_routes_get,
+            # s=web_routes_stream, p=web_routes_post, l=web_routes_loop.
+            # Modules resolve at request time (imports are cached), same as
+            # the old elif chain. Lookup order: EXACT (full path) →
+            # QEXACT (query string stripped) → PREFIX (ordered startswith;
+            # first hit wins, so keep more-specific prefixes first).
+
+            _GET_EXACT = {
+                '/status':                'g:handle_status',
+                '/metrics':               'g:handle_metrics',
+                '/sinkstats':             'g:handle_sinkstats',
+                '/sourcestats':           'g:handle_sourcestats',
+                '/theme':                 'g:handle_theme',
+                '/sysinfo':               'g:handle_sysinfo',
+                '/catstatus':             'g:handle_catstatus',
+                '/monitor-apk':           'g:handle_monitor_apk',
+                '/d75status':             'g:handle_d75status',
+                '/ic7100status':          'g:handle_ic7100status',
+                '/api/processes':         'g:handle_api_processes',
+                '/d75memlist':            'g:handle_d75memlist',
+                '/sdrstatus':             'g:handle_sdrstatus',
+                '/automationstatus':      'g:handle_automationstatus',
+                '/adsbstatus':            'g:handle_adsbstatus',
+                '/telegramstatus':        'g:handle_telegramstatus',
+                '/usbipstatus':           'g:handle_usbipstatus',
+                '/gpsstatus':             'g:handle_gpsstatus',
+                '/automationhistory':     'g:handle_automationhistory',
+                '/ws_audio':              's:handle_ws_audio',
+                '/ws_mic':                's:handle_ws_mic',
+                '/ws_monitor':            's:handle_ws_monitor',
+                '/ws/link':               's:handle_ws_link',
+                '/stream':                's:handle_stream',
+                '/tracestatus':           'g:handle_tracestatus',
+                '/recordingslist':        'g:handle_recordingslist',
+                '/adsb':                  'g:handle_adsb_proxy',
+                '/pat':                   'g:handle_pat_proxy',
+                '/routing/status':        'g:handle_routing_status',
+                '/routing/levels':        'g:handle_routing_levels',
+                '/voice/status':          'g:handle_voice_status',
+                '/voice/view':            'g:handle_voice_view',
+                '/packet/status':         'g:handle_packet_status',
+                '/packet/packets':        'g:handle_packet_packets',
+                '/packet/aprs_stations':  'g:handle_packet_aprs_stations',
+                '/packet/bbs_buffer':     'g:handle_packet_bbs_buffer',
+                '/packet/log':            'g:handle_packet_log',
+                '/api/endpoint/version':  'g:handle_endpoint_version',
+                '/api/endpoint/files':    'g:handle_endpoint_files',
+                '/api/tunnel/link-url':   'g:handle_tunnel_link_url',
+                '/api/gdrive/status':     'g:handle_gdrive_status',
+                '/api/gdrive/files':      'g:handle_gdrive_files',
+                '/manager/status':        'g:handle_manager_status',
+                '/manager/reports':       'g:handle_manager_reports',
+            }
+            _GET_QEXACT = {
+                '/config':                'g:handle_config',
+                # Accepts ?instance=vhf|uhf for multi-radio routing.
+                '/kv4pstatus':            'g:handle_kv4pstatus',
+            }
+            _GET_PREFIX = (
+                ('/pages/',               'g:handle_pages'),
+                ('/transcription/log',    'g:handle_transcription_log'),
+                ('/transcript_search',    'g:handle_transcript_search'),
+                ('/loopaudio',            'g:handle_loopaudio'),
+                ('/transcriptions',       'g:handle_transcriptions'),
+                ('/repeaterstatus',       'g:handle_repeaterstatus'),
+                ('/logdata',              'g:handle_logdata'),
+                ('/recordingsdownload',   'g:handle_recordingsdownload'),
+                ('/adsb/',                'g:handle_adsb_proxy'),
+                ('/pat/',                 'g:handle_pat_proxy'),
+                ('/grafana/',             'g:handle_grafana_proxy'),
+                ('/prometheus/',          'g:handle_prometheus_proxy'),
+                ('/loop/',                'g:handle_loop_api'),
+                ('/api/endpoint_logs',    'g:handle_endpoint_logs'),
+                ('/packet/winlink/',      'g:handle_winlink_api'),
+                ('/manager/doc',          'g:handle_manager_doc'),
+                ('/manager/view',         'g:handle_manager_view'),
+                ('/manager/edit',         'g:handle_manager_edit'),
+            )
+
+            def _dispatch(self, exact, qexact, prefixes):
+                """Look up self.path in the route tables and run the handler.
+                Returns True when a route matched, False to let the caller
+                try plugin routes / the method's fallback."""
+                import web_routes_get as _rg
+                import web_routes_stream as _rs
+                import web_routes_post as _rp
+                import web_routes_loop as _rl
+                _mods = {'g': _rg, 's': _rs, 'p': _rp, 'l': _rl}
+                route = exact.get(self.path) or qexact.get(self.path.split('?', 1)[0])
+                if route is None:
+                    for _pfx, _r in prefixes:
+                        if self.path.startswith(_pfx):
+                            route = _r
+                            break
+                if route is None:
+                    return False
+                _m, _fn = route.split(':', 1)
+                getattr(_mods[_m], _fn)(self, parent)
+                return True
+
+            def _dispatch_plugin_route(self):
+                """Plugin-contributed routes (web_routes() hook). Handler
+                signature: handler(request_handler, parent). Same path map
+                serves GET + POST; the handler inspects self.command."""
+                _routes = getattr(parent.gateway, '_plugin_web_routes', None)
+                _key = self.path.split('?', 1)[0]
+                if _routes and _key in _routes:
+                    _routes[_key](self, parent)
+                    return True
+                return False
+
             def do_GET(self):
                 if not self._check_auth():
                     return
-                import json as json_mod
                 import os
 
                 # Serve static HTML pages
@@ -778,274 +892,84 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                         self.end_headers()
                     return
 
-                # Route dispatch — handlers in web_routes_get.py and web_routes_stream.py
-                import web_routes_get as _rg
-                import web_routes_stream as _rs
+                if self._dispatch(self._GET_EXACT, self._GET_QEXACT, self._GET_PREFIX):
+                    return
+                if self._dispatch_plugin_route():
+                    return
+                # Unmatched GET — send 404 so the browser doesn't hang
+                # waiting for a response that never comes. Exact routes
+                # don't match with a stray query string appended, and
+                # that used to silently never respond.
+                try:
+                    self.send_response(404)
+                    self.send_header('Content-Type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(b'Not Found')
+                except Exception:
+                    pass
 
-                if self.path == '/status':
-                    _rg.handle_status(self, parent)
-                elif self.path == '/metrics':
-                    _rg.handle_metrics(self, parent)
-                elif self.path == '/sinkstats':
-                    _rg.handle_sinkstats(self, parent)
-                elif self.path == '/sourcestats':
-                    _rg.handle_sourcestats(self, parent)
-                elif self.path == '/theme':
-                    _rg.handle_theme(self, parent)
-                elif self.path.startswith('/pages/'):
-                    _rg.handle_pages(self, parent)
-                elif self.path == '/sysinfo':
-                    _rg.handle_sysinfo(self, parent)
-                elif self.path == '/catstatus':
-                    _rg.handle_catstatus(self, parent)
-                elif self.path == '/monitor-apk':
-                    _rg.handle_monitor_apk(self, parent)
-                elif self.path.startswith('/transcription/log'):
-                    _rg.handle_transcription_log(self, parent)
-                elif self.path.startswith('/transcript_search'):
-                    _rg.handle_transcript_search(self, parent)
-                elif self.path.startswith('/loopaudio'):
-                    _rg.handle_loopaudio(self, parent)
-                elif self.path.startswith('/transcriptions'):
-                    _rg.handle_transcriptions(self, parent)
-                elif self.path == '/d75status':
-                    _rg.handle_d75status(self, parent)
-                elif self.path == '/ic7100status':
-                    _rg.handle_ic7100status(self, parent)
-                elif self.path == '/kv4pstatus' or self.path.startswith('/kv4pstatus?'):
-                    # Accept ?instance=vhf|uhf for multi-radio routing.
-                    _rg.handle_kv4pstatus(self, parent)
-                elif self.path == '/api/processes':
-                    _rg.handle_api_processes(self, parent)
-                elif self.path == '/d75memlist':
-                    _rg.handle_d75memlist(self, parent)
-                elif self.path == '/sdrstatus':
-                    _rg.handle_sdrstatus(self, parent)
-                elif self.path == '/automationstatus':
-                    _rg.handle_automationstatus(self, parent)
-                elif self.path == '/adsbstatus':
-                    _rg.handle_adsbstatus(self, parent)
-                elif self.path == '/telegramstatus':
-                    _rg.handle_telegramstatus(self, parent)
-                elif self.path == '/usbipstatus':
-                    _rg.handle_usbipstatus(self, parent)
-                elif self.path == '/gpsstatus':
-                    _rg.handle_gpsstatus(self, parent)
-                elif self.path.startswith('/repeaterstatus'):
-                    _rg.handle_repeaterstatus(self, parent)
-                elif self.path == '/automationhistory':
-                    _rg.handle_automationhistory(self, parent)
-                elif self.path == '/ws_audio':
-                    _rs.handle_ws_audio(self, parent)
-                elif self.path == '/ws_mic':
-                    _rs.handle_ws_mic(self, parent)
-                elif self.path == '/ws_monitor':
-                    _rs.handle_ws_monitor(self, parent)
-                elif self.path == '/ws/link':
-                    _rs.handle_ws_link(self, parent)
-                elif self.path == '/stream':
-                    _rs.handle_stream(self, parent)
-                elif self.path == '/tracestatus':
-                    _rg.handle_tracestatus(self, parent)
-                elif self.path.startswith('/logdata'):
-                    _rg.handle_logdata(self, parent)
-                elif self.path == '/recordingslist':
-                    _rg.handle_recordingslist(self, parent)
-                elif self.path.startswith('/recordingsdownload'):
-                    _rg.handle_recordingsdownload(self, parent)
-                elif self.path == '/adsb' or self.path.startswith('/adsb/'):
-                    _rg.handle_adsb_proxy(self, parent)
-                elif self.path == '/pat' or self.path.startswith('/pat/'):
-                    _rg.handle_pat_proxy(self, parent)
-                elif self.path.startswith('/grafana/'):
-                    _rg.handle_grafana_proxy(self, parent)
-                elif self.path.startswith('/prometheus/'):
-                    _rg.handle_prometheus_proxy(self, parent)
-                elif self.path.split('?', 1)[0] == '/config':
-                    _rg.handle_config(self, parent)
-                elif self.path == '/routing/status':
-                    _rg.handle_routing_status(self, parent)
-                elif self.path == '/routing/levels':
-                    _rg.handle_routing_levels(self, parent)
-                elif self.path == '/voice/status':
-                    _rg.handle_voice_status(self, parent)
-                elif self.path == '/voice/view':
-                    _rg.handle_voice_view(self, parent)
-                elif self.path == '/packet/status':
-                    _rg.handle_packet_status(self, parent)
-                elif self.path == '/packet/packets':
-                    _rg.handle_packet_packets(self, parent)
-                elif self.path == '/packet/aprs_stations':
-                    _rg.handle_packet_aprs_stations(self, parent)
-                elif self.path == '/packet/bbs_buffer':
-                    _rg.handle_packet_bbs_buffer(self, parent)
-                elif self.path == '/packet/log':
-                    _rg.handle_packet_log(self, parent)
-                elif self.path.startswith('/loop/'):
-                    _rg.handle_loop_api(self, parent)
-                elif self.path.startswith('/api/endpoint_logs'):
-                    _rg.handle_endpoint_logs(self, parent)
-                elif self.path == '/api/endpoint/version':
-                    _rg.handle_endpoint_version(self, parent)
-                elif self.path == '/api/endpoint/files':
-                    _rg.handle_endpoint_files(self, parent)
-                elif self.path == '/api/tunnel/link-url':
-                    _rg.handle_tunnel_link_url(self, parent)
-                elif self.path == '/api/gdrive/status':
-                    _rg.handle_gdrive_status(self, parent)
-                elif self.path == '/api/gdrive/files':
-                    _rg.handle_gdrive_files(self, parent)
-                elif self.path.startswith('/packet/winlink/'):
-                    _rg.handle_winlink_api(self, parent)
-                elif self.path == '/manager/status':
-                    _rg.handle_manager_status(self, parent)
-                elif self.path == '/manager/reports':
-                    _rg.handle_manager_reports(self, parent)
-                elif self.path.startswith('/manager/doc'):
-                    _rg.handle_manager_doc(self, parent)
-                elif self.path.startswith('/manager/view'):
-                    _rg.handle_manager_view(self, parent)
-                elif self.path.startswith('/manager/edit'):
-                    _rg.handle_manager_edit(self, parent)
-                elif (getattr(parent.gateway, '_plugin_web_routes', None) and
-                      self.path.split('?', 1)[0] in parent.gateway._plugin_web_routes):
-                    # Plugin-contributed routes (web_routes() hook). Handler
-                    # signature: handler(request_handler, parent).
-                    parent.gateway._plugin_web_routes[
-                        self.path.split('?', 1)[0]](self, parent)
-                else:
-                    # Unmatched GET — send 404 so the browser doesn't hang
-                    # waiting for a response that never comes. Most route
-                    # checks above use exact == so a stray query string
-                    # used to land here and silently never respond.
-                    try:
-                        self.send_response(404)
-                        self.send_header('Content-Type', 'text/plain')
-                        self.end_headers()
-                        self.wfile.write(b'Not Found')
-                    except Exception:
-                        pass
+            _POST_EXACT = {
+                '/key':                        'p:handle_key',
+                '/fart/preview':               'p:handle_fart_preview',
+                '/fart/send':                  'p:handle_fart_send',
+                '/transcription/query':        'p:handle_transcription_query',
+                '/transcribe_config':          'p:handle_transcribe_config',
+                '/transcribe_worker/register': 'p:handle_transcribe_worker_register',
+                '/testloop':                   'p:handle_testloop',
+                '/mixer':                      'p:handle_mixer',
+                '/aitext':                     'p:handle_aitext',
+                '/cw':                         'p:handle_cw',
+                '/tts':                        'p:handle_tts',
+                '/automationcmd':              'p:handle_automationcmd',
+                '/proc_toggle':                'p:handle_proc_toggle',
+                '/d75cmd':                     'p:handle_d75cmd',
+                '/ic7100cmd':                  'p:handle_ic7100cmd',
+                '/gpscmd':                     'p:handle_gpscmd',
+                '/kv4pcmd':                    'p:handle_kv4pcmd',
+                '/linkcmd':                    'p:handle_linkcmd',
+                '/catcmd':                     'p:handle_catcmd',
+                '/sdrcmd':                     'p:handle_sdrcmd',
+                '/tracecmd':                   'p:handle_tracecmd',
+                '/reboothost':                 'p:handle_reboothost',
+                '/restartgateway':             'p:handle_restartgateway',
+                '/refreshsounds':              'p:handle_refreshsounds',
+                '/darkicecmd':                 'p:handle_darkicecmd',
+                '/recordingsdelete':           'p:handle_recordingsdelete',
+                '/telegramcmd':                'p:handle_telegramcmd',
+                '/open_tmux':                  'p:handle_open_tmux',
+                '/exit':                       'p:handle_exit',
+                '/routing/cmd':                'p:handle_routing_cmd',
+                '/voice/send':                 'p:handle_voice_send',
+                '/voice/session':              'p:handle_voice_session',
+                # Exact match wins before the '/loop/' prefix below.
+                '/loop/export':                'p:handle_loop_export',
+                '/api/gdrive/publish-tunnel':  'p:handle_gdrive_publish_tunnel',
+                '/pat':                        'g:handle_pat_proxy',
+                '/manager/toggle':             'p:handle_manager_toggle',
+                '/manager/config':             'p:handle_manager_config',
+                '/manager/save':               'p:handle_manager_save',
+                '/manager/run':                'p:handle_manager_run',
+                '/manager/ack':                'p:handle_manager_ack',
+            }
+            _POST_QEXACT = {}
+            _POST_PREFIX = (
+                ('/loop/',       'l:handle_loop_post'),
+                ('/pat/',        'g:handle_pat_proxy'),
+                ('/grafana/',    'g:handle_grafana_proxy'),
+                ('/prometheus/', 'g:handle_prometheus_proxy'),
+                ('/packet/',     'p:handle_packet_cmd'),
+            )
 
             def do_POST(self):
                 if not self._check_auth():
                     return
-                import urllib.parse
-                import json as json_mod
-
-                # Route dispatch — handlers in web_routes_post.py
+                if self._dispatch(self._POST_EXACT, self._POST_QEXACT, self._POST_PREFIX):
+                    return
+                if self._dispatch_plugin_route():
+                    return
+                # Config form submission (fallback for /config POST)
                 import web_routes_post as _rp
-                import web_routes_loop as _rl
-                import web_routes_get as _rg  # proxy handlers reused for POST
-
-                if self.path == '/key':
-                    _rp.handle_key(self, parent)
-                elif self.path == '/fart/preview':
-                    _rp.handle_fart_preview(self, parent)
-                elif self.path == '/fart/send':
-                    _rp.handle_fart_send(self, parent)
-                elif self.path == '/transcription/query':
-                    _rp.handle_transcription_query(self, parent)
-                elif self.path == '/transcribe_config':
-                    _rp.handle_transcribe_config(self, parent)
-                elif self.path == '/transcribe_worker/register':
-                    _rp.handle_transcribe_worker_register(self, parent)
-                elif self.path == '/testloop':
-                    _rp.handle_testloop(self, parent)
-                elif self.path == '/mixer':
-                    _rp.handle_mixer(self, parent)
-                elif self.path == '/aitext':
-                    _rp.handle_aitext(self, parent)
-                elif self.path == '/cw':
-                    _rp.handle_cw(self, parent)
-                elif self.path == '/tts':
-                    _rp.handle_tts(self, parent)
-                elif self.path == '/automationcmd':
-                    _rp.handle_automationcmd(self, parent)
-                elif self.path == '/proc_toggle':
-                    _rp.handle_proc_toggle(self, parent)
-                elif self.path == '/d75cmd':
-                    _rp.handle_d75cmd(self, parent)
-                elif self.path == '/ic7100cmd':
-                    _rp.handle_ic7100cmd(self, parent)
-                elif self.path == '/gpscmd':
-                    _rp.handle_gpscmd(self, parent)
-                elif self.path == '/kv4pcmd':
-                    _rp.handle_kv4pcmd(self, parent)
-                elif self.path == '/linkcmd':
-                    _rp.handle_linkcmd(self, parent)
-                elif self.path == '/catcmd':
-                    _rp.handle_catcmd(self, parent)
-                elif self.path == '/sdrcmd':
-                    _rp.handle_sdrcmd(self, parent)
-                elif self.path == '/tracecmd':
-                    _rp.handle_tracecmd(self, parent)
-                elif self.path == '/reboothost':
-                    _rp.handle_reboothost(self, parent)
-                elif self.path == '/restartgateway':
-                    _rp.handle_restartgateway(self, parent)
-                elif self.path == '/refreshsounds':
-                    _rp.handle_refreshsounds(self, parent)
-                elif self.path == '/darkicecmd':
-                    _rp.handle_darkicecmd(self, parent)
-                elif self.path == '/recordingsdelete':
-                    _rp.handle_recordingsdelete(self, parent)
-                elif self.path == '/telegramcmd':
-                    _rp.handle_telegramcmd(self, parent)
-                elif self.path == '/open_tmux':
-                    _rp.handle_open_tmux(self, parent)
-                elif self.path == '/exit':
-                    _rp.handle_exit(self, parent)
-                elif self.path == '/routing/cmd':
-                    _rp.handle_routing_cmd(self, parent)
-                elif self.path == '/voice/send':
-                    _rp.handle_voice_send(self, parent)
-                elif self.path == '/voice/session':
-                    _rp.handle_voice_session(self, parent)
-                elif self.path == '/loop/export':
-                    _rp.handle_loop_export(self, parent)
-                elif self.path.startswith('/loop/'):
-                    _rl.handle_loop_post(self, parent)
-                elif self.path == '/api/gdrive/publish-tunnel':
-                    _gw = parent.gateway if parent else None
-                    if _gw and _gw.gdrive:
-                        import threading as _gd_t
-                        _gd_t.Thread(target=_gw._publish_tunnel_url,
-                                     daemon=True).start()
-                        _body = json_mod.dumps({'ok': True}).encode()
-                    else:
-                        _body = json_mod.dumps({'ok': False, 'error': 'GDrive not configured'}).encode()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Content-Length', str(len(_body)))
-                    self.end_headers()
-                    self.wfile.write(_body)
-                elif self.path == '/pat' or self.path.startswith('/pat/'):
-                    _rg.handle_pat_proxy(self, parent)
-                elif self.path.startswith('/grafana/'):
-                    _rg.handle_grafana_proxy(self, parent)
-                elif self.path.startswith('/prometheus/'):
-                    _rg.handle_prometheus_proxy(self, parent)
-                elif self.path.startswith('/packet/'):
-                    _rp.handle_packet_cmd(self, parent)
-                elif self.path == '/manager/toggle':
-                    _rp.handle_manager_toggle(self, parent)
-                elif self.path == '/manager/config':
-                    _rp.handle_manager_config(self, parent)
-                elif self.path == '/manager/save':
-                    _rp.handle_manager_save(self, parent)
-                elif self.path == '/manager/run':
-                    _rp.handle_manager_run(self, parent)
-                elif self.path == '/manager/ack':
-                    _rp.handle_manager_ack(self, parent)
-                elif (getattr(parent.gateway, '_plugin_web_routes', None) and
-                      self.path.split('?', 1)[0] in parent.gateway._plugin_web_routes):
-                    # Plugin-contributed routes (web_routes() hook). Same path
-                    # map serves GET + POST; the handler inspects self.command.
-                    parent.gateway._plugin_web_routes[
-                        self.path.split('?', 1)[0]](self, parent)
-                else:
-                    # Config form submission (fallback for /config POST)
-                    _rp.handle_config_form(self, parent)
+                _rp.handle_config_form(self, parent)
 
 
         class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
