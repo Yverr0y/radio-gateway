@@ -230,7 +230,7 @@ def loop_recorder_export(bus_id: str, start_time: str, end_time: str, format: st
         return "Error: end time must be after start time."
 
     import urllib.request
-    from mcp_server.server import GW_BASE_URL, _auth_headers
+    from mcp_server.server import GW_BASE_URL, GW_ROOT, _auth_headers
     try:
         req = urllib.request.Request(
             GW_BASE_URL + '/loop/export',
@@ -249,7 +249,7 @@ def loop_recorder_export(bus_id: str, start_time: str, end_time: str, format: st
         st = datetime.fromtimestamp(start_epoch).strftime('%H%M%S')
         et = datetime.fromtimestamp(end_epoch).strftime('%H%M%S')
         import os
-        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recordings')
+        out_dir = os.path.join(GW_ROOT, 'recordings')
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, f'export_{bus_id}_{st}-{et}.{ext}')
         with open(out_path, 'wb') as f:
@@ -346,7 +346,7 @@ def loop_recorder_download_all() -> str:
     """
     import urllib.request, os
     from datetime import datetime
-    from mcp_server.server import GW_BASE_URL, _auth_headers
+    from mcp_server.server import GW_BASE_URL, GW_ROOT, _auth_headers
     try:
         req = urllib.request.Request(
             GW_BASE_URL + '/loop/download_all',
@@ -357,7 +357,7 @@ def loop_recorder_download_all() -> str:
         resp = urllib.request.urlopen(req, timeout=300)
         if resp.status != 200:
             return f"Error: server returned {resp.status}"
-        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recordings')
+        out_dir = os.path.join(GW_ROOT, 'recordings')
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         out_path = os.path.join(out_dir, f'loop_all_{ts}.zip')

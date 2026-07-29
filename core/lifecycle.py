@@ -486,7 +486,10 @@ class _LifecycleMixin:
         # Set up rolling log file (daily rotation, keeps LOG_FILE_DAYS days)
         log_file = None
         try:
-            log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+            # core/lifecycle.py lives one level below the repo root — go up
+            # one more dir than dirname(__file__) or this writes into core/logs/.
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            log_dir = os.path.join(repo_root, 'logs')
             os.makedirs(log_dir, exist_ok=True)
             # Open today's log file (append mode)
             import datetime as _dt
