@@ -7,6 +7,23 @@
 #
 #     pip install -r requirements.txt
 #
+# IMPORTANT: install.sh does NOT read this file. It installs each package
+# explicitly, because several need handling a flat `pip install -r` gets
+# wrong (see the --no-deps and pymumble notes below, and the protobuf
+# re-pin). That means these two lists are maintained by hand and can drift —
+# which has bitten twice, both times as a package the code imports being
+# absent from the installer while the failure stayed invisible:
+# faster-whisper (every whisper/* model failed to load) and
+# prometheus-client (instrumentation silently no-opped, /metrics 500'd).
+#
+# After editing EITHER file, run:
+#
+#     python3 tools/check_deps_drift.py
+#
+# It diffs the two lists and exits non-zero on drift; install.sh's health
+# check runs it too. Deliberate differences live in that script's EXPECTED_*
+# sets, each with a justification.
+#
 # Notes on a few packages:
 #   * pymumble — the PyPI name varies. Try pymumble-py3 first; if that
 #     fails, plain `pymumble` works too. The gateway imports via a

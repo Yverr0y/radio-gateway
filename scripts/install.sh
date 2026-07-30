@@ -267,7 +267,12 @@ set -e
 
 # Core packages (excluding pymumble — handled separately due to PyPI name variants)
 # Only install packages that are missing — avoids slow pip index checks on re-run
-CORE_PKGS="hid numpy scipy pyaudio soundfile resampy psutil gtts edge-tts pyserial opuslib"
+# prometheus-client backs metrics.py. It was missing here until 2026-07-29
+# while this same installer provisioned Prometheus AND a Grafana dashboard:
+# every `import metrics` call site is inside try/except, so instrumentation
+# silently no-opped and /metrics returned 500 with an empty dashboard on top.
+# tools/check_deps_drift.py exists to catch exactly this.
+CORE_PKGS="hid numpy scipy pyaudio soundfile resampy psutil gtts edge-tts pyserial opuslib prometheus-client"
 MISSING_PKGS=""
 for pkg in $CORE_PKGS; do
     # Map pip names to Python import names where they differ
@@ -278,6 +283,7 @@ for pkg in $CORE_PKGS; do
         edge-tts)    imp="edge_tts" ;;
         pyserial)    imp="serial" ;;
         opuslib)     imp="opuslib" ;;
+        prometheus-client) imp="prometheus_client" ;;
         *)           imp="$pkg" ;;
     esac
     if ! python3 -c "import $imp" 2>/dev/null; then
@@ -1981,7 +1987,7 @@ done
 
 # Python imports — quick smoke test so missing pip packages surface here
 echo "  Python imports:"
-for _mod in numpy scipy pyaudio soundfile serial opuslib psutil mcp; do
+for _mod in numpy scipy pyaudio soundfile serial opuslib psutil mcp prometheus_client; do
     if python3 -c "import $_mod" 2>/dev/null; then
         printf "      ✓ %s\n" "$_mod"
     else
@@ -1990,6 +1996,27 @@ for _mod in numpy scipy pyaudio soundfile serial opuslib psutil mcp; do
 done
 if ! python3 -c "import pymumble_py3" 2>/dev/null && ! python3 -c "import pymumble" 2>/dev/null; then
     _hc_fail "pymumble not importable — gateway cannot connect to Mumble"
+fi
+# metrics.py is imported inside try/except everywhere, so a missing
+# prometheus-client shows up as silently absent instrumentation and a 500 on
+# /metrics rather than an error. Claim it explicitly.
+if python3 -c "import metrics" 2>/dev/null; then
+    _hc_pass "metrics module imports — /metrics and Grafana will have data"
+else
+    _hc_fail "metrics module does NOT import — instrumentation is dead and"
+    _hc_fail "  /metrics will 500 (the Grafana dashboard will be empty)"
+fi
+
+# requirements.txt vs install.sh drift. The installer does not read
+# requirements.txt, so the two hand-maintained lists can diverge — that is how
+# faster-whisper and prometheus-client both went missing.
+if [ -f "$GATEWAY_DIR/tools/check_deps_drift.py" ]; then
+    if python3 "$GATEWAY_DIR/tools/check_deps_drift.py" >/dev/null 2>&1; then
+        _hc_pass "requirements.txt and install.sh agree (no dependency drift)"
+    else
+        _hc_warn "requirements.txt and install.sh have drifted — run:"
+        _hc_warn "  python3 tools/check_deps_drift.py"
+    fi
 fi
 
 # Observability stack
