@@ -235,7 +235,14 @@ class _SileroVAD:
 
     Skips the silero_vad package's torch-dependent loader. Requires the
     silero-vad pip package installed (for the bundled .onnx file path) but
-    does not import it directly.
+    must never IMPORT it: install.sh installs silero-vad with --no-deps
+    precisely to avoid pulling ~2 GB of torch, and the package's __init__
+    does `from .model import ...` -> `from .utils_vad import ...` ->
+    `import torch`. So any import of `silero_vad` OR of a submodule like
+    `silero_vad.data` raises ModuleNotFoundError on a correctly-installed
+    box. (This was broken until 2026-07-29: both resolution paths below used
+    to import the package, and Silero VAD only worked on machines that
+    happened to have torch left over from the Whisper era.)
 
     The ONNX session is shared class-wide — first instance loads it, subsequent
     instances reuse. Only the per-instance state tensor (_state / _context)
@@ -244,23 +251,49 @@ class _SileroVAD:
 
     _sess = None  # shared InferenceSession across instances
     _sr = np.array(_SILERO_SR, dtype=np.int64)
+    _model_src = None  # which resolution path won, for diagnostics
+
+    @classmethod
+    def _find_model(cls):
+        """Locate silero_vad/data/silero_vad.onnx WITHOUT importing the package.
+
+        find_spec() on the TOP-LEVEL name only locates the package; it does not
+        execute its __init__, so torch is never imported. Do not pass
+        'silero_vad.data' here — resolving a submodule spec imports the parent.
+        """
+        import importlib.util
+        spec = importlib.util.find_spec('silero_vad')
+        if spec is not None:
+            for base in (spec.submodule_search_locations or []):
+                cand = os.path.join(base, 'data', 'silero_vad.onnx')
+                if os.path.exists(cand):
+                    return cand, 'find_spec'
+        # Last resort: an explicit override for vendored/offline copies.
+        env = os.environ.get('SILERO_ONNX_PATH', '').strip()
+        if env and os.path.exists(env):
+            return env, 'SILERO_ONNX_PATH'
+        return None, None
 
     @classmethod
     def _ensure_session(cls):
         if cls._sess is not None:
             return
         import onnxruntime as ort
-        try:
-            from importlib.resources import files
-            model_path = str(files('silero_vad.data').joinpath('silero_vad.onnx'))
-        except Exception:
-            import silero_vad.data as _d
-            model_path = os.path.join(os.path.dirname(_d.__file__), 'silero_vad.onnx')
+        model_path, src = cls._find_model()
+        if model_path is None:
+            raise RuntimeError(
+                "Silero VAD model not found. Install the silero-vad package "
+                "(pip install --no-deps silero-vad) or set SILERO_ONNX_PATH "
+                "to a silero_vad.onnx file.")
+        cls._model_src = src
         opts = ort.SessionOptions()
         opts.inter_op_num_threads = 1
         opts.intra_op_num_threads = 1
         cls._sess = ort.InferenceSession(
             model_path, providers=['CPUExecutionProvider'], sess_options=opts)
+        # Say so once. "Is Silero actually loaded?" was unanswerable from the
+        # logs while this was broken, and the failure is otherwise silent.
+        print(f"  [VAD] Silero loaded: {model_path} (via {src})")
 
     def __init__(self):
         self._ensure_session()
