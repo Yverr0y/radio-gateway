@@ -424,10 +424,15 @@ SPEAKER_START_MUTED = true  # Start muted (unmute at runtime)
 
 
 [streaming]
-# Broadcastify streaming
+# Broadcastify / Icecast streaming
 #
-# Requires: sudo apt-get install darkice lame ffmpeg
-# Audio flow: Gateway -> Pipe -> FFmpeg -> ALSA Loopback -> DarkIce -> Broadcastify
+# Requires: ffmpeg (installed by scripts/install.sh).
+# Audio flow: Gateway -> in-process ffmpeg MP3 encoder -> Icecast HTTP SOURCE
+#
+# Since v4.1.0 this runs entirely inside the gateway process. There is no
+# ALSA loopback and no darkice process. The legacy external-darkice path is
+# still available behind SUPERVISE_DARKICE (see [advanced]) but is off by
+# default and reads /etc/darkice.cfg, not the STREAM_* keys below.
 
 ENABLE_STREAM_OUTPUT = false
 STREAM_SERVER = audio9.broadcastify.com
@@ -461,6 +466,81 @@ STREAM_SAMPLE_RATE = 22050
 # Broadcastify must also have the feed provisioned for two sources at their
 # end; the encoder change alone will not make them split it.
 STREAM_DUAL_CHANNEL = true
+
+# Seconds to wait before reconnecting when Icecast is still holding our own
+# previous source connection (a detected drop, or a 403 "mount in use"). The
+# server has to reap the stale source before it will accept a new one;
+# measured clear time was under 10s, so 15 gives headroom. Ordinary connect
+# failures use the normal backoff instead of this longer wait.
+STREAM_MOUNT_WAIT = 15
+
+
+[transcription]
+# Live speech-to-text over received audio. Two engines are supported and both
+# are installed: Moonshine ONNX (CPU, the default) and faster-whisper. Silero
+# VAD does the segmentation for either.
+# Runtime settings edited on /transcribe are saved to .transcribe_settings.json
+# and OVERRIDE the values here — these are the first-boot defaults.
+#
+# See docs/transcription-pool.md for the worker pool and remote setup.
+
+ENABLE_TRANSCRIPTION = false
+
+# off / local / remote / pool
+#   local  -> transcribe in the gateway process
+#   remote -> send to a single worker
+#   pool   -> distribute across every known worker
+TRANSCRIBE_MODE = local
+
+# Valid keys (transcribe_engine._VALID_MODELS) — anything else silently falls
+# back to moonshine/base:
+#   moonshine/tiny, moonshine/base
+#   whisper/small.en, whisper/medium.en, whisper/large-v3-turbo
+# Moonshine is the DEFAULT engine, not the only one — both engines are
+# installed by scripts/install.sh (useful-moonshine-onnx for moonshine/*,
+# faster-whisper for whisper/*) and both are selectable on /transcribe.
+# Moonshine is much lighter; whisper/medium.en is more accurate and is the
+# starred pick in the UI. Whisper model weights (~500MB for medium.en) are
+# downloaded lazily on first use.
+TRANSCRIBE_MODEL = moonshine/base
+
+# Segmentation. VAD_THRESHOLD is Silero speech probability (0-1); audio is
+# boosted with a tanh soft-clip before VAD, because hard clipping breaks
+# Silero v5 detection. VAD_HOLD is how long silence must persist before a
+# segment closes; MIN_DURATION drops anything shorter than this.
+TRANSCRIBE_VAD_THRESHOLD = 0.5
+TRANSCRIBE_VAD_HOLD = 1.0
+TRANSCRIBE_MIN_DURATION = 0.5
+
+# Split segments longer than this (seconds) so a long transmission does not
+# block the queue waiting for one huge inference.
+TRANSCRIBE_SPLIT_THRESHOLD_SECS = 10.0
+
+# Where finished transcripts go
+TRANSCRIBE_FORWARD_MUMBLE = true
+TRANSCRIBE_FORWARD_TELEGRAM = false
+TRANSCRIBE_LOG_RESULTS = false
+
+# Remote workers, comma-separated, e.g.
+#   TRANSCRIBE_REMOTE_URLS = http://192.168.2.143:9800,http://192.168.2.134:9800
+# Pinning a worker here is OPTIONAL and usually unnecessary — see below.
+# A pinned worker is never TTL-expired: it stays in the pool showing
+# 'unreachable' when down, because the operator asked for it explicitly.
+TRANSCRIBE_REMOTE_URLS =
+
+# Worker self-registration (v4.2.0). Workers started with --gateway dial into
+# the gateway and announce themselves, exactly like a link endpoint's REGISTER
+# on :9700. The gateway takes the worker's address off the socket, so the
+# worker never needs to know its own IP and no address is pinned in config —
+# a DHCP move fixes itself on the next heartbeat. If a worker is missing,
+# that is a registration problem, not a config one: check the worker's
+# --gateway flag and the accept/refresh/expire counters in the
+# transcription_workers MCP tool.
+TRANSCRIBE_ALLOW_WORKER_REGISTRATION = true
+
+# Drop a registered worker from the pool after this many seconds with no
+# heartbeat. Workers heartbeat every 30s by default, auto-clamped to TTL/3.
+TRANSCRIBE_WORKER_TTL_SECS = 90
 
 
 [echolink]
@@ -726,6 +806,17 @@ LOG_BUFFER_LINES = 2000
 # Days to keep rolling log files (logs/gateway.log, rotates at midnight)
 LOG_FILE_DAYS = 7
 
+# LEGACY external-darkice streaming. Leave false unless you specifically need
+# it: the default Broadcastify path encodes in-process (see [streaming]) and
+# needs no external encoder. When true, the gateway supervises a
+# `darkice -c /etc/darkice.cfg` process via ProcessSupervisor, restarting it
+# on death — and the STREAM_* keys are NOT used; darkice.cfg is.
+SUPERVISE_DARKICE = false
+
+# Same idea for a local mumble-server instance: gateway supervises it instead
+# of leaving it to systemd.
+SUPERVISE_MUMBLE = false
+
 
 # ============================================================================
 # TROUBLESHOOTING
@@ -749,8 +840,11 @@ LOG_FILE_DAYS = 7
 #   Status shows W1, W2    -> Recovery attempts made; !restart if still silent
 #
 # STREAMING:
-#   Stream offline          -> Check DarkIce is running (ps aux | grep darkice)
-#   No audio on stream      -> Verify FFmpeg bridge is running
+#   Stream offline          -> Check the Broadcastify card on /dashboard/services
+#                              for the last error; the encoder is in-process, so
+#                              there is no darkice process to look for
+#   No audio on stream      -> Check the Broadcastify sink is routed on /routing
+#   Bitrate stuck at 32k    -> STREAM_SAMPLE_RATE must stay below 32000
 #
 # For more help, enable VERBOSE_LOGGING = true
 # ============================================================================

@@ -80,7 +80,8 @@ if [ "$DISTRO" = "arch" ]; then
         echo "⚠ No AUR helper found (yay/paru). The following optional features"
         echo "  will be SKIPPED because their packages live in the AUR:"
         echo "    - cloudflared     (Cloudflare tunnel for HTTPS access)"
-        echo "    - darkice         (Broadcastify streaming encoder)"
+        echo "    - darkice         (legacy Broadcastify encoder — NOT used by default;"
+        echo "                       the gateway streams to Icecast in-process via ffmpeg)"
         echo "    - SDRplay drivers (required only if using RSPduo SDR)"
         echo "    - rtl_airband     (required only for SDR channels)"
         echo
@@ -393,14 +394,36 @@ else
     fi
 fi
 
-# Moonshine — local voice-to-text transcription engine (CPU-efficient ONNX, ~60MB model)
+# Transcription engines. BOTH are needed: Moonshine is the default, but
+# Whisper is still a first-class choice in transcribe_engine._VALID_MODELS and
+# is offered in both model dropdowns on the /transcribe page — where it is in
+# fact the starred recommendation (whisper/medium.en locally,
+# whisper/large-v3-turbo for remote workers).
+#
+# 016defa ("asr: replace Whisper with Moonshine") swapped this pip line over
+# instead of adding to it, so from then until 2026-07-29 a fresh install could
+# not run any whisper/* model: picking one in the UI just failed. Moonshine
+# became the DEFAULT engine, not the only one.
+
+# Moonshine — default engine (CPU-efficient ONNX, ~60MB model)
 set +e
 if python3 -c "import moonshine_onnx" 2>/dev/null; then
     echo "  ✓ useful-moonshine-onnx already installed"
 else
     _pip useful-moonshine-onnx 2>/dev/null \
-        && echo "  ✓ useful-moonshine-onnx installed (transcription engine)" \
+        && echo "  ✓ useful-moonshine-onnx installed (default transcription engine)" \
         || echo "  ⚠ Could not pip install useful-moonshine-onnx — transcription will not work"
+fi
+
+# faster-whisper — the alternative engine behind every whisper/* model key.
+# The package is small; the model weights (~500MB for medium.en) are fetched
+# lazily on first use, not here.
+if python3 -c "import faster_whisper" 2>/dev/null; then
+    echo "  ✓ faster-whisper already installed"
+else
+    _pip faster-whisper 2>/dev/null \
+        && echo "  ✓ faster-whisper installed (whisper/* model keys)" \
+        || echo "  ⚠ Could not pip install faster-whisper — whisper/* models will not work"
 fi
 
 # Silero VAD — ML speech classifier (bundled ONNX model, ~2MB).
@@ -422,6 +445,71 @@ else
     _pip --no-deps pyrnnoise 2>/dev/null \
         && echo "  ✓ pyrnnoise installed (DFN neural denoise)" \
         || echo "  ⚠ Could not pip install pyrnnoise — DFN denoise will not work"
+fi
+
+# Optimized librnnoise — the wheel ships a mostly-scalar build that measured
+# ~0.9 ms/frame on the gateway (Haswell i5); a -O3 -march=native build of
+# xiph/rnnoise runs the same ctypes API at ~0.22 ms/frame (4x, measured
+# 2026-07-27). audio_util._load_rnnoise() prefers
+# ~/.local/lib/radio-gateway/librnnoise.so and falls back to the wheel, so
+# this is a pure speedup with an automatic safety net.
+#
+# The binary is machine-specific (-march=native), so it cannot be shipped in
+# the repo — it has to be built per box. Opt out with SKIP_RNNOISE_BUILD=1;
+# force it on in an unattended run with BUILD_RNNOISE=1.
+RNNOISE_OPT_LIB="$HOME/.local/lib/radio-gateway/librnnoise.so"
+RNNOISE_BUILDER="$GATEWAY_DIR/tools/build_rnnoise.sh"
+# NOTE: already inside the `set +e` region opened above — do not toggle
+# errexit here, or the Kokoro download block below inherits the wrong state.
+if [ -f "$RNNOISE_OPT_LIB" ]; then
+    echo "  ✓ optimized librnnoise already present ($RNNOISE_OPT_LIB)"
+elif [ "${SKIP_RNNOISE_BUILD:-0}" = "1" ]; then
+    echo "  → skipping native librnnoise build (SKIP_RNNOISE_BUILD=1)"
+    echo "    Build it later for a 4x faster denoise: tools/build_rnnoise.sh"
+elif [ ! -x "$RNNOISE_BUILDER" ] && [ ! -f "$RNNOISE_BUILDER" ]; then
+    echo "  ⚠ tools/build_rnnoise.sh not found — keeping the wheel's librnnoise"
+else
+    _DO_RNNOISE_BUILD=0
+    if [ "${BUILD_RNNOISE:-0}" = "1" ]; then
+        _DO_RNNOISE_BUILD=1
+    elif [ -t 0 ]; then
+        echo "  Build an optimized librnnoise for this machine?"
+        echo "    ~2 min: clones xiph/rnnoise and compiles -O3 -march=native."
+        echo "    4x faster denoise on the audio hot path. Falls back safely."
+        read -rp "  Build it now? [Y/n] " _rn_yn
+        case "$_rn_yn" in
+            [nN]*) _DO_RNNOISE_BUILD=0 ;;
+            *)     _DO_RNNOISE_BUILD=1 ;;
+        esac
+    else
+        echo "  → non-interactive run: skipping the native librnnoise build"
+        echo "    Run tools/build_rnnoise.sh (or re-run with BUILD_RNNOISE=1)"
+        echo "    for a 4x faster denoise. The wheel's lib works meanwhile."
+    fi
+
+    if [ "$_DO_RNNOISE_BUILD" = "1" ]; then
+        # autogen.sh needs autotools; the wheel install needed none of this.
+        # wget is NOT optional here: xiph/rnnoise's autogen.sh shells out to
+        # download_model.sh, which is hardcoded to wget and dies with
+        # "wget: command not found" on a box that only has curl. A fresh Arch
+        # cloud image has neither, and the rest of this installer treats wget
+        # as optional (it falls back to curl for the Kokoro download), so
+        # nothing else guarantees it is present.
+        echo "  Installing build dependencies (autotools + wget)..."
+        if [ "$DISTRO" = "arch" ]; then
+            sudo pacman -S --noconfirm --needed base-devel autoconf automake libtool wget >/dev/null 2>&1
+        else
+            sudo apt-get install -y build-essential autoconf automake libtool wget >/dev/null 2>&1
+        fi
+        echo "  Building librnnoise (-O3 -march=native)..."
+        if bash "$RNNOISE_BUILDER"; then
+            echo "  ✓ optimized librnnoise installed to $RNNOISE_OPT_LIB"
+        else
+            echo "  ⚠ native librnnoise build failed — falling back to the"
+            echo "    pyrnnoise wheel's bundled lib (denoise still works, just"
+            echo "    slower). Re-run tools/build_rnnoise.sh to retry."
+        fi
+    fi
 fi
 
 # Kokoro ONNX — offline TTS engine (default, 54 voices, no internet required).
@@ -464,6 +552,39 @@ else
         echo "    Download manually to $KOKORO_DIR:"
         echo "      $_BASE/kokoro-v1.0.onnx"
         echo "      $_BASE/voices-v1.0.bin"
+    fi
+fi
+
+# ── protobuf pin repair — MUST be the last pip action in this step ──
+#
+# pymumble requires protobuf==3.12.2 exactly. onnxruntime (pulled in above by
+# useful-moonshine-onnx) requires a modern protobuf and pip happily upgrades
+# it to 7.x AFTER pymumble is already installed. protobuf 4+ refuses to load
+# pymumble's pre-generated mumble_pb2.py:
+#
+#   TypeError: Descriptors cannot be created directly
+#
+# so a fresh install used to finish with a gateway that could not import
+# pymumble at all — i.e. could not connect to Mumble — while a SECOND run of
+# this installer silently fixed it by reinstalling pymumble last. Measured on
+# a clean Arch box 2026-07-29: run 1 ended on protobuf 7.35.1 (pymumble
+# broken), run 2 ended on 3.12.2 (everything working).
+#
+# 3.12.2 satisfies both at runtime: pymumble, onnxruntime and moonshine_onnx
+# all import fine on it (verified on the clean VM and on the live gateway,
+# which has been running 3.12.2 all along). So the resolution is to let the
+# ML stack install whatever it wants and then put the pin back.
+echo "  Verifying pymumble / protobuf compatibility..."
+if python3 -c "import pymumble_py3" 2>/dev/null || python3 -c "import pymumble" 2>/dev/null; then
+    echo "  ✓ pymumble imports (protobuf $(python3 -c 'import google.protobuf as p; print(p.__version__)' 2>/dev/null))"
+else
+    echo "  ⚠ pymumble cannot import — restoring its pinned protobuf==3.12.2"
+    _pip 'protobuf==3.12.2' 2>/dev/null
+    if python3 -c "import pymumble_py3" 2>/dev/null || python3 -c "import pymumble" 2>/dev/null; then
+        echo "  ✓ pymumble imports after the protobuf downgrade"
+    else
+        echo "  ✗ pymumble STILL cannot import — the gateway will not reach Mumble."
+        echo "    Try: pip install --break-system-packages 'protobuf==3.12.2'"
     fi
 fi
 set -e
@@ -778,8 +899,19 @@ if $IS_PI; then
 fi
 echo
 
-# ── 6. Darkice (optional — for Broadcastify/Icecast streaming) ───
-echo "[ 6/16 ] Darkice streaming (optional)..."
+# ── 6. Darkice (optional — LEGACY external encoder) ───
+#
+# Since v4.1.0 the default Broadcastify/Icecast path does NOT use darkice:
+# StreamOutputSource (audio_sources.py) pipes PCM -> in-process ffmpeg MP3
+# encoder -> Icecast HTTP SOURCE, with credentials read from the STREAM_*
+# keys in gateway_config.txt. No external process, no ALSA loopback.
+#
+# darkice is still installed because the legacy path remains supported for
+# operators who opt in with SUPERVISE_DARKICE = true (gateway_setup.py
+# registers it with ProcessSupervisor) or who drive darkice from their own
+# systemd unit. It is dormant, not dead — but a fresh install will never
+# touch /etc/darkice.cfg unless that opt-in is set.
+echo "[ 6/16 ] Darkice streaming (optional — legacy encoder, off by default)..."
 set +e
 if [ "$DISTRO" = "arch" ]; then
     if sudo pacman -S --noconfirm --needed lame 2>/dev/null; then
@@ -812,13 +944,15 @@ if [ "$DISTRO" = "arch" ]; then
             else
                 echo "  ⚠ Skipping darkice — AUR install via $AUR_HELPER failed"
                 echo "    Try manually: $AUR_HELPER -S darkice"
-                echo "    This is optional: only needed for Broadcastify/Icecast streaming"
+                echo "    Safe to skip: Broadcastify/Icecast streaming does NOT need darkice"
+                echo "    (the gateway encodes in-process); only SUPERVISE_DARKICE uses it."
                 DARKICE_STATUS=1
             fi
         else
             echo "  ⚠ Skipping darkice — no AUR helper found (yay/paru)"
             echo "    Install an AUR helper, then run: yay -S darkice"
-            echo "    This is optional: only needed for Broadcastify/Icecast streaming"
+            echo "    Safe to skip: Broadcastify/Icecast streaming does NOT need darkice"
+            echo "    (the gateway encodes in-process); only SUPERVISE_DARKICE uses it."
             DARKICE_STATUS=1
         fi
     fi
@@ -830,7 +964,8 @@ else
     else
         echo "  ⚠ Skipping darkice — could not install from apt"
         echo "    To install manually: sudo apt-get install darkice lame"
-        echo "    This is optional: only needed for Broadcastify/Icecast streaming"
+        echo "    Safe to skip: Broadcastify/Icecast streaming does NOT need darkice"
+        echo "    (the gateway encodes in-process); only SUPERVISE_DARKICE uses it."
     fi
 fi
 
@@ -841,7 +976,9 @@ if [ $DARKICE_STATUS -eq 0 ]; then
     if [ ! -f "$DARKICE_CFG" ]; then
         if [ -f "$DARKICE_EXAMPLE" ]; then
             sudo cp "$DARKICE_EXAMPLE" "$DARKICE_CFG" \
-                && echo "  ✓ Created $DARKICE_CFG — edit with your Broadcastify credentials" \
+                && echo "  ✓ Created $DARKICE_CFG (legacy path only — the default" \
+                && echo "    in-process ffmpeg->Icecast streamer ignores this file; configure" \
+                && echo "    STREAM_* in gateway_config.txt instead)" \
                 || echo "  ⚠ Could not create $DARKICE_CFG — copy manually from $DARKICE_EXAMPLE"
         else
             echo "  ⚠ Example not found — create $DARKICE_CFG manually"
@@ -1756,8 +1893,80 @@ if [ -f "$GATEWAY_DIR/gateway_config.txt" ]; then
     if ! grep -qE '^\s*TELEGRAM_BOT_TOKEN\s*=\s*[A-Za-z0-9:_-]+' "$GATEWAY_DIR/gateway_config.txt"; then
         _hc_warn "TELEGRAM_BOT_TOKEN not set (optional — skip if not using Telegram)"
     fi
+    # Streaming config sanity. These two mistakes are silent at runtime: the
+    # encoder just clamps or the feed goes mono, and nothing logs an error.
+    _cfg_get() {
+        grep -E "^\s*$1\s*=" "$GATEWAY_DIR/gateway_config.txt" 2>/dev/null \
+            | head -1 | cut -d= -f2- | sed 's/#.*//; s/^\s*//; s/\s*$//'
+    }
+    if [ "$(_cfg_get ENABLE_STREAM_OUTPUT)" = "true" ]; then
+        _srate=$(_cfg_get STREAM_SAMPLE_RATE)
+        _brate=$(_cfg_get STREAM_BITRATE)
+        _dual=$(_cfg_get STREAM_DUAL_CHANNEL)
+        if [ -n "$_srate" ] && [ "$_srate" -ge 32000 ] 2>/dev/null; then
+            _hc_warn "STREAM_SAMPLE_RATE=$_srate is >= 32000 — MPEG-1 Layer III has a"
+            _hc_warn "  32 kbps floor, so STREAM_BITRATE will be silently ignored."
+            _hc_warn "  Use 22050 for a 16 kbps-per-scanner Broadcastify feed."
+        fi
+        if [ "$_dual" = "true" ] && [ -n "$_brate" ] && [ "$_brate" != "32" ]; then
+            _hc_warn "STREAM_DUAL_CHANNEL=true but STREAM_BITRATE=$_brate — a dual feed"
+            _hc_warn "  needs 32 (16k per scanner). Broadcastify must also have the"
+            _hc_warn "  feed provisioned for two sources."
+        elif [ "$_dual" = "false" ] && [ -n "$_brate" ] && [ "$_brate" != "16" ]; then
+            _hc_warn "STREAM_DUAL_CHANNEL=false but STREAM_BITRATE=$_brate — a mono feed"
+            _hc_warn "  should be 16."
+        fi
+        if [ -z "$(_cfg_get STREAM_PASSWORD)" ] \
+                || [ "$(_cfg_get STREAM_PASSWORD)" = "your_feed_password" ]; then
+            _hc_warn "STREAM_PASSWORD is unset or still the placeholder"
+        fi
+    fi
+    # Transcription needs an engine actually importable, or the feature is a
+    # dead switch. Which engine depends on TRANSCRIBE_MODEL.
+    if [ "$(_cfg_get ENABLE_TRANSCRIPTION)" = "true" ]; then
+        _tmodel=$(_cfg_get TRANSCRIBE_MODEL)
+        case "$_tmodel" in
+            whisper/*)
+                python3 -c "import faster_whisper" 2>/dev/null \
+                    && _hc_pass "faster-whisper importable (TRANSCRIBE_MODEL=$_tmodel)" \
+                    || { _hc_fail "TRANSCRIBE_MODEL=$_tmodel needs faster-whisper, which this"
+                         _hc_fail "  installer should have installed — the pip step above failed."
+                         _hc_fail "  Retry: pip install --break-system-packages faster-whisper"
+                         _hc_fail "  or switch to a moonshine/* model."; }
+                ;;
+            *)
+                python3 -c "import moonshine_onnx" 2>/dev/null \
+                    && _hc_pass "moonshine importable (TRANSCRIBE_MODEL=${_tmodel:-moonshine/base})" \
+                    || _hc_fail "TRANSCRIBE_MODEL=${_tmodel:-moonshine/base} needs useful-moonshine-onnx — not importable"
+                ;;
+        esac
+    fi
 else
     _hc_fail "gateway_config.txt is missing — copy from examples/gateway_config.txt"
+fi
+
+# Optimized librnnoise (4x faster denoise; wheel fallback is automatic)
+if [ -f "$HOME/.local/lib/radio-gateway/librnnoise.so" ]; then
+    _hc_pass "optimized librnnoise present (~0.22 ms/frame)"
+elif python3 -c "import importlib.util; exit(0 if importlib.util.find_spec('pyrnnoise') else 1)" 2>/dev/null; then
+    _hc_warn "using the pyrnnoise wheel's librnnoise (~0.9 ms/frame) — run"
+    _hc_warn "  tools/build_rnnoise.sh for a 4x faster denoise on this machine"
+else
+    _hc_warn "no librnnoise available — RNNoise denoise will not work"
+fi
+
+# Web UI assets — v4.2.0 split the dashboard into sub-pages. A partial deploy
+# (rsync with a stale exclude, half-copied tree) shows up as a 404 sub-page
+# rather than an error, so claim the files explicitly.
+_missing_pages=""
+for _pg in dashboard.html dash.css dash.js dash_endpoints.html \
+           dash_services.html dash_operate.html routing.html; do
+    [ -f "$GATEWAY_DIR/web_pages/$_pg" ] || _missing_pages="$_missing_pages $_pg"
+done
+if [ -z "$_missing_pages" ]; then
+    _hc_pass "web UI assets present (dashboard sub-pages + routing)"
+else
+    _hc_fail "web_pages missing:$_missing_pages — incomplete deploy"
 fi
 
 # Claim the core binaries a running gateway will reach for
@@ -1813,10 +2022,15 @@ echo "       MUMBLE_SERVER   = your.mumble.server"
 echo "       MUMBLE_PORT     = 64738"
 echo "       MUMBLE_USERNAME = RadioGateway"
 echo
-echo "  2. If using Broadcastify streaming, edit /etc/darkice.cfg:"
-echo "       password  = YOUR_STREAM_PASSWORD"
-echo "       mountPoint = YOUR_STREAM_KEY"
-echo "       device    = hw:<card>,1,0  (check: aplay -l | grep Loopback)"
+echo "  2. If using Broadcastify streaming, edit gateway_config.txt (NOT darkice.cfg):"
+echo "       ENABLE_STREAM_OUTPUT = true"
+echo "       STREAM_SERVER        = audio<N>.broadcastify.com"
+echo "       STREAM_PORT          = 80"
+echo "       STREAM_MOUNT         = /YOUR_MOUNT"
+echo "       STREAM_PASSWORD      = YOUR_STREAM_PASSWORD"
+echo "       STREAM_DUAL_CHANNEL  = true   (two scanners: sdr1->L, sdr2->R)"
+echo "     The encoder runs in-process (PCM -> ffmpeg MP3 -> Icecast). There is no"
+echo "     ALSA loopback and no darkice process in the default path."
 echo
 echo "  2b. Grafana dashboard:"
 echo "       Open  http://localhost:3000  (admin / radio)"
@@ -1828,7 +2042,7 @@ echo "     (unplug and replug after install so udev rules take effect)"
 echo "     KV4P HT will appear as /dev/kv4p (set KV4P_PORT = /dev/kv4p)"
 echo
 echo "  4. Log out and back in so audio group membership takes effect"
-echo "     (needed for darkice realtime scheduling without sudo)"
+echo "     (needed for ALSA device access and realtime scheduling without sudo)"
 echo
 echo "  5. Start the gateway (use desktop shortcuts or systemctl):"
 echo "       sudo systemctl start radio-gateway"
@@ -1851,10 +2065,19 @@ echo "  To feed FlightRadar24, run: sudo fr24feed --signup"
 echo "  then: sudo systemctl enable --now fr24feed"
 echo "  Status: sudo systemctl status dump1090-fa fr24feed"
 echo
-echo "STREAMING (optional):"
-echo "  Configure /etc/darkice.cfg with your Broadcastify credentials"
-echo "  Set ENABLE_STREAM_OUTPUT = true in gateway_config.txt"
-echo "  The gateway will start/stop Darkice via systemd as configured"
+echo "STREAMING — BROADCASTIFY / ICECAST (optional):"
+echo "  Set ENABLE_STREAM_OUTPUT = true in gateway_config.txt and fill in the"
+echo "  STREAM_* keys (server, port, mount, password). The gateway encodes and"
+echo "  connects in-process: PCM -> ffmpeg MP3 -> Icecast HTTP SOURCE."
+echo "  Dual-channel (two scanners) is on by default: STREAM_DUAL_CHANNEL = true"
+echo "  routes sdr1 -> left and sdr2 -> right at STREAM_BITRATE = 32 (16k/scanner)."
+echo "  Keep STREAM_SAMPLE_RATE below 32000 — MPEG-1 has a 32 kbps floor, so a"
+echo "  16 kbps feed is only reachable via MPEG-2 rates (16/22.05/24 kHz)."
+echo "  Route audio to the Broadcastify sinks on http://<gateway-ip>:8080/routing"
+echo
+echo "  LEGACY: darkice is installed but unused unless you set"
+echo "  SUPERVISE_DARKICE = true, which makes the gateway supervise an external"
+echo "  darkice process reading /etc/darkice.cfg. Leave it off for the normal path."
 echo
 echo "LOCAL MUMBLE SERVER (optional):"
 echo "  Set ENABLE_MUMBLE_SERVER_1 = true in gateway_config.txt"
@@ -1865,10 +2088,17 @@ echo
 echo "WEB CONFIGURATION UI & LIVE DASHBOARD (optional):"
 echo "  Set ENABLE_WEB_CONFIG = true in gateway_config.txt"
 echo "  Config editor: http://<gateway-ip>:8080/"
-echo "  Live dashboard: http://<gateway-ip>:8080/dashboard"
 echo "  Radio control:  http://<gateway-ip>:8080/radio"
 echo "  SDR control:    http://<gateway-ip>:8080/sdr"
 echo "  Log viewer:     http://<gateway-ip>:8080/logs"
+echo "  Routing editor: http://<gateway-ip>:8080/routing"
+echo "  Dashboard (v4.2.0 split it into four sub-pages):"
+echo "      Overview   http://<gateway-ip>:8080/dashboard"
+echo "      Endpoints  http://<gateway-ip>:8080/dashboard/endpoints"
+echo "                 (link endpoints + transcribe-worker cards)"
+echo "      Services   http://<gateway-ip>:8080/dashboard/services"
+echo "                 (Broadcastify status and last error live here)"
+echo "      Operate    http://<gateway-ip>:8080/dashboard/operate"
 echo "  Set WEB_CONFIG_PASSWORD for basic auth (user: admin)"
 echo "  Firewall: sudo ufw allow 8080/tcp"
 echo

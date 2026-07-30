@@ -9,7 +9,10 @@
 # the repo — run this script per machine. Without it the gateway falls
 # back to the wheel's bundled lib automatically.
 #
-# Requires: git, gcc, autotools (autoconf automake libtool), make.
+# Requires: git, gcc, autotools (autoconf automake libtool), make, and wget —
+# autogen.sh shells out to download_model.sh for the model weights and that
+# script is hardcoded to wget, so curl alone is not enough. scripts/install.sh
+# installs all of these before calling this script.
 set -euo pipefail
 
 WORK=$(mktemp -d)
@@ -27,7 +30,26 @@ make -j"$(nproc)"
 
 echo "== Installing to $DEST =="
 mkdir -p "$DEST"
-cp .libs/librnnoise.so.* "$DEST/librnnoise.so.tmp"
+# Resolve the real shared object rather than globbing librnnoise.so.*: libtool
+# leaves BOTH a versioned file and an unversioned symlink to it in .libs
+# (librnnoise.so -> librnnoise.so.0 -> librnnoise.so.0.4.1), so the glob
+# expands to two paths and cp then demands a directory target and dies with
+# "No such file or directory". readlink -f gives the one regular file and does
+# not care what upstream's soname version happens to be.
+SO=$(readlink -f .libs/librnnoise.so 2>/dev/null || true)
+if [ -z "$SO" ] || [ ! -f "$SO" ]; then
+    # Fall back to the newest versioned regular file if the dev symlink is absent.
+    SO=$(find .libs -maxdepth 1 -type f -name 'librnnoise.so.*' \
+         -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+fi
+if [ -z "$SO" ] || [ ! -f "$SO" ]; then
+    echo "ERROR: no built librnnoise shared object found in .libs/" >&2
+    ls -la .libs/ >&2 || true
+    exit 1
+fi
+echo "   using $SO"
+# tmp + mv so a running gateway never ctypes-loads a half-written file.
+cp "$SO" "$DEST/librnnoise.so.tmp"
 mv "$DEST/librnnoise.so.tmp" "$DEST/librnnoise.so"
 
 echo "== Verifying =="

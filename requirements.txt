@@ -53,10 +53,15 @@ prometheus-client
 # ── MCP server (Claude AI control) ───────────────────────────
 mcp
 
-# ── Speech transcription (Moonshine + Silero VAD) ────────────
+# ── Speech transcription (Moonshine + Whisper + Silero VAD) ──
 # Moonshine runs on onnxruntime (no torch); Silero VAD ships a bundled
 # ONNX model and uses onnxruntime directly.
+# BOTH engines are supported and both are selectable on /transcribe:
+# useful-moonshine-onnx backs the moonshine/* model keys (the default) and
+# faster-whisper backs the whisper/* keys. Install both, or picking a
+# whisper/* model in the UI fails at load time.
 useful-moonshine-onnx
+faster-whisper
 silero-vad
 onnxruntime
 
