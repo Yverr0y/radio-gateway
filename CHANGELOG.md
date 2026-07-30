@@ -161,6 +161,67 @@ Gaps found by diffing the routing command dispatch table, the packet plugin's
   recorder — all split out on 2026-05-30. Rewritten, with a note that a new
   module is invisible until it is added to `_register_all_tools`.
 
+### Fixed — the installer, and four things a fresh install got wrong
+
+`scripts/install.sh` had not been touched since v4.0.0 while two releases
+shipped, so its guidance had drifted and two features were unreachable on a
+clean box. Fixing that meant actually running it on a fresh Arch VM for the
+first time in a while, which turned up four bugs that were invisible on the
+live gateway — every one of them because **.140 works on historical packages
+a fresh install never gets**. The installer's output was describing a system
+nobody had built from scratch in a month.
+
+- **A first install could not reach Mumble.** `pymumble` pins
+  `protobuf==3.12.2`; `onnxruntime` and `faster-whisper` both pull a modern
+  protobuf later in the same run, and protobuf 4+ refuses to load pymumble's
+  pre-generated `mumble_pb2.py`. Run 1 ended on 7.35.1 with pymumble
+  unimportable; a *second* installer run silently fixed it by reinstalling
+  pymumble last. There is now a pin-repair step as the final pip action.
+  3.12.2 satisfies pymumble, onnxruntime, moonshine and faster-whisper
+  together. .140 never saw this — it has been on 3.12.2 for years.
+- **Silero VAD did not work at all on a fresh install.** `_SileroVAD` runs
+  the bundled ONNX through onnxruntime and needs no torch, but both of its
+  model-path lookups went *through* the package, whose `__init__` imports
+  torch — which the installer deliberately skips (`--no-deps`, to avoid
+  ~2 GB). Now resolved with `find_spec` on the top-level name, which locates
+  the package without executing it. Worked on .140 only because of torch
+  left over from the Whisper era.
+- **Every `whisper/*` model failed to load.** `016defa` swapped the
+  installer's pip line from `faster-whisper` to `useful-moonshine-onnx`
+  instead of adding to it, but `_VALID_MODELS` kept the whisper keys and
+  `/transcribe` still offers them in both dropdowns — where Whisper is the
+  starred recommendation. Moonshine is the default engine, not the only one;
+  both are installed again.
+- **Observability was wired up with no data in it.** `metrics.py` imports
+  `prometheus-client`, which `install.sh` never installed, while that same
+  installer set up Prometheus, set up Grafana and provisioned the dashboard.
+  Invisible because every `import metrics` call site sits inside
+  `try/except: pass` — instrumentation just no-opped and `/metrics` 500'd.
+
+Also fixed in passing: `tools/build_rnnoise.sh` could never have run
+anywhere. Its `cp .libs/librnnoise.so.*` globs to two paths (libtool leaves a
+symlink beside the real file), so `cp` demanded a directory target, and it
+needs `wget`, which the installer treats as optional elsewhere. It is now
+wired into the installer as an optional step — a `-march=native` librnnoise
+runs the denoise hot path at ~0.22 ms/frame against the wheel's ~0.9 ms,
+which no fresh install had ever had.
+
+New in the installer: `tools/check_deps_drift.py` diffs `requirements.txt`
+against what `install.sh` actually installs and exits non-zero on drift —
+`install.sh` does not read `requirements.txt` (several packages need handling
+a flat `pip install -r` gets wrong), and those two hand-maintained lists are
+how faster-whisper and prometheus-client both went missing. The health check
+runs it, claims `import metrics` explicitly, and now also checks stream
+sample-rate/bitrate coherence, transcription-engine importability, optimized
+librnnoise presence, and the v4.2.0 dashboard sub-page files so a partial
+deploy fails loudly instead of 404ing. `examples/gateway_config.txt` gains
+`STREAM_MOUNT_WAIT`, a `[transcription]` section (there was none) covering
+worker self-registration, and `SUPERVISE_DARKICE`/`SUPERVISE_MUMBLE`.
+
+Verified end to end: a pristine Arch cloud image, one installer run, exit 0 —
+then Kokoro TTS → Silero VAD → both ASR engines returning the exact reference
+sentence, and `/metrics` rendering 16 series.
+
 ## [4.1.0] -- 2026-07-28
 
 Broadcastify goes dual-channel, and a round of measurement-led cleanup across the
