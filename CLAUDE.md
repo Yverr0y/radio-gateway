@@ -34,6 +34,26 @@ cp ~/claude-notes/radio-gateway/* "$MEM_DIR/"
 To push memory changes back: copy `.claude/memory/*` into
 `~/claude-notes/radio-gateway/` and commit/push that private repo.
 
+#### Do NOT mix project and machine memory (`MEMORY.md` collision)
+
+`claude-notes` holds two different indexes, both named `MEMORY.md`:
+
+| Scope | claude-notes path | Live source |
+|-------|-------------------|-------------|
+| **Radio Gateway project** (`# Radio Gateway — Project Memory`) | `radio-gateway/MEMORY.md` | `.claude/memory/` + `<auto-memory-path>/` |
+| **Machine-wide** (`# Machine: user-optiplex3020`) | `memory/MEMORY.md` | `~/.claude/projects/-home-user/memory/` |
+
+The copy commands above are only safe while `radio-gateway/MEMORY.md` is the
+*project* index. On 2026-07-31 the machine-wide index had been copied over it,
+so `cp .claude/memory/* ~/claude-notes/radio-gateway/` showed up as an 84-line
+deletion — it would have wiped the machine notes, and the seeding command in
+the other direction would have pushed the wrong index into every new clone.
+
+**Before running either copy, check `head -1` on both `MEMORY.md` files and
+confirm each says what the table above expects.** Individual non-index memory
+files may legitimately exist in both places (9 of the 10 currently shared
+filenames are byte-identical); `MEMORY.md` is the only genuine collision.
+
 ### Syncing gateway_config.txt between machines
 `gateway_config.txt` is NOT in the repo. If missing, ask the user for the source machine's
 IP/hostname and username, then fetch it:
