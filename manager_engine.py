@@ -417,37 +417,128 @@ class ManagerEngine:
             self._state['unread_alerts'] = True
             self._save_state()
 
-    _FIX_ACTIONS = {
-        'restart-darkice': ['systemctl', 'restart', 'darkice'],
-        'restart-mumble':  ['systemctl', 'restart', 'mumble-server-gw1'],
-        'restart-sdrplay': ['systemctl', 'restart', 'sdrplay'],
-        'restart-gateway': ['systemctl', 'restart', 'radio-gateway'],
+    # Systemd-unit fixes. These MUST go through sudo: the gateway runs as
+    # User=user (see radio-gateway.service), and polkit's default policy for
+    # org.freedesktop.systemd1.manage-units is auth_admin_keep — so a bare
+    # `systemctl restart <unit>` from here fails with
+    #   "Access denied ... requires interactive authentication"  (exit 1)
+    # *before* systemd even resolves the unit name. Every one of these actions
+    # had silently failed that way since they were written; the 2026-07-30
+    # stream outage ran 6 extra hours on a fix that never had a chance to run.
+    # `sudo -n` (non-interactive) so a missing sudoers rule fails loudly and
+    # immediately rather than hanging on a password prompt.
+    _UNIT_FIX_ACTIONS = {
+        'restart-mumble':  'mumble-server-gw1.service',
+        'restart-sdrplay': 'sdrplay.service',
+        'restart-gateway': 'radio-gateway.service',
     }
 
-    def _apply_fix(self, fix: str, entry: dict):
-        cmd = self._FIX_ACTIONS.get(fix)
-        if not cmd:
-            print(f"  [Manager] Unknown fix '{fix}' — ignored")
-            return
-        print(f"  [Manager] Applying fix: {fix}")
-        self._send_fix_telegram(fix, entry)  # send before restart-gateway kills us
+    def _fix_restart_stream(self) -> tuple:
+        """Restart the Broadcastify feed.
+
+        This used to be `systemctl restart darkice`, which was wrong twice
+        over: there is no darkice.service on this host, and — more
+        importantly — the alarm this fix answers is `stream_connected`, which
+        reads `stream_output.connected` (gateway_core.py), the gateway's
+        in-process Python Icecast client. DarkIce is a separate legacy
+        process; restarting it could never clear the alarm. Confirmed
+        2026-07-31: darkice restarted cleanly and stream_connected stayed
+        false.
+        """
+        gw = self.gateway
+        so = getattr(gw, 'stream_output', None) if gw else None
+        if so is None:
+            return False, 'no stream_output on the gateway (streaming disabled?)'
         try:
-            r = subprocess.run(cmd, capture_output=True, timeout=30)
-            result = 'ok' if r.returncode == 0 else f'exit {r.returncode}'
-            print(f"  [Manager] Fix '{fix}': {result}")
+            so.reconnect()
         except Exception as e:
-            print(f"  [Manager] Fix '{fix}' error: {e}")
+            return False, f'reconnect() raised: {e}'
+        # reconnect() is synchronous, so `connected` is meaningful here.
+        if getattr(so, 'connected', False):
+            return True, 'stream reconnected'
+        return False, f"reconnect ran but stream still down: {getattr(so, '_last_error', '') or 'no error recorded'}"
+
+    def _fix_restart_unit(self, unit: str) -> tuple:
+        try:
+            r = subprocess.run(['sudo', '-n', 'systemctl', 'restart', unit],
+                               capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return False, 'timed out after 30s'
+        except Exception as e:
+            return False, f'{type(e).__name__}: {e}'
+        if r.returncode == 0:
+            return True, f'{unit} restarted'
+        # Surface stderr. The old code captured it and logged only the exit
+        # code, which is precisely why an auth failure looked like a mystery
+        # "exit 1" for months.
+        detail = (r.stderr or r.stdout or '').strip().replace('\n', ' ')[:300]
+        return False, f'exit {r.returncode}: {detail or "no output"}'
+
+    # The prompts (hourly.md/daily.md) now ask for 'restart-stream', but a
+    # report written against an older prompt — or an LLM going from memory —
+    # can still say 'restart-darkice'. Map it rather than dropping the fix.
+    _FIX_ALIASES = {'restart-darkice': 'restart-stream'}
+
+    def _apply_fix(self, fix: str, entry: dict):
+        alias = self._FIX_ALIASES.get(fix)
+        if alias:
+            print(f"  [Manager] Fix '{fix}' is deprecated — treating as '{alias}'")
+            fix = alias
+        print(f"  [Manager] Applying fix: {fix}")
+        # Telegram goes out BEFORE the fix runs, because restart-gateway kills
+        # this process — but it now says "attempting", and a second message
+        # reports the actual outcome for every fix that survives to send one.
+        self._send_fix_telegram(fix, entry)
+        if fix == 'restart-stream':
+            ok, detail = self._fix_restart_stream()
+        elif fix in self._UNIT_FIX_ACTIONS:
+            ok, detail = self._fix_restart_unit(self._UNIT_FIX_ACTIONS[fix])
+        else:
+            print(f"  [Manager] Unknown fix '{fix}' — ignored")
+            self._send_fix_result_telegram(fix, False, 'unknown fix action')
+            return
+        print(f"  [Manager] Fix '{fix}': {'ok' if ok else 'FAILED'} — {detail}")
+        self._send_fix_result_telegram(fix, ok, detail)
+        # A fix that failed is not a resolved incident. Record it on the entry
+        # so the report carries the reason, and keep the alert unread.
+        if not ok:
+            entry.setdefault('findings', []).append(
+                f'AUTO-FIX FAILED: {fix} — {detail}')
+            try:
+                with self._lock:
+                    self._state['unread_alerts'] = True
+                    self._save_state()
+            except Exception:
+                pass
 
     def _send_fix_telegram(self, fix: str, entry: dict):
         bot_token = str(getattr(self.config, 'TELEGRAM_BOT_TOKEN', '') or '').strip()
         chat_id   = str(getattr(self.config, 'TELEGRAM_CHAT_ID',   '') or '').strip()
         if not bot_token or not chat_id:
             return
+        # "Attempting", not "applied". This message is sent before the fix
+        # runs (restart-gateway kills this process, so there may be no "after"
+        # for that one) — wording it as a completed action is how a fix that
+        # had never once succeeded still read as a success in Telegram for
+        # months. _send_fix_result_telegram reports what actually happened.
         text = (
             f"[Manager — auto-fix] {entry.get('ts','')}\n"
-            f"Action: {fix}\n"
+            f"Attempting: {fix}\n"
             f"{entry.get('summary','')}"
         )
+        self._telegram_send(text, f"Fix Telegram sent: {fix}")
+
+    def _send_fix_result_telegram(self, fix: str, ok: bool, detail: str):
+        """Report the ACTUAL outcome of a fix."""
+        text = (f"[Manager — auto-fix {'OK' if ok else 'FAILED'}]\n"
+                f"Action: {fix}\n{detail}")
+        self._telegram_send(text, f"Fix result Telegram sent: {fix}")
+
+    def _telegram_send(self, text: str, log_note: str):
+        bot_token = str(getattr(self.config, 'TELEGRAM_BOT_TOKEN', '') or '').strip()
+        chat_id   = str(getattr(self.config, 'TELEGRAM_CHAT_ID',   '') or '').strip()
+        if not bot_token or not chat_id:
+            return
         try:
             import urllib.request
             url  = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -455,9 +546,9 @@ class ManagerEngine:
             req  = urllib.request.Request(url, data=data,
                                           headers={'Content-Type': 'application/json'})
             urllib.request.urlopen(req, timeout=10)
-            print(f"  [Manager] Fix Telegram sent: {fix}")
+            print(f"  [Manager] {log_note}")
         except Exception as e:
-            print(f"  [Manager] Fix Telegram failed: {e}")
+            print(f"  [Manager] Telegram send failed: {e}")
 
     def _send_telegram_alert(self, task_type: str, entry: dict):
         bot_token = str(getattr(self.config, 'TELEGRAM_BOT_TOKEN', '') or '').strip()

@@ -2600,6 +2600,7 @@ class StreamOutputSource:
     in-process pipeline. No external processes needed.
     """
     SILENCE_INTERVAL = 0.05  # seconds between silence frames (50ms = 20 ticks/sec)
+    SUPERVISOR_INTERVAL = 10.0  # seconds between independent stream-health checks
 
     def __init__(self, config, gateway):
         self.config = config
@@ -2627,6 +2628,11 @@ class StreamOutputSource:
         # interleave bytes mid-sample and the MP3 output decodes as static
         # / "silence" — see v3.5-A regression notes (2026-05-02).
         self._encoder_lock = threading.Lock()
+        # Guards the _reconnecting flag only. Deliberately separate from
+        # _encoder_lock so the recovery path can never be blocked by a writer
+        # that is stuck in the encoder — that coupling is what turned a
+        # routine socket drop into a 15h outage on 2026-07-30.
+        self._reconnect_lock = threading.Lock()
         self._reader_thread = None
         self._keepalive_thread = None
         self._last_audio_time = 0  # monotonic time of last real audio push
@@ -2652,6 +2658,28 @@ class StreamOutputSource:
         self._reconnect_count = 0
         self._last_drop_time = 0   # monotonic time of last connection drop
         self._was_connected = False  # True once first successful connection
+        # Reconnect-in-flight guard. Previously this only ever existed via
+        # getattr(self, '_reconnecting', False), so it was invisible in
+        # __init__ and easy to miss when reasoning about the recovery path.
+        self._reconnecting = False
+        # Supervisor thread — the reconnect trigger of last resort. See
+        # _supervisor_loop for why keepalive alone was not enough.
+        self._supervisor_thread = None
+        # Set once the gateway is shutting this source down for good. Stops
+        # the reader/supervisor from helpfully resurrecting the stream while
+        # the process is on its way out.
+        self._shutdown = False
+        # True while a teardown we asked for is in progress (close(), and
+        # therefore reconnect() too). The reader thread dies as a *result* of
+        # such a teardown, so without this it would treat our own deliberate
+        # close as a drop and queue a second, redundant reconnect.
+        self._teardown_intentional = False
+        # Hard ceiling on how long a single write into the encoder may take
+        # before we declare the encoder wedged and tear it down. See
+        # _encoder_write. Must stay well under STREAM_MOUNT_WAIT so a wedged
+        # encoder is reaped long before the reconnect delay elapses.
+        self._encoder_write_timeout = float(
+            getattr(config, 'STREAM_ENCODER_WRITE_TIMEOUT', 1.0))
 
         if config.ENABLE_STREAM_OUTPUT:
             self._connect()
@@ -2791,6 +2819,24 @@ class StreamOutputSource:
                 '-fflags', '+nobuffer',
                 '-f', 'mp3', 'pipe:1'
             ], stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+            # Make the encoder's stdin NON-BLOCKING. A blocking write into a
+            # full pipe is what deadlocked the whole stream on 2026-07-30:
+            # ffmpeg stopped draining stdin (because nobody was draining its
+            # stdout after the reader thread died), the sink thread parked
+            # forever inside stdin.write() while holding _encoder_lock, and
+            # the keepalive thread — the only thing that can trigger a
+            # reconnect — parked behind that same lock. 15h of dead air with
+            # _reconnect_count stuck at 0. With O_NONBLOCK the write fails
+            # fast instead, and _encoder_write turns that into a teardown.
+            try:
+                import fcntl
+                _fd = self._encoder.stdin.fileno()
+                fcntl.fcntl(_fd, fcntl.F_SETFL,
+                            fcntl.fcntl(_fd, fcntl.F_GETFL) | os.O_NONBLOCK)
+            except Exception as e:
+                # Not fatal — we still have the deadline in _encoder_write,
+                # it just degrades to a blocking write we cannot interrupt.
+                print(f"  ⚠ Broadcastify: could not set encoder stdin non-blocking: {e}")
             self._start_encoder_stderr_reader()
         except Exception as e:
             print(f"  ⚠ Broadcastify: ffmpeg encoder failed: {e}")
@@ -2858,10 +2904,27 @@ class StreamOutputSource:
                 self._last_drop_time = time.monotonic()
                 self._mount_in_use = True   # same reasoning as above
             self.connected = False
+            # Reap the encoder. THIS thread is ffmpeg's only stdout consumer,
+            # so once it exits ffmpeg's 64 KiB stdout pipe fills, ffmpeg
+            # blocks on write, and it therefore stops reading stdin — which
+            # in turn wedges every PCM writer feeding it. Leaving the encoder
+            # alive here is what deadlocked the stream on 2026-07-30 (ffmpeg
+            # was still running 40h later, holding both pipes). Kill it as
+            # part of the same drop that killed this thread.
+            self._teardown_encoder()
+            # And make sure something is actually driving recovery: the
+            # supervisor would catch this within SUPERVISOR_INTERVAL anyway,
+            # but asking here makes reconnection immediate on the common path.
+            # Skipped when WE tore the encoder down — this thread dying is the
+            # expected consequence of close()/reconnect(), not a fault.
+            if not self._teardown_intentional:
+                self._trigger_reconnect()
 
         self._reader_thread = threading.Thread(target=_reader, daemon=True,
                                                 name="Broadcastify-sender")
         self._reader_thread.start()
+        # A live encoder again — any future reader death is a genuine fault.
+        self._teardown_intentional = False
         self.connected = True
         self._was_connected = True
         self._connect_time = time.time()
@@ -2873,82 +2936,218 @@ class StreamOutputSource:
             self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True,
                                                        name="Broadcastify-keepalive")
             self._keepalive_thread.start()
+        # Independent recovery supervisor — see _supervisor_loop. Started here
+        # rather than in __init__ so it only exists once streaming is actually
+        # live, and guarded the same way as the keepalive thread so repeated
+        # reconnects do not stack up copies of it.
+        if not self._supervisor_thread or not self._supervisor_thread.is_alive():
+            self._supervisor_thread = threading.Thread(target=self._supervisor_loop,
+                                                       daemon=True,
+                                                       name="Broadcastify-supervisor")
+            self._supervisor_thread.start()
         print(f"  ✓ Broadcastify: direct Icecast stream to {server}:{port}{mount} ({bitrate}kbps)")
+
+    def _encoder_write(self, data):
+        """Write PCM into the encoder under a hard deadline.
+
+        Returns True if every byte went in, False if the encoder is wedged.
+
+        The encoder's stdin is O_NONBLOCK (set in _connect), so a full pipe
+        surfaces as BlockingIOError instead of parking the calling thread
+        forever. That is the fix for the 2026-07-30 deadlock: ffmpeg stopped
+        draining stdin, and the plain `stdin.write()` this replaces blocked
+        indefinitely *while holding _encoder_lock*, taking the recovery path
+        down with it.
+
+        A partial write here desynchronises the channels for the rest of the
+        connection (see _chunk_bytes), so the caller MUST treat False as
+        "reap the encoder and reconnect", never as "retry this frame".
+        """
+        enc = self._encoder
+        if enc is None or enc.stdin is None:
+            return False
+        try:
+            fd = enc.stdin.fileno()
+        except Exception:
+            return False
+        view = memoryview(data)
+        deadline = time.monotonic() + self._encoder_write_timeout
+        while view:
+            try:
+                view = view[os.write(fd, view):]
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                try:
+                    select.select([], [fd], [], min(remaining, 0.05))
+                except Exception:
+                    return False
+            except (BrokenPipeError, OSError, ValueError):
+                return False
+        return True
+
+    def _teardown_encoder(self):
+        """Kill the ffmpeg encoder. Deliberately does NOT take _encoder_lock.
+
+        The entire point is to break threads that are already stuck inside
+        that lock, so taking it here would deadlock against the very
+        condition we are clearing. SIGKILL makes any in-flight write fail
+        with EPIPE, which releases the lock for us.
+        """
+        enc = self._encoder
+        if enc is None:
+            return
+        if self._encoder is enc:
+            self._encoder = None
+        for step in (enc.kill, enc.stdin.close, enc.stdout.close):
+            try:
+                step()
+            except Exception:
+                pass
+        try:
+            enc.wait(timeout=3)
+        except Exception:
+            pass
+
+    def _supervisor_loop(self):
+        """Reconnect trigger of last resort.
+
+        Recovery used to hang solely off _keepalive_loop — but that thread is
+        itself a writer into the encoder, so any condition that wedged the
+        encoder also wedged the only thing able to recover from it. On
+        2026-07-30 that cost 15h of dead air with _reconnect_count stuck at 0:
+        the keepalive thread was parked on _encoder_lock and never looped back
+        to re-read `self.connected`.
+
+        This thread touches neither the encoder nor _encoder_lock, so it stays
+        responsive no matter what the writer threads are doing.
+        """
+        while True:
+            time.sleep(self.SUPERVISOR_INTERVAL)
+            try:
+                if self._shutdown:
+                    return
+                if not self._was_connected or self.connected or self._reconnecting:
+                    continue
+                if self._encoder is not None:
+                    # Stream is down but the encoder is still alive — writers
+                    # may be parked inside it. Reap it before retrying.
+                    print("  [Broadcastify] Supervisor: stream down with encoder "
+                          "still alive — reaping it")
+                    self._teardown_encoder()
+                print("  [Broadcastify] Supervisor: stream down — triggering reconnect")
+                self._trigger_reconnect()
+            except Exception as e:
+                print(f"  [Broadcastify] Supervisor error: {e}")
+
+    def _trigger_reconnect(self):
+        """Start a reconnect attempt unless one is already in flight.
+
+        Extracted from send_audio so that every detector — the sink thread,
+        the keepalive tick and the supervisor — shares one guarded path
+        rather than each open-coding the flag handling.
+        """
+        if not self._was_connected or self._shutdown:
+            return
+        with self._reconnect_lock:
+            if self._reconnecting:
+                return
+            self._reconnecting = True
+            self._reconnect_count += 1
+            count = self._reconnect_count
+        try:
+            import metrics as _m
+            _m.stream_reconnects_total.labels(stream='broadcastify').inc()
+        except Exception:
+            pass
+
+        def _auto_reconnect():
+            try:
+                # Wait for the mount to clear when our own source connection
+                # may still be held server-side — set both when a drop is
+                # detected (the reader thread) and when a connect is refused
+                # with "403 Mountpoint in use".
+                # Observed 2026-07-27 (11:12 and 11:27): drop -> attempt #1 at
+                # +5s refused 403 -> attempt #2 at +10s succeeded. The mount
+                # clears somewhere under 10s, so the old flat 5s retry was
+                # racing it and spending an attempt to learn nothing. Waiting
+                # up front costs ~5s more dead air than the old two-attempt
+                # recovery but reconnects on the FIRST try with no error
+                # logged. The fast 5s path remains for connects that fail for
+                # any other reason, where retrying sooner does help.
+                delay = self._mount_wait if self._mount_in_use else self._reconnect_backoff
+                if delay != self._reconnect_backoff:
+                    print(f"  [Broadcastify] Mount still held by our previous "
+                          f"connection — waiting {delay}s for it to clear")
+                time.sleep(delay)
+                print(f"  [Broadcastify] Auto-reconnecting (attempt #{count})...")
+                try:
+                    self.close()
+                except Exception as e:
+                    print(f"  [Broadcastify] close() raised during reconnect: {e}")
+                try:
+                    self._connect()
+                except Exception as e:
+                    print(f"  [Broadcastify] _connect() raised: {e}")
+                if self.connected:
+                    print(f"  [Broadcastify] Reconnected successfully (attempt #{count})")
+                else:
+                    print(f"  [Broadcastify] Reconnect failed (attempt #{count})")
+                    self._note_error(f"reconnect failed (attempt #{count})")
+            finally:
+                self._reconnecting = False
+
+        worker = threading.Thread(target=_auto_reconnect, daemon=True,
+                                  name="Broadcastify-reconnect")
+        worker.start()
+
+        # Watchdog: if the reconnect worker hangs (e.g. close() wedged on a
+        # half-dead pipe), force-release the _reconnecting flag after 30s so a
+        # later tick can spawn a fresh attempt. The wedged worker may leak its
+        # encoder/socket, but the stream as a whole recovers instead of
+        # staying dark.
+        def _watchdog():
+            worker.join(timeout=30)
+            if worker.is_alive():
+                print(f"  [Broadcastify] Reconnect attempt #{count} wedged >30s — releasing flag")
+                self._reconnecting = False
+        threading.Thread(target=_watchdog, daemon=True,
+                         name="Broadcastify-reconnect-wd").start()
 
     def send_audio(self, audio_data):
         """Send raw PCM audio to the MP3 encoder. Auto-reconnects on failure."""
-        if not self.connected or not self._encoder:
-            # Auto-reconnect if we were previously connected
-            if self._was_connected and not getattr(self, '_reconnecting', False):
-                self._reconnecting = True
-                self._reconnect_count += 1
-                count = self._reconnect_count
-                try:
-                    import metrics as _m
-                    _m.stream_reconnects_total.labels(stream='broadcastify').inc()
-                except Exception:
-                    pass
-                def _auto_reconnect():
-                    try:
-                        # Wait for the mount to clear when our own source
-                        # connection may still be held server-side — set both
-                        # when a drop is detected (the reader thread) and when a
-                        # connect is refused with "403 Mountpoint in use".
-                        # Observed 2026-07-27 (11:12 and 11:27): drop ->
-                        # attempt #1 at +5s refused 403 -> attempt #2 at +10s
-                        # succeeded. The mount clears somewhere under 10s, so
-                        # the old flat 5s retry was racing it and spending an
-                        # attempt to learn nothing. Waiting up front costs ~5s
-                        # more dead air than the old two-attempt recovery but
-                        # reconnects on the FIRST try with no error logged.
-                        # The fast 5s path remains for connects that fail for
-                        # any other reason, where retrying sooner does help.
-                        delay = self._mount_wait if getattr(
-                            self, '_mount_in_use', False) else self._reconnect_backoff
-                        if delay != self._reconnect_backoff:
-                            print(f"  [Broadcastify] Mount still held by our previous "
-                                  f"connection — waiting {delay}s for it to clear")
-                        time.sleep(delay)
-                        print(f"  [Broadcastify] Auto-reconnecting (attempt #{count})...")
-                        try:
-                            self.close()
-                        except Exception as e:
-                            print(f"  [Broadcastify] close() raised during reconnect: {e}")
-                        try:
-                            self._connect()
-                        except Exception as e:
-                            print(f"  [Broadcastify] _connect() raised: {e}")
-                        if self.connected:
-                            print(f"  [Broadcastify] Reconnected successfully (attempt #{count})")
-                        else:
-                            print(f"  [Broadcastify] Reconnect failed (attempt #{count})")
-                            self._note_error(f"reconnect failed (attempt #{count})")
-                    finally:
-                        self._reconnecting = False
-                worker = threading.Thread(target=_auto_reconnect, daemon=True,
-                                          name="Broadcastify-reconnect")
-                worker.start()
-                # Watchdog: if the reconnect worker hangs (e.g. close() wedged
-                # on a half-dead pipe), force-release the _reconnecting flag
-                # after 30s so subsequent keepalive ticks can spawn a fresh
-                # attempt. The wedged worker may leak its encoder/socket, but
-                # the stream as a whole recovers instead of staying dark.
-                def _watchdog():
-                    worker.join(timeout=30)
-                    if worker.is_alive():
-                        print(f"  [Broadcastify] Reconnect attempt #{count} wedged >30s — releasing flag")
-                        self._reconnecting = False
-                threading.Thread(target=_watchdog, daemon=True,
-                                 name="Broadcastify-reconnect-wd").start()
+        if not self.connected or self._encoder is None:
+            self._trigger_reconnect()
             return
-        try:
-            with self._encoder_lock:
-                self._encoder.stdin.write(audio_data)
+        # The lock still serialises whole frames against _keepalive_loop, but
+        # the write underneath it is now deadline-bounded, so holding it can
+        # no longer park this thread (and everything queued behind it)
+        # indefinitely.
+        with self._encoder_lock:
+            ok = self._encoder_write(audio_data)
+            if ok:
                 self._last_audio_time = time.monotonic()
-        except (BrokenPipeError, OSError):
-            self.connected = False
-        except Exception:
-            pass
+        if not ok:
+            self._on_encoder_wedged()
+
+    def _on_encoder_wedged(self):
+        """Encoder stopped accepting PCM — reap it and start recovery.
+
+        Called with _encoder_lock RELEASED: _teardown_encoder must not take
+        it, and the reconnect worker needs a clean field.
+        """
+        if not self.connected and self._encoder is None:
+            return  # someone else already handled this drop
+        print("  [Broadcastify] Encoder stopped accepting audio — reaping and reconnecting")
+        self._note_error("encoder wedged (write deadline exceeded)")
+        self.connected = False
+        self._last_drop_time = time.monotonic()
+        # Our source connection is going away, so the server may still hold
+        # the mount — same reasoning as the reader thread's drop path.
+        self._mount_in_use = True
+        self._teardown_encoder()
+        self._trigger_reconnect()
 
     def _start_encoder_stderr_reader(self):
         """Drain and log the encoder's stderr.
@@ -3009,24 +3208,36 @@ class StreamOutputSource:
         _silence = b'\x00' * self._chunk_bytes
         while True:
             time.sleep(self.SILENCE_INTERVAL)
-            if not self.connected or not self._encoder:
+            if not self.connected or self._encoder is None:
                 # Keepalive also drives reconnection — send_audio() only fires
                 # when the listen bus has audio, so quiet radios never retry.
-                if self._was_connected and not getattr(self, '_reconnecting', False):
-                    self.send_audio(b'')
+                # _supervisor_loop is the backstop if this thread is ever
+                # unable to reach here.
+                self._trigger_reconnect()
                 continue
+            ok = True
             try:
-                # Re-check idle gate while holding the lock so we never
-                # race with send_audio mid-frame; both writers always
-                # produce whole 4800-byte frames into the encoder.
-                with self._encoder_lock:
+                # Re-check the idle gate while holding the lock so we never
+                # race with send_audio mid-frame; both writers always produce
+                # whole 4800-byte frames into the encoder.
+                #
+                # BOUNDED acquire: an unbounded `with self._encoder_lock` is
+                # exactly how this thread was lost on 2026-07-30 — it parked
+                # here behind a sink thread stuck in a blocking write and
+                # never returned to the `not self.connected` check above, so
+                # the reconnect on the previous branch became unreachable.
+                if not self._encoder_lock.acquire(timeout=1.0):
+                    continue
+                try:
                     if time.monotonic() - self._last_audio_time < 0.1:
                         continue
-                    self._encoder.stdin.write(_silence)
-            except (BrokenPipeError, OSError):
-                self.connected = False
+                    ok = self._encoder_write(_silence)
+                finally:
+                    self._encoder_lock.release()
             except Exception:
                 pass
+            if not ok:
+                self._on_encoder_wedged()
 
     def reconnect(self):
         """Tear down and reconnect."""
@@ -3037,25 +3248,16 @@ class StreamOutputSource:
     def close(self):
         """Clean shutdown."""
         self.connected = False
-        if self._encoder:
-            # Kill the process FIRST. stdin.close() can block indefinitely
-            # if the read end is in a half-dead state with buffered bytes
-            # — observed wedging the reconnect path for 11+ hours after a
-            # Broadcastify socket reset. SIGKILL guarantees the pipe is
-            # torn down so the subsequent stdin.close() returns immediately.
-            try:
-                self._encoder.kill()
-            except Exception:
-                pass
-            try:
-                self._encoder.stdin.close()
-            except Exception:
-                pass
-            try:
-                self._encoder.wait(timeout=3)
-            except Exception:
-                pass
-            self._encoder = None
+        # Tell the reader thread that its imminent death is our doing.
+        # Cleared again by a successful _connect(); if the reconnect fails,
+        # _supervisor_loop is the backstop and does not consult this flag.
+        self._teardown_intentional = True
+        # Kills the process FIRST, then closes the pipes. stdin.close() can
+        # block indefinitely if the read end is in a half-dead state with
+        # buffered bytes — observed wedging the reconnect path for 11+ hours
+        # after a Broadcastify socket reset. SIGKILL guarantees the pipe is
+        # torn down so the subsequent close() returns immediately.
+        self._teardown_encoder()
         if self._icecast_sock:
             try:
                 self._icecast_sock.close()
@@ -3082,6 +3284,9 @@ class StreamOutputSource:
         rewrite), so shutdown raised AttributeError here every single time
         and the encoder/socket were left to the OS instead of being closed.
         """
+        # Permanent, unlike close() — suppresses the reader/supervisor
+        # recovery paths so shutdown cannot race a reconnect back up.
+        self._shutdown = True
         self.close()
 
 

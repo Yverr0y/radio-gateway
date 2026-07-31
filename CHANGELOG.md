@@ -2,6 +2,70 @@
 
 All notable changes to Radio Gateway.
 
+## [Unreleased]
+
+### Fixed — the Broadcastify stream could deadlock and never reconnect
+
+On 2026-07-30 the feed dropped at 22:08 and stayed dark for 15 hours having
+made **zero** reconnect attempts (`_reconnect_count` was still 0 the next
+afternoon). The trigger was an ordinary socket drop; the outage was ours.
+
+The chain, confirmed live with py-spy:
+
+1. `_reader` caught the `BrokenPipeError`, set `connected = False` and exited
+   — **without killing the ffmpeg encoder**. That process was still alive 40h
+   later.
+2. `_reader` is ffmpeg's only stdout consumer, so its 64 KiB stdout pipe
+   filled, ffmpeg blocked on write, and it therefore stopped reading stdin.
+3. The bus sink thread parked forever in `self._encoder.stdin.write()` —
+   while holding `_encoder_lock`.
+4. `_keepalive_loop` had already passed its `if not self.connected` gate and
+   was parked on that same lock, so it could never loop back to re-read the
+   flag. Its `send_audio(b'')` call is the **only** reconnect trigger in the
+   codebase, and it had become unreachable.
+
+Fixes:
+
+- The encoder's stdin is now `O_NONBLOCK`, and all writes go through
+  `_encoder_write()`, which is deadline-bounded (`STREAM_ENCODER_WRITE_TIMEOUT`,
+  default 1.0s) and reports a wedged encoder instead of blocking.
+- `_reader` reaps the encoder (`_teardown_encoder()`) as part of the same drop
+  that kills it, so ffmpeg can never outlive the connection.
+- `_keepalive_loop` uses a **bounded** `acquire(timeout=1.0)`, so it can no
+  longer be parked indefinitely behind a stuck writer.
+- New `Broadcastify-supervisor` thread re-checks stream health every 10s and
+  drives recovery on its own. It touches neither the encoder nor
+  `_encoder_lock`, so it stays live no matter what the writers are doing —
+  recovery no longer depends on a thread that shares the failure mode.
+- Reconnect triggering is consolidated in `_trigger_reconnect()` behind a
+  dedicated `_reconnect_lock`, with `_shutdown` / `_teardown_intentional`
+  flags so shutdown and deliberate `reconnect()` calls don't race it.
+
+Regression tests: `tests/test_stream_encoder_deadlock.py`.
+
+### Fixed — every fleet-manager auto-fix had silently never worked
+
+All four `fix` actions ran a bare `systemctl restart <unit>`. The gateway runs
+as `User=user`, and polkit's default for
+`org.freedesktop.systemd1.manage-units` is `auth_admin_keep`, so each one
+failed `exit 1` with *"Access denied ... requires interactive
+authentication"* — a check that happens **before** systemd resolves the unit
+name.
+
+- Unit restarts now use `sudo -n systemctl restart <unit>`, with matching
+  rules in `/etc/sudoers.d/radio-gateway`.
+- `restart-darkice` → **`restart-stream`**, which calls
+  `stream_output.reconnect()`. The old action was doubly wrong: there is no
+  `darkice.service` on this host, and the `stream_connected` alarm it answered
+  reports the gateway's *in-process* Icecast client, which DarkIce cannot
+  affect. (`restart-darkice` is kept as a deprecated alias.)
+- `_apply_fix` now logs subprocess **stderr** instead of only the exit code,
+  sends a second Telegram message with the real outcome, appends an
+  `AUTO-FIX FAILED: ...` finding, and leaves the alert unread on failure.
+  The pre-fix Telegram now says "Attempting", not "Action".
+
+Regression tests: `tests/test_manager_fix_actions.py`.
+
 ## [4.2.0] -- 2026-07-29
 
 Transcribe workers now dial into the gateway like every other fleet machine,

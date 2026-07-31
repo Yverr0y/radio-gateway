@@ -69,14 +69,14 @@ The hourly task list includes a `## Remediation` block. To make the agent attemp
 Edit `hourly.md`. Find this:
 ```
 Available actions:
-- "restart-darkice" — Broadcastify stream encoder is down
+- "restart-stream" — Broadcastify stream is down
 - "restart-mumble" — Mumble server is down
 ```
 
 Change it to:
 ```
 Available actions:
-- "restart-darkice" — Broadcastify stream encoder is down. Use this without hesitation.
+- "restart-stream" — Broadcastify stream is down. Use this without hesitation.
 - "restart-mumble" — Mumble server is down. Restart on the first miss; the service is idempotent.
 ```
 
@@ -173,14 +173,34 @@ Each report is one JSON line appended to `manager_reports.jsonl`:
 
 Reports can include a `fix` field that the engine will execute automatically. Currently supported:
 
-| Fix action | Effect |
-|------------|--------|
-| `restart-darkice` | Restart Broadcastify encoder |
-| `restart-mumble` | Restart Mumble server |
-| `restart-sdrplay` | Restart SDR API daemon |
-| `restart-gateway` | Restart the gateway service itself (last resort) |
+| Fix action | Effect | Mechanism |
+|------------|--------|-----------|
+| `restart-stream` | Reconnect the Broadcastify feed | in-process `stream_output.reconnect()` |
+| `restart-mumble` | Restart Mumble server | `sudo -n systemctl restart mumble-server-gw1.service` |
+| `restart-sdrplay` | Restart SDR API daemon | `sudo -n systemctl restart sdrplay.service` |
+| `restart-gateway` | Restart the gateway service itself (last resort) | `sudo -n systemctl restart radio-gateway.service` |
+
+`restart-darkice` is a deprecated alias for `restart-stream` and is remapped automatically.
 
 The task documents tell Claude when it's appropriate to include a fix. Only included when severity is `elevated` and the issue is unambiguous.
+
+### Why these mechanisms
+
+Two constraints, both learned the hard way in the 2026-07-30 stream outage:
+
+1. **Unit restarts must go through `sudo -n`.** The gateway runs as `User=user`, and
+   polkit's default for `org.freedesktop.systemd1.manage-units` is `auth_admin_keep`.
+   A bare `systemctl restart <unit>` therefore fails with *"Access denied ... requires
+   interactive authentication"* (exit 1) — and it fails that way **before** systemd
+   resolves the unit name, so a missing unit and a missing sudo rule look identical.
+   The required rules live in `/etc/sudoers.d/radio-gateway`.
+2. **The stream fix must target the in-process client.** `stream_connected` reports
+   `stream_output.connected` — the gateway's own Python Icecast client. DarkIce is a
+   separate legacy process; restarting it can never clear that alarm.
+
+Every fix now logs its subprocess stderr and sends a second Telegram message with the
+real outcome. A failed fix appends an `AUTO-FIX FAILED: ...` finding to the report and
+leaves the alert unread.
 
 ## Web UI
 
