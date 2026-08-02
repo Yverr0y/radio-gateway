@@ -128,7 +128,7 @@ for _f in ('bgm1.mp3', 'bgm2.mp3', 'bgm3.mp3'):
     open(os.path.join(_d, _f), 'wb').write(b'\0' * 16)
 gwb = fake_gw(BGM_FILES='', PLAYBACK_DIRECTORY=_d)
 gwb.playback_source = types.SimpleNamespace(
-    announcement_directory=_d, _decode_file=lambda p: b'\x01\x02' * 1000)
+    announcement_directory=_d, _decode_file=lambda p, normalize=True: b'\x01\x02' * 1000)
 bs = audio_sources.BGMSource(gwb)
 
 check("three beds, all available", [b['available'] for b in bs.bgm_state()] == [True]*3,
@@ -145,7 +145,7 @@ r = bs.play_slot(9, 'start')
 check("unconfigured bed rejected", r['ok'] is False and 'not configured' in r['error'], str(r))
 r = bs.play_slot('x', 'start')
 check("non-numeric rejected", r['ok'] is False)
-gwb.playback_source._decode_file = lambda p: None
+gwb.playback_source._decode_file = lambda p, normalize=True: None
 r = bs.play_slot(1, 'start')
 check("decode failure reported and cleared",
       r['ok'] is False and 'decode' in r['error'] and bs.playing_slot is None, str(r))
@@ -160,7 +160,7 @@ check("messages round-trip per bed", st['messages'] == {'1': 'one', '2': 'two'},
 
 gwc = fake_gw(BGM_FILES='', PLAYBACK_DIRECTORY=_d)
 gwc.playback_source = types.SimpleNamespace(
-    announcement_directory=_d, _decode_file=lambda p: b'\x01\x02' * 1000)
+    announcement_directory=_d, _decode_file=lambda p, normalize=True: b'\x01\x02' * 1000)
 gwc.bgm_source = audio_sources.BGMSource(gwc)
 gwc.announcer_source = audio_sources.AnnouncerSource(gwc)
 gwc.tts_engine = None            # synthesis will fail
@@ -240,7 +240,7 @@ try:
     gwx = fake_gw(BGM_FILES='', PLAYBACK_DIRECTORY=_d)
     gwx._get_tts_voices = gwv._get_tts_voices
     gwx.playback_source = types.SimpleNamespace(
-        announcement_directory=_d, _decode_file=lambda p: b'\x01' * 100)
+        announcement_directory=_d, _decode_file=lambda p, normalize=True: b'\x01' * 100)
     gwx.bgm_source = audio_sources.BGMSource(gwx)
     gwx.announcer_source = audio_sources.AnnouncerSource(gwx)
     gwx.tts_engine = object()
@@ -390,7 +390,7 @@ check("negative clamps to 0 (no cap)", audio_sources.BGMSource(gneg).max_secs ==
 gr = cap_gw(1.0)
 br = audio_sources.BGMSource(gr)
 br.gateway.playback_source = types.SimpleNamespace(
-    announcement_directory=_d, _decode_file=lambda p: b'\x00\x40' * 4800)
+    announcement_directory=_d, _decode_file=lambda p, normalize=True: b'\x00\x40' * 4800)
 br.play(1, os.path.join(_d, 'bgm1.mp3'))
 for _ in range(10):
     br.get_audio(CH2)          # half the cap

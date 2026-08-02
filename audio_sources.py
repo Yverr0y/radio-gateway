@@ -898,9 +898,16 @@ class FilePlaybackSource(AudioSource):
         if self.gateway.config.VERBOSE_LOGGING:
             print("\n[Playback] ✓ Stopped playback and cleared queue")
     
-    def _decode_file(self, filepath):
+    def _decode_file(self, filepath, normalize=True):
         """Decode an audio file to PCM bytes.  Returns bytes on success, None on failure.
-        Called from queue_file() in the caller's thread so the audio loop never blocks."""
+        Called from queue_file() in the caller's thread so the audio loop never blocks.
+
+        `normalize=False` skips the peak-normalise step. Pass it for material the
+        operator has already levelled deliberately — BGM beds are loudness-matched
+        offline, and peak-normalising them re-levels each one by its own crest
+        factor, which silently undoes that match (measured: a 0.0 LU set came out
+        2.2 dB apart). The caller states the intent rather than this function
+        guessing from the filename."""
         try:
             import os
 
@@ -979,7 +986,7 @@ class FilePlaybackSource(AudioSource):
                 # attenuates). Caller's volume slider still applies afterwards,
                 # but on already-normalised audio so ≤100% stays clean.
                 _peak = int(np.max(np.abs(audio_data))) if len(audio_data) else 0
-                if 0 < _peak < 29204:  # 29204 ≈ −1 dBFS on int16
+                if normalize and 0 < _peak < 29204:  # 29204 ≈ −1 dBFS on int16
                     _ratio = 29204.0 / _peak
                     _f32 = audio_data.astype(np.float32) * _ratio
                     audio_data = np.clip(_f32, -32768, 32767).astype(np.int16)
@@ -3734,7 +3741,8 @@ class BGMSource(AudioSource):
         ps = getattr(self.gateway, 'playback_source', None)
         if ps is None:
             return False
-        pcm = ps._decode_file(path)
+        # Beds are levelled offline; see _decode_file's normalize note.
+        pcm = ps._decode_file(path, normalize=False)
         if not pcm:
             return False
         with self._lock:

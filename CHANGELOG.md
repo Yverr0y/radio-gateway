@@ -4,6 +4,35 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Fixed — periodic clicks on the AllStar/USRP send path
+
+`UsrpPlugin.put_audio` downsampled 48 kHz → 8 kHz by calling `resample_poly` on
+each 50 ms bus chunk independently. `resample_poly` is stateless, so the
+anti-alias FIR's edge transients landed at every chunk boundary — 20 clicks a
+second, heard as "sparkles" at the far end while the same audio was clean at a
+PCM sink (which never resamples).
+
+The RX path already solved this and documents it: `_feed_rx` carries
+`RX_RESAMPLE_PAD` samples of context on each side with a held-back look-ahead.
+TX now mirrors it via `TX_RESAMPLE_PAD`. Measured against a continuously
+resampled reference: peak error **416.00 → 1.72**, rms **20.93 → 0.96**, and the
+errors no longer cluster at the chunk seam.
+
+Unkey now also clears the resampler context, not just the audio backlog —
+otherwise the next key-up began by emitting the tail of the previous
+transmission.
+
+### Fixed — the gateway re-levelled deliberately levelled audio
+
+`_decode_file` peak-normalises anything below −1 dBFS, which is right for quiet
+soundboard clips but destroys an offline loudness match: each file is boosted by
+its own crest factor. Three beds matched to 0.0 LU came out 2.2 dB apart.
+
+`_decode_file` takes `normalize=True`; only `BGMSource.play()` opts out, so the
+caller states the intent rather than the function guessing from filenames.
+Measured spread across the beds: **2.16 dB → 0.30 dB**. The soundboard path is
+untouched — a quiet clip is still lifted from −2.47 to −1.00 dBFS.
+
 ### Added — BGM runtime cap
 
 `BGM_MAX_SECONDS` (default 120, `0` = never) stops a bed automatically so an

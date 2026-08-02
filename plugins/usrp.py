@@ -282,6 +282,7 @@ BUS_CHUNK_BYTES = BUS_CHUNK_SAMPLES * 2
 # Tuning
 RX_QUEUE_MAX = 6                       # ~300 ms of 48 kHz chunks before dropping oldest
 RX_RESAMPLE_PAD = 32                   # 8 kHz input samples of filter context carried
+TX_RESAMPLE_PAD = 32 * RATE_RATIO      # same context, expressed in 48 kHz input samples
                                        # across frames so the upsampler doesn't click
                                        # at every 20 ms boundary (~8 ms added latency)
 TX_BUF_MAX_8K = USRP_RATE             # cap TX backlog at ~1 s of 8 kHz audio
@@ -346,6 +347,8 @@ class UsrpPlugin:
         # that act as "already-emitted history" so the bookkeeping is uniform
         # from the first frame.
         self._rx_in8k = np.zeros(RX_RESAMPLE_PAD, dtype=np.float32)
+        # Same trick on the way out — see put_audio.
+        self._tx_in48k = np.zeros(TX_RESAMPLE_PAD, dtype=np.float32)
         self._rx_queue = collections.deque(maxlen=RX_QUEUE_MAX)
         self._rx_queue_primed = False
 
@@ -529,20 +532,37 @@ class UsrpPlugin:
         f48 = s48.astype(np.float32)
         if self.tx_audio_boost != 1.0:
             f48 = f48 * self.tx_audio_boost
-        down = resample_poly(f48, 1, RATE_RATIO)
-        down = np.clip(down, -32768, 32767).astype(np.int16)
+
+        # Continuous (click-free) downsample, mirroring _feed_rx. resample_poly
+        # is stateless, so downsampling each 50 ms bus chunk on its own left the
+        # anti-alias FIR's edge transients at every chunk boundary — 20 clicks a
+        # second, heard as "sparkles" on the AllStar side while the same audio
+        # was clean at the PCM sink. RX was written this way from the start; TX
+        # was not. Keep PAD input samples of context each side: the leading PAD
+        # is already-emitted history, the trailing PAD is held back until the
+        # next chunk supplies its look-ahead.
+        PAD = TX_RESAMPLE_PAD
+        self._tx_in48k = np.concatenate((self._tx_in48k, f48))
+        n = len(self._tx_in48k)
+        self._tx_keyed = True
+        self._last_tx_mono = time.monotonic()
+        try:
+            self.tx_audio_level = pcm_level(pcm, self.tx_audio_level)
+        except Exception:
+            pass
+        if n < 3 * PAD:
+            return                              # not enough context yet
+        y = resample_poly(self._tx_in48k, 1, RATE_RATIO)
+        edge = PAD // RATE_RATIO                # PAD in OUTPUT (8 kHz) samples
+        out = y[edge:len(y) - edge]
+        self._tx_in48k = self._tx_in48k[-2 * PAD:]   # PAD history + PAD held back
+        down = np.clip(out, -32768, 32767).astype(np.int16)
         with self._tx_lock:
             self._tx8k.append(down)
             # Bound backlog so a stalled link can't build unbounded latency.
             total = sum(a.size for a in self._tx8k)
             while total > TX_BUF_MAX_8K and len(self._tx8k) > 1:
                 total -= self._tx8k.popleft().size
-        try:
-            self.tx_audio_level = pcm_level(pcm, self.tx_audio_level)
-        except Exception:
-            pass
-        self._tx_keyed = True
-        self._last_tx_mono = time.monotonic()
 
     def on_ptt_change(self, state):
         """Bus tells us when this sink is keyed. Promptly key/unkey USRP."""
@@ -596,6 +616,9 @@ class UsrpPlugin:
                     self._tx_keyed = False
                     with self._tx_lock:
                         self._tx8k.clear()
+                    # Drop stale filter context, otherwise the next key-up
+                    # starts by emitting the tail of the previous transmission.
+                    self._tx_in48k = np.zeros(TX_RESAMPLE_PAD, dtype=np.float32)
                     self._send_frame(np.zeros(USRP_VOICE_SAMPLES, dtype=np.int16),
                                      keyup=False)
                 # Decay the TX meter when idle. put_audio sets tx_audio_level on
