@@ -391,8 +391,12 @@ def on_text_message(gw, text_message):
                     gw.send_text_message(f"Usage: !speak [voice#] <text> — Voices: {voices}")
 
         elif command == '!play':
-            if args and args in '0123456789':
-                key = args
+            # Multi-digit now that slots run past 9. `args in '0123456789'`
+            # was a substring test, so it also matched '' and '123' — the
+            # latter would have raised a KeyError below.
+            if args and args.strip().isdigit() and \
+                    args.strip() in gw.playback_source.file_status:
+                key = args.strip()
                 if gw.playback_source:
                     path = gw.playback_source.file_status[key]['path']
                     filename = gw.playback_source.file_status[key].get('filename', '')
@@ -515,7 +519,7 @@ def on_text_message(gw, text_message):
             if gw.playback_source:
                 lines = ["=== Announcement Files ==="]
                 found = False
-                for key in '0123456789':
+                for key in gw.playback_source.slot_keys(include_station_id=True):
                     info = gw.playback_source.file_status[key]
                     if info['exists']:
                         label = "Station ID" if key == '0' else f"Slot {key}"
@@ -802,8 +806,15 @@ def handle_key(gw, char):
                 except Exception:
                     pass
             threading.Thread(target=_send_cat_config, daemon=True, name="CAT-ManualConfig").start()
-    elif char in '0123456789':
-        if gw.playback_source:
+    elif char.isdigit():
+        # A physical keypress is one character, so the keyboard can only reach
+        # slots 0-9 however many are configured. The web UI posts the slot id as
+        # a string, so multi-digit slots arrive here too and must work.
+        #
+        # This used to be `char in '0123456789'`, a SUBSTRING test: '12' passed
+        # (it is a substring) but '13' did not, so slots would have worked or
+        # not depending on whether their digits happened to be adjacent.
+        if gw.playback_source and char in gw.playback_source.file_status:
             stored_path = gw.playback_source.file_status[char]['path']
             if stored_path:
                 _vol = getattr(gw.config, 'PLAYBACK_VOLUME', 4.0)

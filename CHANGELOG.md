@@ -4,6 +4,50 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Fixed — the test loop's Stop button could not stop it
+
+The Loop button was a blind toggle whose lit state lived only in the browser.
+Loop state was never published in `/status`, so anything that stopped playback
+server-side (the Stop button, a queued announcement, a restart) left the button
+lit *and inverted* — the next click sent "toggle" to a server that was not
+looping and therefore **started** a loop instead of stopping one. The same gap
+left the button illuminated indefinitely after the sample ended.
+
+- `/testloop` takes an explicit `{"action": "start"|"stop"|"toggle"}`; the
+  button sends what it means instead of toggling blind.
+- `loop_active` is published in `/status` and the button re-syncs from it on
+  every poll, so any server-side change is reflected within one tick.
+- A start that finds no `loop.*` file no longer leaves the flag asserted.
+- `toggleTestLoop` moved to `common.js`; `dash_operate.html` had a second copy
+  that shadowed it (the inline script loads after `common.js`).
+
+### Fixed — loop.mp3 occupied a playback slot
+
+The slot scanner globbed the audio directory and excluded only `station_id`, so
+the test-loop bed was assigned to slot 1. Pressing Loop and pressing 1 played
+the same file, which is why the loop looked like it was playing "the sample in
+button 1". `loop.*` is now reserved alongside `station_id*`.
+
+### Fixed — `handle_key` used a substring test for slot ids
+
+`char in '0123456789'` is a substring match, so a two-digit slot id passed only
+when its digits happened to be adjacent — `'12'` worked, `'13'` did not. Now an
+explicit `isdigit()` plus a membership check against the real slot set.
+
+### Added — configurable playback slots (default 20)
+
+`PLAYBACK_SLOTS` (1-99, default 20) replaces the hardcoded nine. The web grid is
+built from `/status` rather than hardcoded HTML, so the count is a config change
+rather than an edit, and filename prefixes now accept multiple digits
+(`12_siren.mp3` claims slot 12).
+
+Only slots 1-9 are reachable from the **physical keyboard** — a keypress is one
+character. Higher slots work from the web UI, `!play <n>` and MCP.
+
+UI: the playback grid is sounds only, with transport (Stop / Loop / New / Cats)
+on its own row beneath, and both grids use `auto-fit` columns instead of a fixed
+three — twenty pads in three columns is a very tall panel.
+
 ### Fixed — every Edge/gTTS voice came out as voice 1
 
 Voice selection has never worked on the Edge or gTTS backends. The web UI

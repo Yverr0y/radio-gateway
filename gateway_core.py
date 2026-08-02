@@ -706,6 +706,13 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             ],
             'files': file_slots,
             'playback_enabled': bool(self.playback_source),
+            # Loop state must be in /status: it is the only way the Loop
+            # button can re-sync after the loop is stopped by something
+            # other than that button (Stop, a queued announcement, a
+            # restart). Without it the button stayed lit for ever.
+            'loop_active': bool(getattr(self.playback_source, 'loop_active', False)),
+            'playback_slots': int(getattr(self.playback_source, 'slot_count', 9))
+                              if self.playback_source else 0,
             'tts_enabled': bool(getattr(self, 'tts_engine', None)),
             'tts_voices': self._get_tts_voices(),
             'tts_backend': getattr(self, '_tts_backend', 'edge'),

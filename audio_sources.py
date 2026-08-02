@@ -104,20 +104,42 @@ class FilePlaybackSource(AudioSource):
         self.announcement_interval = config.PLAYBACK_ANNOUNCEMENT_INTERVAL if hasattr(config, 'PLAYBACK_ANNOUNCEMENT_INTERVAL') else 0
         self.announcement_directory = config.PLAYBACK_DIRECTORY if hasattr(config, 'PLAYBACK_DIRECTORY') else './audio/'
         
-        # File status tracking for status line indicators (0-9 = 10 files)
+        # Playback slots. Slot '0' is always the station ID; '1'..PLAYBACK_SLOTS
+        # are the soundboard. Keys are STRINGS throughout because slot 0 is
+        # special-cased by name in several places and the web UI passes them as
+        # JSON strings.
+        #
+        # Only 1-9 can ever be reached from the physical keyboard — a keypress
+        # is one character, so there is no way to type slot 12. Higher slots are
+        # addressable from the web UI, `!play 12` in Mumble, and MCP.
+        self.slot_count = max(1, min(99, int(getattr(config, 'PLAYBACK_SLOTS', 20))))
         self.file_status = {
-            '0': {'exists': False, 'playing': False, 'path': None},  # station_id
-            '1': {'exists': False, 'playing': False, 'path': None},
-            '2': {'exists': False, 'playing': False, 'path': None},
-            '3': {'exists': False, 'playing': False, 'path': None},
-            '4': {'exists': False, 'playing': False, 'path': None},
-            '5': {'exists': False, 'playing': False, 'path': None},
-            '6': {'exists': False, 'playing': False, 'path': None},
-            '7': {'exists': False, 'playing': False, 'path': None},
-            '8': {'exists': False, 'playing': False, 'path': None},
-            '9': {'exists': False, 'playing': False, 'path': None}
+            k: {'exists': False, 'playing': False, 'path': None}
+            for k in self.slot_keys(include_station_id=True)
         }
         self.check_file_availability()
+
+    def slot_keys(self, include_station_id=False):
+        """Soundboard slot keys as strings, in display order.
+
+        Station ID ('0') is listed LAST when included, matching the status bar
+        and the on-screen grid where it sits after the numbered slots.
+        """
+        keys = [str(i) for i in range(1, self.slot_count + 1)]
+        if include_station_id:
+            keys.append('0')
+        return keys
+
+    # Files that live in the audio directory but must never occupy a slot.
+    # station_id is the periodic ID; loop.* is the test-loop bed, which used to
+    # get scooped up as slot 1 — pressing Loop then looked like it was playing
+    # "the sample in button 1", because it was the same file.
+    _RESERVED_PREFIXES = ('station_id', 'loop.')
+
+    @classmethod
+    def _is_reserved(cls, filename):
+        name = os.path.basename(filename).lower()
+        return any(name.startswith(p) for p in cls._RESERVED_PREFIXES)
     
     def check_file_availability(self):
         """Scan audio directory and intelligently load files"""
@@ -151,44 +173,33 @@ class FilePlaybackSource(AudioSource):
         # Sort files alphabetically for consistent loading
         all_files.sort()
         
-        # First pass: Look for files with number prefixes (1_ through 9_)
+        slot_keys = self.slot_keys()
+
+        # First pass: files named "<n>_something" claim slot <n>. Multi-digit
+        # prefixes are supported now that there can be more than nine slots,
+        # so 12_siren.mp3 lands in slot 12.
         for filepath in all_files:
             filename = os.path.basename(filepath)
-            
-            # Skip station_id files
-            if filename.startswith('station_id'):
+            if self._is_reserved(filename):
                 continue
-            
-            # Check for number prefix (1_ through 9_)
-            if len(filename) >= 2 and filename[0].isdigit() and filename[1] == '_':
-                key = filename[0]
-                if key in '123456789' and key not in file_map:
-                    file_map[key] = (filepath, filename)
-        
-        # Second pass: If slots still empty, fill with any remaining files
-        unassigned_files = [f for f in all_files 
-                           if os.path.basename(f) not in [v[1] for v in file_map.values()]
-                           and not os.path.basename(f).startswith('station_id')]
-        
-        # Fill empty slots in order (1-9)
-        for filepath in unassigned_files:
-            # Find next empty slot
-            assigned = False
-            for slot in range(1, 10):
-                key = str(slot)
-                if key not in file_map:
-                    file_map[key] = (filepath, os.path.basename(filepath))
-                    assigned = True
-                    break
-            
-            if not assigned:
-                # All slots 1-9 are full
-                break
+            prefix = filename.split('_', 1)[0]
+            if prefix.isdigit() and prefix in slot_keys and prefix not in file_map:
+                file_map[prefix] = (filepath, filename)
+
+        # Second pass: anything left fills the remaining slots in order.
+        claimed = {v[1] for v in file_map.values()}
+        unassigned_files = [f for f in all_files
+                            if os.path.basename(f) not in claimed
+                            and not self._is_reserved(f)]
+
+        empty = [k for k in slot_keys if k not in file_map]
+        for filepath, key in zip(unassigned_files, empty):
+            file_map[key] = (filepath, os.path.basename(filepath))
         
         # Step 4: Update file_status with found files (local files only here —
         # soundboard downloads complete asynchronously and update file_status
         # themselves as each file lands).
-        for key in '0123456789':
+        for key in self.slot_keys(include_station_id=True):
             if key in file_map:
                 filepath, filename = file_map[key]
                 self.file_status[key]['exists'] = True
@@ -548,7 +559,7 @@ class FilePlaybackSource(AudioSource):
         """Download random sound effects from Mixkit to fill empty playback slots."""
         import os, random, urllib.request
 
-        empty_slots = [str(k) for k in range(1, 10) if str(k) not in file_map]
+        empty_slots = [k for k in self.slot_keys() if k not in file_map]
         if not empty_slots:
             return
 
@@ -678,8 +689,8 @@ class FilePlaybackSource(AudioSource):
         # Show all keys 1-9 then 0 (matching status bar order)
         # Format: "Key [N]: filename.mp3" or "Key [N]: <none>"
         
-        # Keys 1-9 - Announcements
-        for key in '123456789':
+        # Numbered slots - Announcements
+        for key in self.slot_keys():
             if key in file_map:
                 lines.append(f"Key [{key}]: {file_map[key][1]}")
             else:
@@ -784,25 +795,45 @@ class FilePlaybackSource(AudioSource):
 
         return True
     
-    def toggle_test_loop(self):
-        """Toggle test loop — plays loop.mp3/loop.wav from audio dir on repeat."""
+    def toggle_test_loop(self, action='toggle'):
+        """Start/stop the test loop (loop.mp3/wav/ogg from the audio dir).
+
+        `action` is 'start', 'stop' or 'toggle'. Explicit actions exist because
+        a blind toggle desynchronises: the loop also stops via stop_playback()
+        (the Stop button, a queued announcement, PTT release), and the button
+        never learned. The UI would then show "Stop Loop" while the server was
+        idle, so the next click STARTED a loop instead of stopping one — which
+        is exactly the "stop loop won't stop it" report. The button now sends
+        what it means and re-syncs from /status.
+        """
         import os
-        if self._loop_active:
-            # Stop loop
+        action = str(action or 'toggle').lower()
+        want_stop = action == 'stop' or (action == 'toggle' and self._loop_active)
+
+        if want_stop:
+            was = self._loop_active
             self._loop_active = False
-            self.stop_playback()
-            print("[Playback] Test loop stopped")
-            return {'ok': True, 'looping': False}
-        # Find loop file
-        audio_dir = self.announcement_directory
+            if was:
+                self.stop_playback()
+                print("[Playback] Test loop stopped")
+            return {'ok': True, 'looping': False, 'was_looping': was}
+
         for name in ('loop.mp3', 'loop.wav', 'loop.ogg'):
-            path = os.path.join(audio_dir, name)
+            path = os.path.join(self.announcement_directory, name)
             if os.path.exists(path):
                 self._loop_active = True
                 self.queue_file(path)
                 print(f"[Playback] Test loop started: {name}")
                 return {'ok': True, 'looping': True, 'file': name}
-        return {'ok': False, 'error': 'No loop.mp3/loop.wav found in audio/'}
+        # Nothing to play — make sure we do not leave the flag (and therefore
+        # the button) asserted for a loop that never started.
+        self._loop_active = False
+        return {'ok': False, 'looping': False,
+                'error': 'No loop.mp3/loop.wav/loop.ogg found in the audio directory'}
+
+    @property
+    def loop_active(self):
+        return bool(self._loop_active)
 
     def stop_playback(self):
         """Stop current playback and clear queue"""

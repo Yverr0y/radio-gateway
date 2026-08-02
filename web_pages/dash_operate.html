@@ -16,21 +16,12 @@
   <div class="panel-head">
     <h2 class="panel-title">Playback</h2>
   </div>
-  <div class="pb-grid">
-    <button class="ctrl-btn" onclick="sendKey('1')" id="btn-f1"><span class="pb-key">1</span><span class="pb-name" id="pb-name-1"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('2')" id="btn-f2"><span class="pb-key">2</span><span class="pb-name" id="pb-name-2"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('3')" id="btn-f3"><span class="pb-key">3</span><span class="pb-name" id="pb-name-3"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('4')" id="btn-f4"><span class="pb-key">4</span><span class="pb-name" id="pb-name-4"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('5')" id="btn-f5"><span class="pb-key">5</span><span class="pb-name" id="pb-name-5"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('6')" id="btn-f6"><span class="pb-key">6</span><span class="pb-name" id="pb-name-6"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('7')" id="btn-f7"><span class="pb-key">7</span><span class="pb-name" id="pb-name-7"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('8')" id="btn-f8"><span class="pb-key">8</span><span class="pb-name" id="pb-name-8"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('9')" id="btn-f9"><span class="pb-key">9</span><span class="pb-name" id="pb-name-9"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('0')" id="btn-f0"><span class="pb-key">ID</span><span class="pb-name" id="pb-name-0"></span></button>
-    <button class="ctrl-btn" onclick="sendKey('-')">Stop</button>
-    <button class="ctrl-btn" onclick="refreshSounds()" title="Refresh random sounds" aria-label="Refresh random sounds" style="grid-column:1">&#x21bb;</button>
-    <button class="ctrl-btn" onclick="openSoundboardPicker()" title="Choose soundboard categories" aria-label="Choose soundboard categories">Cats</button>
-    <button class="ctrl-btn" onclick="toggleTestLoop(this)" id="btn-test-loop">Loop</button>
+  <div class="pb-grid" id="pb-grid"></div>
+  <div class="pb-controls">
+    <button class="ctrl-btn" onclick="sendKey('-')" title="Stop playback">Stop</button>
+    <button class="ctrl-btn" onclick="toggleTestLoop(this)" id="btn-test-loop" title="Loop audio/loop.mp3">Loop</button>
+    <button class="ctrl-btn" onclick="refreshSounds()" title="Load a fresh set of random sounds" aria-label="Refresh random sounds">&#x21bb; New</button>
+    <button class="ctrl-btn" onclick="openSoundboardPicker()" title="Choose soundboard categories">Cats</button>
   </div>
   <div class="smart-row" id="smart-announce-group">
     <button class="ctrl-btn" onclick="sendKey('[')"><span class="pb-key">Smart #1</span><span class="pb-name" id="smart-st-1"></span></button>
@@ -198,9 +189,9 @@ function refreshSounds() {
     showToast(msg);
   });
 }
-function toggleTestLoop(btn) {
-  postJson('/testloop',{}).then(function(d){ btn.classList.toggle('muted',!!d.looping); btn.textContent=d.looping?'Stop Loop':'Loop'; if(d.error)alert(d.error); });
-}
+// toggleTestLoop lives in common.js (shared with /controls). Defining it here
+// too would shadow the shared version — this inline script loads after
+// common.js — and reintroduce the blind-toggle bug.
 
 // ── /status: panel visibility, playback files, smart announce, voices ──
 createStatusPoller(function(s) {
@@ -247,13 +238,8 @@ createStatusPoller(function(s) {
       if(span&&!span.textContent){span.textContent=sc.remaining; span.className='pb-name'; span.style.color='var(--t-text-dim)';}
     }
   }
-  if(s.files){
-    for(var fk in s.files){
-      var fb=document.getElementById('btn-f'+fk); var fn=document.getElementById('pb-name-'+fk); var fi=s.files[fk];
-      if(fb){fb.classList.toggle('muted',!!fi.playing); fb.classList.toggle('dim',!fi.loaded); if(fi.name)fb.title=fi.name;}
-      if(fn) fn.textContent=fi.loaded&&fi.name?fi.name.replace(/\.[^.]+$/,'').substring(0,11):'';
-    }
-  }
+  renderPlaybackGrid(s);
+  syncLoopButton(s);
 });
 
 // ── Automation ──

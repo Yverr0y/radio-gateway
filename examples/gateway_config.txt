@@ -365,6 +365,11 @@ PLAYBACK_VOLUME = 1.0
 # Example: 3600 = play station_id file once per hour
 PLAYBACK_ANNOUNCEMENT_INTERVAL = 0
 
+# Number of soundboard slots (1..N). Slot 0 is always the station ID.
+# Only 1-9 can be triggered from the physical keyboard (a keypress is one
+# character); higher slots work from the web UI, `!play <n>` and MCP.
+PLAYBACK_SLOTS = 20
+
 # --- Soundboard ---
 # Empty playback slots (keys 1-9) are auto-filled with random royalty-free
 # sound effects, re-rolled by the Refresh button on /controls and

@@ -323,6 +323,11 @@ class Config:
             'WEB_MIC_VOLUME': 4.0,              # volume multiplier for browser mic audio
             # Web Monitor (browser mic → mixer via WebSocket, no PTT)
             'ENABLE_WEB_MONITOR': True,
+            # Number of soundboard slots (1..N). Slot 0 is always the station ID.
+            # NOTE only 1-9 are reachable from the physical keyboard — a keypress
+            # is a single character. Higher slots work from the web UI, `!play <n>`
+            # and MCP.
+            'PLAYBACK_SLOTS': 20,
             # Soundboard — auto-fill empty playback slots with random sound effects
             'ENABLE_SOUNDBOARD': True,
             # Restrict which categories the soundboard draws from. Comma-separated;

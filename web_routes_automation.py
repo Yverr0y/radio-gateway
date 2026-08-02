@@ -200,14 +200,15 @@ def handle_refreshsounds(handler, parent):
                 shutil.rmtree(_cache_dir)
             # Re-scan files (local files stay, new random fills)
             gw.playback_source.check_file_availability()
-            _count = sum(1 for k in '123456789' if gw.playback_source.file_status[k]['exists']
+            _slots = gw.playback_source.slot_keys()
+            _count = sum(1 for k in _slots if gw.playback_source.file_status[k]['exists']
                          and gw.playback_source.file_status[k].get('path', '').find('.cache') >= 0)
             # Downloads run on the Soundboard-prefetch thread started inside
             # check_file_availability(), so most of them have NOT landed by the
             # time we get here — _count alone reports ~0 and the UI used to say
             # "Refreshed 0 sounds" on a perfectly good refresh. Report the slots
             # still being filled too so the message can be truthful.
-            _pending = sum(1 for k in '123456789'
+            _pending = sum(1 for k in _slots
                            if not gw.playback_source.file_status[k]['exists'])
             result = {'ok': True, 'count': _count, 'pending': _pending}
             # Report which categories are in play and what else is on offer, so

@@ -492,3 +492,85 @@ function initTtsEngineSelect() {
 }
 
 document.addEventListener('DOMContentLoaded', initTtsEngineSelect);
+
+// ── Playback grid ───────────────────────────────────────────────────────────
+// Built from /status rather than hardcoded in each page, so PLAYBACK_SLOTS can
+// change without editing HTML. Shared by /controls and /dashboard/operate.
+
+function renderPlaybackGrid(s) {
+  var grid = document.getElementById('pb-grid');
+  if (!grid || !s.files) return;
+
+  // Rebuild only when the SET of slots changes — rebuilding every poll would
+  // fight the user's clicks and flicker the labels.
+  var keys = Object.keys(s.files).sort(function (a, b) {
+    if (a === '0') return 1;          // station ID sorts last
+    if (b === '0') return -1;
+    return (+a) - (+b);
+  });
+  var key = keys.join(',');
+  if (grid.dataset.slotKey !== key) {
+    grid.dataset.slotKey = key;
+    grid.innerHTML = keys.map(function (k) {
+      var label = k === '0' ? 'ID' : k;
+      return '<button class="ctrl-btn" onclick="sendKey(\'' + k + '\')" ' +
+             'id="btn-f' + k + '" aria-label="Play slot ' + label + '">' +
+             '<span class="pb-key">' + label + '</span>' +
+             '<span class="pb-name" id="pb-name-' + k + '"></span></button>';
+    }).join('');
+  }
+
+  keys.forEach(function (k) {
+    var b = document.getElementById('btn-f' + k);
+    var n = document.getElementById('pb-name-' + k);
+    var f = s.files[k];
+    if (b) {
+      b.classList.toggle('muted', !!f.playing);
+      b.classList.toggle('dim', !f.loaded);
+      b.title = f.name || ('Slot ' + k + ' (empty)');
+    }
+    if (n) n.textContent = f.loaded && f.name ? f.name.replace(/\.[^.]+$/, '').substring(0, 11) : '';
+  });
+}
+
+// ── Loop button ─────────────────────────────────────────────────────────────
+// Sends an explicit start/stop and reflects the SERVER's state on every poll.
+// It used to be a blind toggle whose lit state lived only in the browser, so
+// anything that stopped the loop server-side (the Stop button, a queued
+// announcement, a restart) left the button lit and inverted — the next click
+// then started a loop instead of stopping one.
+
+function syncLoopButton(s) {
+  var btn = document.getElementById('btn-test-loop');
+  if (!btn || typeof s.loop_active === 'undefined') return;
+  if (btn.dataset.busy === '1') return;      // don't fight an in-flight click
+  var on = !!s.loop_active;
+  btn.classList.toggle('muted', on);
+  btn.textContent = on ? 'Stop Loop' : 'Loop';
+  btn.dataset.looping = on ? '1' : '0';
+}
+
+function toggleTestLoop(btn) {
+  btn = btn || document.getElementById('btn-test-loop');
+  if (!btn) return;
+  // Say what we mean rather than toggling blind.
+  var action = btn.dataset.looping === '1' ? 'stop' : 'start';
+  btn.dataset.busy = '1';
+  fetch('/testloop', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: action})
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      btn.dataset.busy = '';
+      btn.dataset.looping = d.looping ? '1' : '0';
+      btn.classList.toggle('muted', !!d.looping);
+      btn.textContent = d.looping ? 'Stop Loop' : 'Loop';
+      if (d.error) _sbNotify(d.error, 'error');
+    })
+    .catch(function (e) {
+      btn.dataset.busy = '';
+      _sbNotify('Loop failed: ' + e, 'error');
+    });
+}

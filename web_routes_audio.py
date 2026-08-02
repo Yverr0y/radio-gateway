@@ -28,10 +28,19 @@ def _resolve_source(gw, source_id):
 
 
 def handle_testloop(handler, parent):
-    """POST /testloop"""
+    """POST /testloop  {"action": "start"|"stop"|"toggle"}"""
     result = {'ok': False, 'error': 'playback not available'}
+    action = 'toggle'
+    try:
+        length = int(handler.headers.get('Content-Length', 0))
+        if length:
+            action = str(json_mod.loads(
+                handler.rfile.read(length).decode('utf-8') or '{}'
+            ).get('action', 'toggle'))
+    except Exception:
+        action = 'toggle'   # unreadable body behaves like the old endpoint
     if parent.gateway and parent.gateway.playback_source:
-        result = parent.gateway.playback_source.toggle_test_loop()
+        result = parent.gateway.playback_source.toggle_test_loop(action)
     handler.send_response(200)
     handler.send_header('Content-Type', 'application/json')
     handler.end_headers()

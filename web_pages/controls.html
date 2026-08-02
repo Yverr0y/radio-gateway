@@ -95,11 +95,16 @@
   .st-line.err     { color: var(--t-err); }
 
   /* Playback */
+  /* auto-fit so the grid reflows for any PLAYBACK_SLOTS rather than being
+     locked to 3 columns. */
   .pb-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
     gap: 3px;
   }
+  /* Transport/controls separated from the sound pads. */
+  .pb-controls { display: flex; flex-wrap: wrap; gap: 3px; margin-top: var(--s-2); }
+  .pb-controls button { flex: 1 1 auto; min-width: 64px; margin: 0; }
   .pb-grid button {
     display: flex;
     flex-direction: column;
@@ -249,21 +254,12 @@
 
   <div class="ctrl-group ctrl-inline" id="playback-group">
     <h3>Playback</h3>
-    <div class="pb-grid">
-      <button onclick="sendKey('1')" id="btn-f1"><span class="pb-key">1</span><span class="pb-name" id="pb-name-1"></span></button>
-      <button onclick="sendKey('2')" id="btn-f2"><span class="pb-key">2</span><span class="pb-name" id="pb-name-2"></span></button>
-      <button onclick="sendKey('3')" id="btn-f3"><span class="pb-key">3</span><span class="pb-name" id="pb-name-3"></span></button>
-      <button onclick="sendKey('4')" id="btn-f4"><span class="pb-key">4</span><span class="pb-name" id="pb-name-4"></span></button>
-      <button onclick="sendKey('5')" id="btn-f5"><span class="pb-key">5</span><span class="pb-name" id="pb-name-5"></span></button>
-      <button onclick="sendKey('6')" id="btn-f6"><span class="pb-key">6</span><span class="pb-name" id="pb-name-6"></span></button>
-      <button onclick="sendKey('7')" id="btn-f7"><span class="pb-key">7</span><span class="pb-name" id="pb-name-7"></span></button>
-      <button onclick="sendKey('8')" id="btn-f8"><span class="pb-key">8</span><span class="pb-name" id="pb-name-8"></span></button>
-      <button onclick="sendKey('9')" id="btn-f9"><span class="pb-key">9</span><span class="pb-name" id="pb-name-9"></span></button>
-      <button onclick="sendKey('0')" id="btn-f0"><span class="pb-key">ID</span><span class="pb-name" id="pb-name-0"></span></button>
-      <button onclick="sendKey('-')">Stop</button>
-      <button onclick="refreshSounds()" title="Refresh random sounds">&#x21bb;</button>
-      <button onclick="openSoundboardPicker()" title="Choose soundboard categories">Cats</button>
+    <div class="pb-grid" id="pb-grid"></div>
+    <div class="pb-controls">
+      <button onclick="sendKey('-')" title="Stop playback">Stop</button>
       <button onclick="toggleTestLoop(this)" id="btn-test-loop" title="Loop audio/loop.mp3">Loop</button>
+      <button onclick="refreshSounds()" title="Load a fresh set of random sounds">&#x21bb; New</button>
+      <button onclick="openSoundboardPicker()" title="Choose soundboard categories">Cats</button>
     </div>
     <div class="smart-row" id="smart-announce-group">
       <button onclick="sendKey('[')">Smart #1</button>
@@ -386,18 +382,7 @@ function setStatus(id, text, cls) {
   el.textContent = text;
 }
 
-function toggleTestLoop(btn) {
-  postJson('/testloop', {}).then(function(d) {
-    if (d.looping) {
-      btn.classList.add('muted');
-      btn.textContent = 'Stop Loop';
-    } else {
-      btn.classList.remove('muted');
-      btn.textContent = 'Loop';
-    }
-    if (d.error) alert(d.error);
-  });
-}
+// toggleTestLoop lives in common.js (shared with the dashboard).
 
 // ── Link endpoint helpers ──
 window._lastLinkEndpoints = [];
@@ -535,21 +520,8 @@ createPoller('/status', 1000, function(s) {
     }
   }
   // Playback button states + name fragments
-  if (s.files) {
-    for (var fk in s.files) {
-      var fb = document.getElementById('btn-f' + fk);
-      var fn = document.getElementById('pb-name-' + fk);
-      var fi = s.files[fk];
-      if (fb) {
-        fb.classList.toggle('muted', !!fi.playing);
-        fb.classList.toggle('dim', !fi.loaded);
-        if (fi.name) fb.title = fi.name;
-      }
-      if (fn) {
-        setText(fn, fi.loaded && fi.name ? fi.name.replace(/\.[^.]+$/, '').substring(0, 11) : '');
-      }
-    }
-  }
+  renderPlaybackGrid(s);
+  syncLoopButton(s);
   // Show/hide sections
   function showIf(id, cond) { var e = document.getElementById(id); if (e) e.style.display = cond ? '' : 'none'; }
   showIf('playback-group', s.playback_enabled);

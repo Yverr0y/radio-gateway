@@ -396,7 +396,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         ('playback', 'System Sounds', [
             'ENABLE_PLAYBACK', 'PLAYBACK_DIRECTORY',
             'PLAYBACK_ANNOUNCEMENT_FILE', 'PLAYBACK_ANNOUNCEMENT_INTERVAL',
-            'PLAYBACK_VOLUME', 'ENABLE_SOUNDBOARD', 'SOUNDBOARD_CATEGORIES',
+            'PLAYBACK_VOLUME', 'PLAYBACK_SLOTS', 'ENABLE_SOUNDBOARD', 'SOUNDBOARD_CATEGORIES',
             'SOUNDBOARD_MAX_SECONDS',
         ]),
         ('kv4p', 'KV4P HT Radio', [

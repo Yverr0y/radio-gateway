@@ -100,6 +100,7 @@ def run_pick(cat_filter, slots=9, seed=0):
     s = object.__new__(FP)
     s.config = types.SimpleNamespace(SOUNDBOARD_CATEGORIES=cat_filter)
     s.announcement_directory = tempfile.mkdtemp()
+    s.slot_count = 9      # these cases are written around 9 numbered slots
     s.file_status = {str(k): {'exists': False, 'path': '', 'filename': ''}
                      for k in range(10)}
     file_map = {}
@@ -156,6 +157,7 @@ def cap_src(max_secs, durations, tmpdir=None):
     s = object.__new__(FP)
     s.config = types.SimpleNamespace(SOUNDBOARD_CATEGORIES='', SOUNDBOARD_MAX_SECONDS=max_secs)
     s.announcement_directory = tmpdir or tempfile.mkdtemp()
+    s.slot_count = 9
     s.file_status = {str(k): {'exists': False, 'path': '', 'filename': ''} for k in range(10)}
     s._durations = durations
     s._sound_duration = lambda path: durations.get(
