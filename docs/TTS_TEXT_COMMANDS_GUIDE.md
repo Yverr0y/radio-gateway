@@ -4,11 +4,22 @@
 
 Three engines are available, selected via `TTS_ENGINE` in `gateway_config.txt`:
 
-| Engine | Quality | Requires | Voices |
-|--------|---------|----------|--------|
-| `kokoro` | High — offline neural (default) | ONNX models in `tools/models/kokoro/` (~340 MB, downloaded by install.sh) | 54 voices across 9 languages |
-| `edge` | High — Microsoft Neural (online) | Internet + `edge-tts` pip package | ~300 voices |
-| `gtts` | Moderate — Google Translate (online) | Internet + `gtts` pip package | 9 accents (numeric) |
+| Engine | Quality | Requires | Voices selectable |
+|--------|---------|----------|-------------------|
+| `kokoro` | High — offline neural (default) | ONNX models in `tools/models/kokoro/` (~340 MB, downloaded by install.sh) | 55 across 9 languages |
+| `edge` | High — Microsoft Neural (online) | Internet + `edge-tts` pip package | 47 English voices, 14 locales |
+| `gtts` | Moderate — Google Translate (online) | Internet + `gtts` pip package | 22 accents / languages |
+
+**Switching engines is live.** The engine dropdown sits next to the voice
+dropdown on `/controls` and `/dashboard/operate`; picking one rebuilds the
+backend in place and persists the choice — no gateway restart. Engines whose
+pip package is missing appear greyed out rather than hidden. A switch that
+fails leaves the previous working engine running, and only writes config on
+success, so you cannot end up booting into a broken engine.
+
+The voice list follows the active engine automatically. Edge labels carry
+Microsoft's own personality tags where useful — `Ana (US F) — Cartoon`,
+`Christopher (US M) — Authority`, `Roger (US M) — Lively`.
 
 ### Installing / upgrading
 
@@ -136,6 +147,74 @@ The voice dropdown in `/controls` and the dashboard's Operate page (`/dashboard/
 
 ---
 
+## Soundboard
+
+Playback slots with no local file are auto-filled with random royalty-free
+sound effects (Mixkit). **Refresh** (`↻ New`) re-rolls them; **Cats** opens a
+tick-list of the 31 categories with sound counts.
+
+| Key | Meaning |
+|-----|---------|
+| `PLAYBACK_SLOTS` | number of slots, default 20 (slot 0 is the station ID) |
+| `SOUNDBOARD_CATEGORIES` | comma-separated; `-name` excludes; blank = all |
+| `SOUNDBOARD_MAX_SECONDS` | reject clips longer than this, default 15 (`0` = no cap) |
+
+Both apply on the next Refresh with no restart. Ticking every category stores
+*blank* rather than a 31-name list, so a pool that grows later is picked up
+automatically. A filter that matches nothing falls back to the full pool — a
+silent soundboard is worse than an ignored filter.
+
+The length cap exists because the pool contains full-length music tracks (id
+2474 is 72 s) that are useless as effects. Measured lengths are remembered in
+`<playback-dir>/.soundboard_meta.json`, deliberately *outside* the `.cache`
+directory that Refresh wipes, so a rejected clip is never re-fetched.
+
+Files named `station_id*`, `loop.*` and the configured BGM beds are reserved and
+never occupy a numbered slot.
+
+## Background music and the repeating message
+
+Three looping music beds, each with its own spoken message, mixed with
+broadcast-style ducking. Both are **their own routing nodes** — `BGM` and
+`Announcer` — so you wire them wherever you want in `/routing`.
+
+Drop `bgm1.mp3`, `bgm2.mp3`, `bgm3.mp3` in the playback directory (or set
+`BGM_FILES`), then press a BGM pad. **Msg** opens a dialog with one message and
+one voice picker per bed.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `BGM_FILES` | `bgm1.mp3, bgm2.mp3, bgm3.mp3` | the beds |
+| `BGM_DUCK_DB` | `-12.0` | how far the bed drops under the voice — never to zero |
+| `BGM_DUCK_ATTACK` | `0.25` | seconds to duck down |
+| `BGM_DUCK_HOLD` | `0.4` | seconds held down across gaps, so it cannot pump |
+| `BGM_DUCK_RELEASE` | `1.2` | seconds to come back up |
+| `BGM_MAX_SECONDS` | `120` | stop the bed automatically (`0` = never) |
+| `ANNOUNCER_INTERVAL` | `10` | seconds between repeats, measured from the *end* of speech |
+
+Behaviour worth knowing:
+
+- The announcer speaks whichever bed is playing, and goes quiet when BGM stops.
+  A bed with no message plays music only — that is not an error.
+- Only one bed loops at a time; starting another swaps rather than stacking.
+- Messages persist in `~/.config/radio-gateway/announcer.json`. Text is saved
+  even if TTS fails, and a message that fails to synthesise is left *disabled*
+  rather than enabled-but-mute.
+- A per-bed voice belonging to a different engine is dropped in favour of the
+  engine default, so hot-swapping the engine degrades rather than breaks.
+
+### Why the bed ducks itself
+
+Ducking lives in `BGMSource`, not the bus. Only `ListenBus` implements ducking
+at all, and a listen bus gates its Mumble sink on a **bus-wide VAD flag** that
+steady music does not hold open — routing a bed through one makes the music
+vanish between announcements while the voice punches through. Ducking in the
+source works on any bus type. See `_duck_target` in `audio_sources.py`.
+
+Beds are decoded with `normalize=False`, so a set levelled offline keeps its
+loudness match. The peak-normalise that quiet soundboard clips rely on would
+otherwise re-level each bed by its own crest factor.
+
 ## Mumble Chat Commands
 
 ### !speak \<text\>
@@ -175,13 +254,19 @@ Send Morse code (CW) on radio.
 
 Config: `CW_WPM` (default 20 wpm), `CW_FREQUENCY` (default 600 Hz), `CW_VOLUME` (default 1.0).
 
-### !play \<0–9\>
-Play an announcement file by slot number.
+### !play \<slot\>
+Play an announcement file by slot number. `PLAYBACK_SLOTS` (default 20) sets how
+many there are; slot 0 is always the station ID.
 
 ```
 !play 0     # Station ID
 !play 1     # Announcement slot 1
+!play 12    # Slot 12 — multi-digit slots work here
 ```
+
+Only slots 0–9 can be triggered from the **physical keyboard**, because a
+keypress is a single character. Higher slots work from the web UI, `!play` and
+MCP.
 
 ### !files
 List loaded announcement files and their slot numbers.

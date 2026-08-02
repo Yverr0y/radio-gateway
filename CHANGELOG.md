@@ -2,7 +2,14 @@
 
 All notable changes to Radio Gateway.
 
-## [Unreleased]
+## [4.3.0] -- 2026-08-02
+
+Background music beds with a repeating spoken message and broadcast ducking, a
+hot-swappable TTS engine with 85 more voices, a soundboard category picker, 20
+playback slots — plus the audio-path fixes found while building them: a stream
+deadlock that had cost 15 hours of dead air, fleet-manager auto-fixes that had
+never once worked, periodic clicks on the AllStar send path, and resampling
+that was ~100x slower than it needed to be.
 
 ### Fixed — routing page: `.title-box` never existed
 
