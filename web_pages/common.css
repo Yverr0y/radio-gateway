@@ -538,3 +538,72 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--t-accent); }
   opacity: 0.55;
   box-shadow: 0 0 2px rgba(0,0,0,0.5);
 }
+
+/* ── Soundboard category picker ─────────────────────────────────────────────
+   Native <dialog> so Esc-to-close and focus trapping come for free. Built on
+   demand by openSoundboardPicker() in common.js; shared by /controls and
+   /dashboard/operate. */
+.sb-dialog {
+  background: var(--t-panel);
+  color: var(--t-text);
+  border: 1px solid var(--t-border-hi);
+  border-radius: var(--r-md);
+  padding: var(--s-4);
+  max-width: min(560px, 92vw);
+  width: 100%;
+}
+.sb-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.sb-title { margin: 0 0 var(--s-1); font-size: var(--f-lg); }
+.sb-sub   { margin: 0 0 var(--s-3); font-size: var(--f-sm); color: var(--t-text-dim); }
+
+.sb-bar {
+  display: flex; align-items: center; gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+.sb-tally {
+  margin-left: auto; font-size: var(--f-xs); color: var(--t-text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.sb-tally.sb-warn { color: var(--t-warn); }
+
+/* auto-fill keeps the columns readable at any width without a media query */
+.sb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s-1);
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: var(--s-2);
+  border: 1px solid var(--t-border);
+  border-radius: var(--r-sm);
+  background: var(--t-bg);
+}
+.sb-item {
+  display: flex; align-items: center; gap: var(--s-1);
+  padding: 2px var(--s-1);
+  border-radius: var(--r-sm);
+  font-size: var(--f-sm);
+  cursor: pointer;
+}
+.sb-item:hover { background: var(--t-panel-hi); }
+.sb-item input { accent-color: var(--t-checkbox); flex: none; }
+.sb-name  { flex: 1 1 auto; }
+.sb-count {
+  flex: none; font-size: var(--f-xs); color: var(--t-text-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.sb-foot { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-3); }
+.sb-btn {
+  background: var(--t-btn);
+  color: var(--t-text);
+  border: 1px solid var(--t-btn-border);
+  border-radius: var(--r-sm);
+  padding: var(--s-1) var(--s-3);
+  font: inherit;
+  font-size: var(--f-sm);
+  cursor: pointer;
+}
+.sb-btn:hover:not(:disabled) { background: var(--t-btn-hover); }
+.sb-btn:disabled { opacity: 0.55; cursor: default; }
+.sb-primary { border-color: var(--t-accent); }

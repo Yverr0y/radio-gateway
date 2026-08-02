@@ -321,3 +321,115 @@ window.RG = window.RG || {};
 
   window.RG.vu = { set: set, attach: attach };
 })();
+
+// ── Soundboard category picker ──────────────────────────────────────────────
+// Lives here rather than in a page so /controls and /dashboard/operate share
+// one implementation. The dialog is built on demand, so neither page carries
+// picker markup.
+
+function _sbEsc(t) {
+  return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+  });
+}
+
+// dash pages have showToast(); /controls does not, so degrade to alert().
+function _sbNotify(msg, level) {
+  if (typeof showToast === 'function') showToast(msg, level);
+  else alert(msg);
+}
+
+function openSoundboardPicker(onSaved) {
+  fetch('/soundboard/categories')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { _sbNotify('Categories unavailable: ' + (d.error || 'unknown'), 'error'); return; }
+      _sbShowPicker(d, onSaved);
+    })
+    .catch(function (e) { _sbNotify('Categories unavailable: ' + e, 'error'); });
+}
+
+function _sbShowPicker(d, onSaved) {
+  var old = document.getElementById('sb-picker');
+  if (old) old.remove();
+
+  var counts = {};
+  d.categories.forEach(function (c) { counts[c.name] = c.count; });
+
+  // A blank filter means "all", so start everything ticked rather than
+  // showing an empty picker on a fresh install.
+  var rows = d.categories.map(function (c) {
+    var on = d.all || d.selected.indexOf(c.name) >= 0;
+    return '<label class="sb-item"><input type="checkbox" data-cat="' + _sbEsc(c.name) + '"' +
+           (on ? ' checked' : '') + '><span class="sb-name">' + _sbEsc(c.name) +
+           '</span><span class="sb-count">' + c.count + '</span></label>';
+  }).join('');
+
+  var dlg = document.createElement('dialog');
+  dlg.id = 'sb-picker';
+  dlg.className = 'sb-dialog';
+  dlg.innerHTML =
+    '<h3 class="sb-title">Soundboard categories</h3>' +
+    '<p class="sb-sub">Refresh draws only from the ticked categories.' +
+      (d.max_seconds ? ' Clips longer than ' + d.max_seconds + 's are skipped.' : '') + '</p>' +
+    '<div class="sb-bar">' +
+      '<button type="button" class="sb-btn" id="sb-all">All</button>' +
+      '<button type="button" class="sb-btn" id="sb-none">None</button>' +
+      '<span class="sb-tally" id="sb-tally"></span>' +
+    '</div>' +
+    '<div class="sb-grid">' + rows + '</div>' +
+    '<div class="sb-foot">' +
+      '<button type="button" class="sb-btn" id="sb-cancel">Cancel</button>' +
+      '<button type="button" class="sb-btn sb-primary" id="sb-save">Save</button>' +
+    '</div>';
+  document.body.appendChild(dlg);
+
+  function boxes() { return dlg.querySelectorAll('input[data-cat]'); }
+  function tally() {
+    var n = 0, sounds = 0;
+    boxes().forEach(function (b) {
+      if (b.checked) { n++; sounds += counts[b.dataset.cat] || 0; }
+    });
+    var el = dlg.querySelector('#sb-tally');
+    el.textContent = n + ' of ' + d.categories.length + ' · ' + sounds + ' sounds';
+    // Saving zero ticked is stored as "all" server-side (a silent soundboard
+    // is worse than an ignored filter) — say so instead of surprising them.
+    el.classList.toggle('sb-warn', n === 0);
+    if (n === 0) el.textContent = 'Nothing ticked — saves as "all categories"';
+  }
+
+  boxes().forEach(function (b) { b.addEventListener('change', tally); });
+  dlg.querySelector('#sb-all').onclick = function () {
+    boxes().forEach(function (b) { b.checked = true; }); tally();
+  };
+  dlg.querySelector('#sb-none').onclick = function () {
+    boxes().forEach(function (b) { b.checked = false; }); tally();
+  };
+  dlg.querySelector('#sb-cancel').onclick = function () { dlg.close(); };
+  dlg.querySelector('#sb-save').onclick = function () {
+    var picked = [];
+    boxes().forEach(function (b) { if (b.checked) picked.push(b.dataset.cat); });
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    fetch('/soundboard/categories', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({categories: picked})
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        dlg.close();
+        if (!res.ok) { _sbNotify('Save failed: ' + (res.error || 'unknown'), 'error'); return; }
+        _sbNotify(res.saved
+          ? 'Saved ' + picked.length + ' categories — applies on the next Refresh'
+          : 'All categories enabled — applies on the next Refresh');
+        if (typeof onSaved === 'function') onSaved(res);
+      })
+      .catch(function (e) { dlg.close(); _sbNotify('Save failed: ' + e, 'error'); });
+  };
+
+  dlg.addEventListener('close', function () { dlg.remove(); });
+  tally();
+  dlg.showModal();
+}

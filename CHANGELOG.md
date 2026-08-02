@@ -4,6 +4,51 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Added — soundboard category picker and a clip-length cap
+
+The Refresh button drew uniformly from all 784 sounds, so the eight biggest
+categories were 41% of every draw, 78% of refreshes repeated a category, and an
+average of 2.2 categories carried over from the previous refresh. The rare, more
+interesting ones (`boing`, `fart`, `scream`, `squeak`, `wrong`) turned up in only
+13% of refreshes.
+
+- **`SOUNDBOARD_CATEGORIES`** — comma-separated list restricting the draw;
+  prefix a name with `-` to exclude it, blank means all. Read at refresh time,
+  so saving applies on the next Refresh with no gateway restart. Unknown names
+  are ignored with a warning listing the valid ones, and a filter that matches
+  nothing falls back to the full pool rather than leaving the soundboard silent.
+- **Category picker in the GUI** — a *Cats* button beside Refresh on `/controls`
+  and `/dashboard/operate` opens a tick-list of all 31 categories with sound
+  counts, a live tally and All/None shortcuts. Built as a native `<dialog>` (Esc
+  and focus trapping for free) and shared via `common.js`/`common.css` so
+  neither page carries picker markup. Backed by `GET`/`POST
+  /soundboard/categories`. Ticking everything stores blank rather than a
+  31-name list, so a pool that grows later is picked up automatically.
+- **`SOUNDBOARD_MAX_SECONDS`** (default 15, 0 disables) — the pool contains
+  full-length music tracks that are useless as effects; id 2474 measured 72.9s
+  and id 489 50s, between them a quarter of the slots. `Content-Length` over the
+  worst-case MP3 bitrate gives a lower bound on duration, so oversized files are
+  rejected without downloading the body; the rest are measured with `ffprobe`
+  (5s timeout) and deleted if over. Lengths are memoised in
+  `<playback-dir>/.soundboard_meta.json`, deliberately outside `.cache` so the
+  Refresh cache wipe doesn't force a re-download just to re-learn a clip was too
+  long. Rejected picks are replaced, not skipped.
+
+### Fixed — the same soundboard clip could occupy two slots
+
+19 sound ids are filed under more than one category (id 2891 is under `boing`,
+`fart` *and* `funny`) and the download URL is built from the id alone, so the
+old fixed slice could hand one clip to two slots under two different filenames.
+Picking now de-duplicates by id.
+
+### Fixed — the soundboard Refresh button under-reported
+
+Downloads run on the `Soundboard-prefetch` thread started inside
+`check_file_availability()`, so most had not landed when the handler counted
+them — a good refresh could report "Refreshed 0 sounds". The response now also
+carries `pending`, and both pages say how many are still loading (and which
+categories are active). `/dashboard/operate` uses a toast instead of `alert()`.
+
 ### Fixed — the Broadcastify stream could deadlock and never reconnect
 
 On 2026-07-30 the feed dropped at 22:08 and stayed dark for 15 hours having

@@ -45,7 +45,7 @@ The installer copies the example to `gateway_config.txt` if one doesn't exist. T
 | `[switching]` | SDR ducking, priority, signal threshold |
 | `[remote]` | Remote audio TX/RX link (full duplex) |
 | `[announce]` | Network announcement input (port 9601) |
-| `[playback]` | Playback source — file announcements, soundboard |
+| `[playback]` | Playback source — file announcements, soundboard (see [Soundboard categories](#soundboard-categories)) |
 | `[tts]` | Text-to-speech — `TTS_ENGINE` (`kokoro`/`edge`/`gtts`), voice selection, volume, speed |
 | `[speaker]` | Local speaker output mode (virtual/auto/real) |
 | `[streaming]` | Broadcastify / Icecast feed |
@@ -89,3 +89,84 @@ So a new key works the moment you read it; the example file documents it for use
 3. If it's a feature-specific tunable that isn't safe to ship as a default (host-specific path, sensitive setting), document its presence here and in the relevant feature doc.
 
 That's the whole pattern. No schema, no migrations.
+
+## Soundboard categories
+
+Playback keys 1–9 that have no local file are auto-filled with random
+royalty-free sound effects, re-rolled by the **Refresh** button on `/controls`
+and `/dashboard/operate`.
+
+`SOUNDBOARD_CATEGORIES` restricts which categories the draw comes from.
+Comma-separated; prefix a name with `-` to exclude it instead. Blank means
+every category.
+
+```ini
+# only these
+SOUNDBOARD_CATEGORIES = boing, fart, scream, squeak, wrong
+
+# everything except these
+SOUNDBOARD_CATEGORIES = -animals, -applause, -arcade
+```
+
+Behaviour:
+
+- **Live** — read at refresh time, so saving the config page applies on the very
+  next Refresh with no gateway restart.
+- **Forgiving** — unknown names are ignored with a warning that lists the valid
+  ones. If the filter ends up matching nothing (all names invalid, or everything
+  excluded) the full pool is used rather than leaving the soundboard silent.
+- **Case- and space-insensitive**; blank tokens and newlines are ignored.
+- Exclusions win over inclusions, so `boing, -boing` yields no `boing`.
+- A filter narrower than the number of empty slots fills what it can and logs a
+  hint; e.g. `scream` has only 7 sounds for 9 slots.
+
+### Picking categories in the GUI
+
+`/controls` and `/dashboard/operate` have a **Cats** button next to Refresh. It
+opens a tick-list of every category with its sound count, a running tally of how
+many sounds the selection covers, and All / None shortcuts. Saving writes
+`SOUNDBOARD_CATEGORIES` and applies on the next Refresh.
+
+Ticking *everything* stores a blank value rather than a 31-name list, so a pool
+that grows later is picked up automatically instead of being frozen to today's
+categories. Ticking *nothing* also stores blank (= all) — a silent soundboard is
+worse than an ignored filter — and the dialog says so before you save.
+
+Endpoints: `GET /soundboard/categories` returns `categories` (name + count),
+`selected`, `filter`, `pool_size`, `max_seconds` and `all`;
+`POST` the same path with `{"categories": [...]}` to save.
+
+### Clip length cap
+
+`SOUNDBOARD_MAX_SECONDS` (default `15`, `0` disables) rejects clips longer than
+the cap. The pool contains full-length music tracks — id 2474 is 72 s, id 489 is
+50 s — which are useless as soundboard effects and were filling roughly a
+quarter of the slots.
+
+Enforcement is two-stage: `Content-Length` divided by the worst-case MP3 bitrate
+(320 kbps) is a lower bound on duration, so oversized files are skipped without
+downloading the body; anything that gets through is then measured with `ffprobe`
+(5 s timeout) and deleted if it's over. Measured lengths are remembered in
+`<playback-dir>/.soundboard_meta.json`, which lives *outside* `.cache` so the
+Refresh button's cache wipe doesn't force the gateway to re-download clips just
+to re-learn they were too long. A rejected pick is replaced, not skipped, so the
+slots still fill.
+
+| Category | Sounds | | Category | Sounds | | Category | Sounds |
+|---|---|---|---|---|---|---|---|
+| `animals` | 50 | | `bells` | 30 | | `laugh` | 19 |
+| `arcade` | 45 | | `crowd` | 30 | | `click` | 15 |
+| `funny` | 45 | | `drums` | 30 | | `laser` | 15 |
+| `explosion` | 40 | | `horns` | 30 | | `water` | 15 |
+| `applause` | 35 | | `whistles` | 30 | | `horror` | 14 |
+| `game` | 35 | | `whoosh` | 30 | | `fart` | 12 |
+| `impact` | 35 | | `monster` | 27 | | `squeak` | 11 |
+| `transition` | 35 | | `buzzer` | 25 | | `boing` | 10 |
+| `cartoon` | 20 | | `sirens` | 25 | | `wrong` | 9 |
+| `cinematic` | 20 | | `notifications` | 20 | | `scream` | 7 |
+| `swoosh` | 20 | | | | | | |
+
+> The category label is ours, not Mixkit's — the download URL is built from the
+> numeric sound id alone. 19 ids are deliberately filed under more than one
+> category (id 2891 is under `boing`, `fart` **and** `funny`), so picking
+> de-duplicates by id to stop one clip occupying two slots.

@@ -29,6 +29,7 @@
     <button class="ctrl-btn" onclick="sendKey('0')" id="btn-f0"><span class="pb-key">ID</span><span class="pb-name" id="pb-name-0"></span></button>
     <button class="ctrl-btn" onclick="sendKey('-')">Stop</button>
     <button class="ctrl-btn" onclick="refreshSounds()" title="Refresh random sounds" aria-label="Refresh random sounds" style="grid-column:1">&#x21bb;</button>
+    <button class="ctrl-btn" onclick="openSoundboardPicker()" title="Choose soundboard categories" aria-label="Choose soundboard categories">Cats</button>
     <button class="ctrl-btn" onclick="toggleTestLoop(this)" id="btn-test-loop">Loop</button>
   </div>
   <div class="smart-row" id="smart-announce-group">
@@ -184,7 +185,15 @@ function sendAIText() {
   if(document.activeElement) document.activeElement.blur();
 }
 function refreshSounds() {
-  postJson('/refreshsounds',{}).then(function(d){ if(d.ok){var n=d.count; alert('Refreshed '+n+' sound'+(n!=1?'s':'')); } });
+  postJson('/refreshsounds',{}).then(function(d){
+    if(!d.ok) return;
+    var msg='Refreshed '+d.count+' sound'+(d.count!=1?'s':'');
+    // Downloads land asynchronously — see the note in web_routes_automation.py.
+    if(d.pending) msg+=', '+d.pending+' more loading in the background';
+    if(d.selected&&d.categories&&d.selected.length<d.categories.length)
+      msg+=' · '+d.selected.join(', ');
+    showToast(msg);
+  });
 }
 function toggleTestLoop(btn) {
   postJson('/testloop',{}).then(function(d){ btn.classList.toggle('muted',!!d.looping); btn.textContent=d.looping?'Stop Loop':'Loop'; if(d.error)alert(d.error); });

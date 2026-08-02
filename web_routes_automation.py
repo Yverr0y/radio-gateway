@@ -45,6 +45,76 @@ def handle_automationcmd(handler, parent):
     handler.wfile.write(json_mod.dumps(result).encode())
     return
 
+def _soundboard_state(parent):
+    """Everything the category picker needs to render itself."""
+    gw = parent.gateway
+    ps = gw.playback_source if gw else None
+    if ps is None:
+        return {'ok': False, 'error': 'playback source not available'}
+    counts = ps.soundboard_categories()
+    pool, note = ps._select_soundboard_pool()
+    selected = sorted({c for c, _ in pool})
+    raw = str(getattr(gw.config, 'SOUNDBOARD_CATEGORIES', '') or '').strip()
+    return {
+        'ok': True,
+        # Ordered biggest-first so the picker reads consistently.
+        'categories': [{'name': n, 'count': c}
+                       for n, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))],
+        'selected': selected,
+        'filter': raw,
+        'pool_size': len(pool),
+        'max_seconds': float(getattr(gw.config, 'SOUNDBOARD_MAX_SECONDS', 15) or 0),
+        # True when no filter is set, so the UI can show "all ticked" without
+        # having to persist a filter naming all 31 categories.
+        'all': not raw,
+        'note': note,
+    }
+
+
+def handle_soundboard_categories(handler, parent):
+    """GET/POST /soundboard/categories
+
+    GET  -> available categories, counts, and what is currently selected.
+    POST -> {"categories": [...]} persists SOUNDBOARD_CATEGORIES.
+    """
+    if handler.command == 'POST':
+        try:
+            length = int(handler.headers.get('Content-Length', 0))
+            body = handler.rfile.read(length).decode('utf-8') if length else '{}'
+            payload = json_mod.loads(body or '{}')
+            gw = parent.gateway
+            ps = gw.playback_source if gw else None
+            if ps is None:
+                raise RuntimeError('playback source not available')
+            valid = set(ps.soundboard_categories())
+            wanted = [str(c).strip().lower() for c in payload.get('categories', [])]
+            wanted = [c for c in wanted if c in valid]
+            # Everything ticked is stored as blank rather than a 31-name list:
+            # blank keeps meaning "all", so a pool that grows later is picked
+            # up automatically instead of being frozen to today's categories.
+            value = '' if len(wanted) == len(valid) else ', '.join(sorted(wanted))
+            parent._save_config({'SOUNDBOARD_CATEGORIES': value})
+            parent.config.load_config()
+            result = _soundboard_state(parent)
+            result['saved'] = value
+        except Exception as e:
+            result = {'ok': False, 'error': str(e)}
+    else:
+        try:
+            result = _soundboard_state(parent)
+        except Exception as e:
+            result = {'ok': False, 'error': str(e)}
+
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.end_headers()
+    try:
+        handler.wfile.write(json_mod.dumps(result).encode())
+    except BrokenPipeError:
+        pass
+    return
+
+
 def handle_refreshsounds(handler, parent):
     """POST /refreshsounds"""
     result = {'ok': False, 'count': 0}
@@ -60,7 +130,27 @@ def handle_refreshsounds(handler, parent):
             gw.playback_source.check_file_availability()
             _count = sum(1 for k in '123456789' if gw.playback_source.file_status[k]['exists']
                          and gw.playback_source.file_status[k].get('path', '').find('.cache') >= 0)
-            result = {'ok': True, 'count': _count}
+            # Downloads run on the Soundboard-prefetch thread started inside
+            # check_file_availability(), so most of them have NOT landed by the
+            # time we get here — _count alone reports ~0 and the UI used to say
+            # "Refreshed 0 sounds" on a perfectly good refresh. Report the slots
+            # still being filled too so the message can be truthful.
+            _pending = sum(1 for k in '123456789'
+                           if not gw.playback_source.file_status[k]['exists'])
+            result = {'ok': True, 'count': _count, 'pending': _pending}
+            # Report which categories are in play and what else is on offer, so
+            # SOUNDBOARD_CATEGORIES is discoverable without reading the source.
+            try:
+                _ps = gw.playback_source
+                _pool, _note = _ps._select_soundboard_pool()
+                result['categories'] = sorted(_ps.soundboard_categories())
+                result['selected'] = sorted({c for c, _ in _pool})
+                result['filter'] = str(getattr(gw.config, 'SOUNDBOARD_CATEGORIES', '') or '')
+                result['pool_size'] = len(_pool)
+                if _note:
+                    result['note'] = _note
+            except Exception:
+                pass  # discovery info is a nicety; never fail the refresh over it
         except Exception as _e:
             result = {'ok': False, 'error': str(_e)}
     handler.send_response(200)

@@ -396,7 +396,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         ('playback', 'System Sounds', [
             'ENABLE_PLAYBACK', 'PLAYBACK_DIRECTORY',
             'PLAYBACK_ANNOUNCEMENT_FILE', 'PLAYBACK_ANNOUNCEMENT_INTERVAL',
-            'PLAYBACK_VOLUME', 'ENABLE_SOUNDBOARD',
+            'PLAYBACK_VOLUME', 'ENABLE_SOUNDBOARD', 'SOUNDBOARD_CATEGORIES',
+            'SOUNDBOARD_MAX_SECONDS',
         ]),
         ('kv4p', 'KV4P HT Radio', [
             'ENABLE_KV4P', 'KV4P_PORT', 'KV4P_FREQ', 'KV4P_TX_FREQ',
@@ -768,6 +769,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
 
             _GET_EXACT = {
                 '/status':                'g:handle_status',
+                '/soundboard/categories': 'p:handle_soundboard_categories',
                 '/metrics':               'g:handle_metrics',
                 '/sinkstats':             'g:handle_sinkstats',
                 '/sourcestats':           'g:handle_sourcestats',
@@ -933,6 +935,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 '/reboothost':                 'p:handle_reboothost',
                 '/restartgateway':             'p:handle_restartgateway',
                 '/refreshsounds':              'p:handle_refreshsounds',
+                '/soundboard/categories':      'p:handle_soundboard_categories',
                 '/darkicecmd':                 'p:handle_darkicecmd',
                 '/recordingsdelete':           'p:handle_recordingsdelete',
                 '/telegramcmd':                'p:handle_telegramcmd',

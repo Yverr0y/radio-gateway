@@ -325,6 +325,16 @@ class Config:
             'ENABLE_WEB_MONITOR': True,
             # Soundboard — auto-fill empty playback slots with random sound effects
             'ENABLE_SOUNDBOARD': True,
+            # Restrict which categories the soundboard draws from. Comma-separated;
+            # prefix a name with '-' to exclude it. Blank = all categories.
+            #   e.g.  boing, fart, scream, wrong     (only these)
+            #   e.g.  -animals, -applause            (everything except these)
+            # Applies on the next /refreshsounds — no gateway restart needed.
+            'SOUNDBOARD_CATEGORIES': '',
+            # Reject soundboard clips longer than this many seconds. The pool
+            # contains some full-length music tracks (id 2474 is 72s) that are
+            # useless as effects. 0 disables the cap.
+            'SOUNDBOARD_MAX_SECONDS': 15,
             # Relay Control — Radio Power
             'ENABLE_RELAY_RADIO': False,
             'RELAY_RADIO_DEVICE': '/dev/relay_radio',

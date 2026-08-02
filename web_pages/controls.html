@@ -262,6 +262,7 @@
       <button onclick="sendKey('0')" id="btn-f0"><span class="pb-key">ID</span><span class="pb-name" id="pb-name-0"></span></button>
       <button onclick="sendKey('-')">Stop</button>
       <button onclick="refreshSounds()" title="Refresh random sounds">&#x21bb;</button>
+      <button onclick="openSoundboardPicker()" title="Choose soundboard categories">Cats</button>
       <button onclick="toggleTestLoop(this)" id="btn-test-loop" title="Loop audio/loop.mp3">Loop</button>
     </div>
     <div class="smart-row" id="smart-announce-group">
@@ -486,7 +487,15 @@ function sendTTS() {
 
 function refreshSounds() {
   postJson('/refreshsounds', {}).then(function(d) {
-    if (d.ok) { var n = d.count; alert('Refreshed ' + n + ' sound' + (n != 1 ? 's' : '')); }
+    if (d.ok) {
+      var msg = 'Refreshed ' + d.count + ' sound' + (d.count != 1 ? 's' : '');
+      // Downloads finish on a background thread, so 'pending' slots are still
+      // arriving after this response — saying otherwise reads as a failure.
+      if (d.pending) msg += ', ' + d.pending + ' more loading in the background';
+      if (d.selected && d.categories && d.selected.length < d.categories.length)
+        msg += '\n\nCategories: ' + d.selected.join(', ');
+      alert(msg);
+    }
   });
 }
 

@@ -418,6 +418,132 @@ class FilePlaybackSource(AudioSource):
         ('wrong', 2941), ('wrong', 2947), ('wrong', 2960), ('wrong', 3159), ('wrong', 3219),
     ]
 
+    @classmethod
+    def soundboard_categories(cls):
+        """Category label -> number of sounds, derived from SOUNDBOARD_POOL.
+
+        The label is ours, not Mixkit's: the download URL is built from the
+        numeric id alone, so these strings exist purely to group the pool and
+        to name the cached file. That means a category can be renamed or
+        re-grouped freely without breaking any download.
+        """
+        counts = {}
+        for cat, _ in cls.SOUNDBOARD_POOL:
+            counts[cat] = counts.get(cat, 0) + 1
+        return counts
+
+    def _select_soundboard_pool(self):
+        """Apply the SOUNDBOARD_CATEGORIES filter. Returns (pool, note).
+
+        Config is a comma-separated list of category names. A name prefixed
+        with '-' excludes instead of includes, so both of these work:
+
+            SOUNDBOARD_CATEGORIES = boing, fart, scream, wrong
+            SOUNDBOARD_CATEGORIES = -animals, -applause
+
+        Blank or absent means every category. Read at call time rather than
+        cached, so saving the config page (which calls config.load_config())
+        takes effect on the very next refresh with no gateway restart.
+        """
+        raw = str(getattr(self.config, 'SOUNDBOARD_CATEGORIES', '') or '').strip()
+        available = self.soundboard_categories()
+        full = list(self.SOUNDBOARD_POOL)
+        if not raw:
+            return full, ''
+
+        include, exclude, unknown = set(), set(), []
+        for tok in raw.replace('\n', ',').split(','):
+            tok = tok.strip().lower()
+            if not tok:
+                continue
+            negated = tok.startswith('-')
+            name = tok[1:].strip() if negated else tok
+            if name not in available:
+                unknown.append(name)
+            elif negated:
+                exclude.add(name)
+            else:
+                include.add(name)
+
+        if unknown:
+            print(f"  [Soundboard] Ignoring unknown categor"
+                  f"{'y' if len(unknown) == 1 else 'ies'}: {', '.join(sorted(unknown))}")
+            print(f"  [Soundboard] Valid categories: {', '.join(sorted(available))}")
+
+        # Never leave the slots empty over a config typo — a soundboard that
+        # silently goes quiet is worse than one that ignores you. Both the
+        # all-unknown case and the exclude-everything case fall back loudly.
+        if not include and not exclude:
+            print("  [Soundboard] SOUNDBOARD_CATEGORIES named no valid categories — "
+                  "falling back to the full pool")
+            return full, 'filter matched nothing, using all categories'
+
+        chosen = (include or set(available)) - exclude
+        pool = [p for p in full if p[0] in chosen]
+        if not pool:
+            print("  [Soundboard] SOUNDBOARD_CATEGORIES matched no sounds — "
+                  "falling back to the full pool")
+            return full, 'filter matched nothing, using all categories'
+        return pool, (f"{len(pool)} sounds from {len(chosen)} "
+                      f"categor{'y' if len(chosen) == 1 else 'ies'}: "
+                      f"{', '.join(sorted(chosen))}")
+
+    # Worst-case MP3 bitrate (320 kbps = 40 kB/s). Content-Length divided by
+    # this is a LOWER BOUND on a clip's duration, so a file that exceeds the
+    # cap even at this bitrate is definitely too long and can be rejected
+    # without downloading it.
+    _MAX_MP3_BYTES_PER_SEC = 40000
+
+    def _soundboard_meta_path(self):
+        """Learned clip durations. Deliberately OUTSIDE .cache, which the
+        Refresh button deletes wholesale — otherwise every refresh would
+        re-download the same known-too-long clips to re-learn what it already
+        knew."""
+        import os
+        return os.path.join(self.announcement_directory, '.soundboard_meta.json')
+
+    def _load_soundboard_meta(self):
+        import json, os
+        path = self._soundboard_meta_path()
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}   # corrupt memo is not worth failing a refresh over
+
+    def _save_soundboard_meta(self, meta):
+        import json, os
+        path = self._soundboard_meta_path()
+        try:
+            tmp = path + '.partial'
+            with open(tmp, 'w') as f:
+                json.dump(meta, f)
+            os.replace(tmp, path)
+        except Exception as e:
+            print(f"  [Soundboard] Could not save duration memo: {e}")
+
+    @staticmethod
+    def _sound_duration(path):
+        """Clip length in seconds, or None if it can't be determined.
+
+        Bounded timeout per the project rule on subprocess calls — this runs on
+        the prefetch thread, but a wedged ffprobe would still pin the slot.
+        """
+        import subprocess
+        try:
+            r = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'csv=p=0', path],
+                capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                return float(r.stdout.strip())
+        except Exception:
+            pass
+        return None
+
     def _fill_soundboard_slots(self, file_map):
         """Download random sound effects from Mixkit to fill empty playback slots."""
         import os, random, urllib.request
@@ -429,42 +555,106 @@ class FilePlaybackSource(AudioSource):
         cache_dir = os.path.join(self.announcement_directory, '.cache')
         os.makedirs(cache_dir, exist_ok=True)
 
-        # Pick random sounds from pool (without replacement)
-        pool = list(self.SOUNDBOARD_POOL)
+        pool, note = self._select_soundboard_pool()
+        if note:
+            print(f"  [Soundboard] {note}")
         random.shuffle(pool)
-        picks = pool[:len(empty_slots)]
 
-        for slot, (category, sfx_id) in zip(empty_slots, picks):
+        max_secs = float(getattr(self.config, 'SOUNDBOARD_MAX_SECONDS', 15) or 0)
+        meta = self._load_soundboard_meta()
+        meta_dirty = False
+        byte_ceiling = max_secs * self._MAX_MP3_BYTES_PER_SEC if max_secs > 0 else 0
+
+        # Walk candidates until the slots are full. This is a loop rather than
+        # a fixed slice because a candidate can now be REJECTED (too long), and
+        # a rejected pick must be replaced rather than leaving a slot empty.
+        #
+        # De-duplicate by sound id, not by (category, id): 19 ids sit under
+        # more than one category — id 2891 is under boing, fart AND funny —
+        # and the URL is built from the id alone, so a plain slice could hand
+        # the SAME clip to two slots under two different filenames.
+        slots = list(empty_slots)
+        seen_ids = set()
+        skipped_long = 0
+
+        for category, sfx_id in pool:
+            if not slots:
+                break
+            if sfx_id in seen_ids:
+                continue
+            seen_ids.add(sfx_id)
+
+            # Already known to be over the cap — skip without a round trip.
+            known = meta.get(str(sfx_id))
+            if max_secs > 0 and isinstance(known, (int, float)) and known > max_secs:
+                skipped_long += 1
+                continue
+
             filename = f"{category}_{sfx_id}.mp3"
             filepath = os.path.join(cache_dir, filename)
 
-            # Download if not already cached. Bounded timeout is essential:
-            # this runs in a background thread, but a leaked stuck socket
-            # would still pin file descriptors and leave a permanently-empty
-            # slot. 10s per request → ≤90s worst case for all 9 slots.
             if not os.path.exists(filepath):
                 url = f"https://assets.mixkit.co/active_storage/sfx/{sfx_id}/{sfx_id}-preview.mp3"
                 try:
+                    # Bounded timeout is essential: this runs in a background
+                    # thread, but a leaked stuck socket would still pin file
+                    # descriptors and leave a permanently-empty slot.
                     with urllib.request.urlopen(url, timeout=10) as resp:
+                        clen = resp.headers.get('Content-Length')
+                        if byte_ceiling and clen and int(clen) > byte_ceiling:
+                            # Too big to be under the cap even at 320 kbps, so
+                            # skip the body entirely. Record the lower-bound
+                            # duration so future refreshes skip it for free.
+                            meta[str(sfx_id)] = int(clen) / self._MAX_MP3_BYTES_PER_SEC
+                            meta_dirty = True
+                            skipped_long += 1
+                            continue
                         data = resp.read()
                     tmp_path = filepath + '.partial'
                     with open(tmp_path, 'wb') as f:
                         f.write(data)
                     os.replace(tmp_path, filepath)
-                    print(f"  [Soundboard] Downloaded: {filename}")
                 except Exception as e:
                     print(f"  [Soundboard] Failed to download {filename}: {e}")
                     continue
 
-            if os.path.exists(filepath):
-                file_map[slot] = (filepath, filename)
-                # Background-mode: update file_status so the slot becomes
-                # playable as soon as the download lands. Step 4 in
-                # check_file_availability only sees local files because
-                # this runs asynchronously.
-                self.file_status[slot]['exists'] = True
-                self.file_status[slot]['path'] = filepath
-                self.file_status[slot]['filename'] = filename
+            # Enforce the cap authoritatively. Content-Length only bounds it;
+            # a 128 kbps 60s track sails under the byte ceiling.
+            if max_secs > 0:
+                dur = self._sound_duration(filepath)
+                if dur is not None:
+                    if meta.get(str(sfx_id)) != dur:
+                        meta[str(sfx_id)] = dur
+                        meta_dirty = True
+                    if dur > max_secs:
+                        print(f"  [Soundboard] Skipping {filename}: {dur:.0f}s "
+                              f"exceeds SOUNDBOARD_MAX_SECONDS={max_secs:.0f}")
+                        try:
+                            os.remove(filepath)
+                        except Exception:
+                            pass
+                        skipped_long += 1
+                        continue
+
+            slot = slots.pop(0)
+            print(f"  [Soundboard] Slot {slot}: {filename}")
+            file_map[slot] = (filepath, filename)
+            # Background-mode: update file_status so the slot becomes playable
+            # as soon as the download lands. Step 4 in check_file_availability
+            # only sees local files because this runs asynchronously.
+            self.file_status[slot]['exists'] = True
+            self.file_status[slot]['path'] = filepath
+            self.file_status[slot]['filename'] = filename
+
+        if meta_dirty:
+            self._save_soundboard_meta(meta)
+        if skipped_long:
+            print(f"  [Soundboard] Skipped {skipped_long} clip(s) longer than "
+                  f"{max_secs:.0f}s")
+        if slots:
+            # Say so rather than leaving slots mysteriously blank.
+            print(f"  [Soundboard] {len(slots)} slot(s) left unfilled — widen "
+                  f"SOUNDBOARD_CATEGORIES or raise SOUNDBOARD_MAX_SECONDS")
     
     def _generate_file_mapping_display(self, file_map, station_id_found):
         """Generate the file mapping display string"""

@@ -365,6 +365,35 @@ PLAYBACK_VOLUME = 1.0
 # Example: 3600 = play station_id file once per hour
 PLAYBACK_ANNOUNCEMENT_INTERVAL = 0
 
+# --- Soundboard ---
+# Empty playback slots (keys 1-9) are auto-filled with random royalty-free
+# sound effects, re-rolled by the Refresh button on /controls and
+# /dashboard/operate.
+ENABLE_SOUNDBOARD = true
+
+# Restrict which categories the soundboard draws from. Comma-separated;
+# prefix a name with '-' to exclude it instead. Blank = every category.
+#   SOUNDBOARD_CATEGORIES = boing, fart, scream, squeak, wrong
+#   SOUNDBOARD_CATEGORIES = -animals, -applause, -arcade
+# Unknown names are ignored with a warning; if the filter matches nothing at
+# all the full pool is used rather than leaving the slots silent.
+# Takes effect on the next Refresh — no gateway restart needed.
+#
+# Available (sound count): animals 50, arcade 45, funny 45, explosion 40,
+#   applause 35, game 35, impact 35, transition 35, bells 30, crowd 30,
+#   drums 30, horns 30, whistles 30, whoosh 30, monster 27, buzzer 25,
+#   sirens 25, cartoon 20, cinematic 20, notifications 20, swoosh 20,
+#   laugh 19, click 15, laser 15, water 15, horror 14, fart 12, squeak 11,
+#   boing 10, wrong 9, scream 7
+SOUNDBOARD_CATEGORIES =
+
+# Reject clips longer than this many seconds. The pool contains some
+# full-length music tracks (id 2474 is 72s, id 489 is 50s) that are useless as
+# soundboard effects. Measured with ffprobe after download; the length is
+# remembered in .soundboard_meta.json so a rejected clip is never re-fetched.
+# 0 disables the cap.
+SOUNDBOARD_MAX_SECONDS = 15
+
 # --- Morse Code (CW) ---
 CW_WPM = 20           # Words per minute (PARIS timing)
 CW_FREQUENCY = 600    # Tone frequency (Hz)
