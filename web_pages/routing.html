@@ -9,6 +9,16 @@
 <style>
   body { padding: 0; margin: 0; overflow: hidden; }
 
+  /* Node height shared by sources, sinks and busses — see .drawflow-node.
+     56px is the height the source/sink nodes already used; a DFN-enabled bus
+     carries an extra mix row and will exceed it, which is the one case the
+     rows cannot be made to match without hiding content. */
+  /* Floor for any node whose content does not already exceed it. Sources and
+     sinks sit ABOVE this (content-driven), so raising it only lifts the nodes
+     resting on the floor — currently the listen busses. Solo busses carry an
+     extra .dfn-mix-row for the delay slider and stay taller regardless; that
+     row is the one height difference no floor can reconcile. */
+  :root { --node-h: 64px; }
   #drawflow {
     width: 100%;
     height: calc(100vh - 40px);
@@ -26,6 +36,13 @@
     min-width: 180px;
     font-family: inherit;
     font-size: var(--f-xs);
+    /* Shared floor for EVERY node type so rows line up after auto-arrange.
+       This used to sit only on .source/.sink, leaving bus height purely
+       content-driven — so the two kinds settled at different heights and the
+       columns never quite aligned. One number to tune; raising it grows all
+       three together, which is the point. */
+    min-height: var(--node-h);
+    box-sizing: border-box;
   }
   /* Bus nodes need more horizontal room than sources/sinks — their content
      row holds 9 proc buttons + separator + mute button, and the rightmost
@@ -37,14 +54,20 @@
   .drawflow .drawflow-node[class*="bus-"] .box       { padding: 1px var(--s-2); }
   .drawflow .drawflow-node[class*="bus-"] .proc-btn,
   .drawflow .drawflow-node[class*="bus-"] .mute-btn {
-    height: 14px; line-height: 12px;
+    height: 12px; line-height: 10px;          /* -2px */
   }
+  /* The remaining -3px, taken where it costs nothing visually: the gaps above
+     the button row and the level bar. Together with the -2px above this trims
+     5px off a bus, meeting the +5px added to --node-h so both kinds land on
+     the same height. */
+  .drawflow .drawflow-node[class*="bus-"] .proc-buttons { margin-top: 0; }      /* -2px */
+  .drawflow .drawflow-node[class*="bus-"] .level-bar    { margin-top: 2px; }    /* -1px */
   .drawflow .drawflow-node[class*="bus-"] .dfn-mix-row { padding: 0 6px 1px; }
   /* Source / sink nodes are naturally shorter (just mute + gain slider +
      level bar) — pad them out ~10 px so the three node types share a
      similar visual footprint on the canvas. */
   .drawflow .drawflow-node.source,
-  .drawflow .drawflow-node.sink { min-height: 56px; min-width: 210px; }
+  .drawflow .drawflow-node.sink { min-width: 210px; }
   .node-port { font-size: 0.78em; opacity: 0.55; margin-left: 4px; font-weight: 400; }
   .drawflow .drawflow-node.source .box,
   .drawflow .drawflow-node.sink   .box { padding: 8px var(--s-2); }
@@ -176,6 +199,27 @@
     flex-shrink: 0;
   }
 
+  /* Title-bar delay control. Fixed narrow slider: the old body row used
+     flex:1 and grew with the node, which is what made it stupidly long. */
+  .title-delay {
+    float: right;                 /* the title line is inline content, not flex */
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-left: var(--s-2);
+    text-transform: none; letter-spacing: 0;
+  }
+  .title-delay-slider {
+    width: 54px; flex: none; height: 3px;
+    -webkit-appearance: none; appearance: none;
+    background: var(--t-panel-hi);
+    border: 1px solid var(--t-border);
+    border-radius: 2px; margin: 0; cursor: pointer;
+  }
+  .title-delay-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 8px; height: 10px; border-radius: 1px;
+    background: var(--t-accent); border: none; cursor: pointer;
+  }
+  .title-delay .dfn-mix-val { min-width: 2.6em; text-align: right; }  /* fits '5000' */
   .dfn-mix-row {
     display: flex;
     align-items: center;
@@ -839,18 +883,9 @@ function rebuildEditor() {
             + '</span>'
             + '</div>';
         })()
-      + (b.type === 'solo' ? (function() {
-          var dms = (proc.delay_ms !== undefined) ? proc.delay_ms : 0;
-          return '<div class="dfn-mix-row" id="delay-row-' + b.id + '">'
-            + '<span class="dfn-mix-label">delay</span>'
-            + '<input type="range" class="dfn-mix-slider" min="0" max="5000" step="50" value="' + dms + '" '
-            +   'id="bus-delay-' + b.id + '" '
-            +   'oninput="setBusDelay(\'' + b.id + '\', this.value, true)" '
-            +   'onchange="setBusDelay(\'' + b.id + '\', this.value, false)" '
-            +   'ondblclick="this.value=0;setBusDelay(\'' + b.id + '\', 0, false)">'
-            + '<span class="dfn-mix-val" id="bus-delay-val-' + b.id + '">' + dms + ' ms</span>'
-            + '</div>';
-        })() : '')
+      /* Delay lives in the title bar for solo busses — see the injection
+         after node creation. As a body row it added ~14px that no other bus
+         type had, so solo could never line up with the rest. */
       + '<div class="level-bar" id="level-bus_' + b.id + '"><div class="level-fill"></div></div>'
       + '</div>';
     var pos = savedPositions['bus-' + b.id] || {x: xBus, y: yBus};
@@ -886,23 +921,53 @@ function rebuildEditor() {
     ySink += spacing;
   }
 
+  // Inject the delay slider into each solo bus's title bar (top-right).
+  // Same trick as the speaker-mode buttons below: keeps the control reachable
+  // without spending a whole body row on it.
+  for (var bi = 0; bi < _state.busses.length; bi++) {
+    var bb = _state.busses[bi];
+    if (bb.type !== 'solo') continue;
+    var bNodeId = _nodeMap['bus-' + bb.id];
+    if (!bNodeId) continue;
+    // .drawflow_content_node is the real container. There is no .title-box —
+    // nothing in Drawflow or this page ever creates one, so selecting it
+    // silently found nothing and the control never appeared.
+    var bEl = document.querySelector('#node-' + bNodeId + ' .drawflow_content_node');
+    if (!bEl) continue;
+    var bProc = (bb.processing || {});
+    var bMs = (bProc.delay_ms !== undefined) ? bProc.delay_ms : 0;
+    var dWrap = document.createElement('span');
+    dWrap.className = 'title-delay';
+    dWrap.innerHTML = '<span class="dfn-mix-label" title="Bus delay, milliseconds">dly</span>'
+      + '<input type="range" class="title-delay-slider" min="0" max="5000" step="50" '
+      +   'value="' + bMs + '" id="bus-delay-' + bb.id + '" '
+      +   'onmousedown="event.stopPropagation()" onpointerdown="event.stopPropagation()" '
+      +   'oninput="setBusDelay(\'' + bb.id + '\', this.value, true)" '
+      +   'onchange="setBusDelay(\'' + bb.id + '\', this.value, false)" '
+      +   'ondblclick="this.value=0;setBusDelay(\'' + bb.id + '\', 0, false)" '
+      +   'title="Bus delay (double-click to reset)">'
+      + '<span class="dfn-mix-val" id="bus-delay-val-' + bb.id + '">' + bMs + '</span>';
+    var bBox = bEl.querySelector('.box');
+    if (bBox) bEl.insertBefore(dWrap, bBox); else bEl.appendChild(dWrap);
+  }
+
   // Inject speaker mode buttons into title-box (top-right)
   var spkSink = _state.sinks.find(function(s) { return s.id === 'speaker'; });
   if (spkSink) {
     var spkNodeId = _nodeMap['sink-speaker'];
     if (spkNodeId) {
-      var spkEl = document.querySelector('#node-' + spkNodeId + ' .title-box');
+      // Was '.title-box', which does not exist — these buttons have never
+      // rendered. Same fix as the delay control above.
+      var spkEl = document.querySelector('#node-' + spkNodeId + ' .drawflow_content_node');
       if (spkEl) {
         var sm = spkSink._speaker_mode || (spkSink.speaker_mode || 'virtual').toLowerCase();
-        spkEl.style.display = 'flex';
-        spkEl.style.justifyContent = 'space-between';
-        spkEl.style.alignItems = 'center';
-        var wrap = document.createElement('div');
-        wrap.style.cssText = 'display:flex;gap:2px;margin-left:var(--s-2);';
+        var wrap = document.createElement('span');
+        wrap.className = 'title-delay';
         wrap.innerHTML = '<button class="proc-btn' + (sm === 'virtual' ? ' on' : '') + '" onclick="setSpeakerMode(\'virtual\')" id="spk-virtual" title="Virtual (metering only)">V</button>'
           + '<button class="proc-btn' + (sm === 'auto' ? ' on' : '') + '" onclick="setSpeakerMode(\'auto\')" id="spk-auto" title="Auto (try device, fallback virtual)">A</button>'
           + '<button class="proc-btn' + (sm === 'real' ? ' on' : '') + '" onclick="setSpeakerMode(\'real\')" id="spk-real" title="Real (require audio device)">R</button>';
-        spkEl.appendChild(wrap);
+        var spkBox = spkEl.querySelector('.box');
+        if (spkBox) spkEl.insertBefore(wrap, spkBox); else spkEl.appendChild(wrap);
       }
     }
   }
@@ -1280,7 +1345,9 @@ var _busDelayTimers = {};
 function setBusDelay(busId, value, live) {
   var v = Math.round(parseFloat(value));
   var el = document.getElementById('bus-delay-val-' + busId);
-  if (el) el.textContent = v + ' ms';
+  // Bare number: this label sits in the title bar now, where ' ms' cost more
+  // width than it earned. Unit is in the 'dly' tooltip.
+  if (el) el.textContent = v;
   clearTimeout(_busDelayTimers[busId]);
   _busDelayTimers[busId] = setTimeout(function() {
     fetch('/routing/cmd', {

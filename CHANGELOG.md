@@ -4,6 +4,39 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Fixed — routing page: `.title-box` never existed
+
+Two `querySelector('.title-box')` call sites on `/routing` were selecting an
+element nothing creates. Drawflow builds `.drawflow-node >
+.drawflow_content_node`, and the page's node HTML is bare title text followed by
+`<div class="box">` — there is no `.title-box` anywhere. Both call sites were
+guarded by `if (el)`, so they failed silently rather than erroring.
+
+Consequences, all long-standing:
+
+- The **speaker-mode V/A/R buttons** have never rendered.
+- The two `.title-box` CSS rules have never matched anything, so attempts to
+  adjust padding above the node label had no effect.
+
+Both injections now target `.drawflow_content_node` and insert before `.box` so
+they land on the title line. The dead CSS rules are left in place — porting
+their styling across would change the node appearance.
+
+### Changed — routing node heights line up
+
+`min-height` sat only on `.source`/`.sink`, leaving bus height purely
+content-driven, so the two kinds never matched after auto-arrange. It now lives
+on the shared `.drawflow-node` rule as `--node-h` (64px) with `box-sizing:
+border-box`, giving one lever for all three node types.
+
+Bus nodes were trimmed ~5px (proc buttons 14→12px, `.proc-buttons` margin-top
+2→0, bus `.level-bar` margin-top 3→2px) to meet the raised floor.
+
+The solo bus delay slider moved from a full-width body row into the title line.
+As a body row it added ~14px that no other bus type had, so solo could never
+align; and it used `flex: 1`, stretching to the node's 290px width. It is now a
+fixed 54px control with a bare numeric readout.
+
 ### Fixed — periodic clicks on the AllStar/USRP send path
 
 `UsrpPlugin.put_audio` downsampled 48 kHz → 8 kHz by calling `resample_poly` on
