@@ -365,6 +365,28 @@ PLAYBACK_VOLUME = 1.0
 # Example: 3600 = play station_id file once per hour
 PLAYBACK_ANNOUNCEMENT_INTERVAL = 0
 
+# Background music beds, comma-separated. Relative names resolve against
+# PLAYBACK_DIRECTORY; absolute paths are used as-is. They play LOOPED through
+# the System Sounds node, so they go wherever that node is wired in /routing.
+# Excluded from the numbered soundboard slots (like loop.* and station_id*).
+BGM_FILES = bgm1.mp3, bgm2.mp3, bgm3.mp3
+
+# How far the BGM bed drops while the announcer message plays, in dB.
+# Broadcast-style: attenuated, not muted, so the music stays audible under
+# the voice. Only BGM uses this; all other sources keep hard-mute ducking.
+BGM_DUCK_DB = -12.0
+
+# BGM duck envelope, in seconds for the FULL transition. Down fast so the
+# voice gets out in front, HOLD across short gaps so the bed cannot pump
+# between words, then back up slowly — the broadcast/DJ feel.
+BGM_DUCK_ATTACK = 0.25
+BGM_DUCK_HOLD = 0.4
+BGM_DUCK_RELEASE = 1.2
+
+# Seconds between repeats of the announcer message (minimum 2). The gap is
+# measured from the END of the message, so a long one cannot overlap itself.
+ANNOUNCER_INTERVAL = 10.0
+
 # Number of soundboard slots (1..N). Slot 0 is always the station ID.
 # Only 1-9 can be triggered from the physical keyboard (a keypress is one
 # character); higher slots work from the web UI, `!play <n>` and MCP.

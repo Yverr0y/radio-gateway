@@ -611,6 +611,12 @@ class BusManager:
         # bare 'kv4p' source id is gone.
         if getattr(gw, 'playback_source', None):
             source_map['playback'] = (gw.playback_source, 0, False)
+        # BGM is duckable (it is the bed). Announcer is NOT duckable and is
+        # higher priority, which is what makes it the ducker of the pair.
+        if getattr(gw, 'bgm_source', None):
+            source_map['bgm'] = (gw.bgm_source, 12, True)
+        if getattr(gw, 'announcer_source', None):
+            source_map['announcer'] = (gw.announcer_source, 1, False)
         if getattr(gw, 'loop_playback_source', None):
             source_map['loop_playback'] = (gw.loop_playback_source, 10, True)
         if getattr(gw, 'web_mic_source', None):
@@ -1088,6 +1094,10 @@ class BusManager:
         # endpoint loop below.
         elif source_id == 'aioc' and getattr(gw, 'th9800_plugin', None):
             return gw.th9800_plugin
+        elif source_id == 'bgm' and getattr(gw, 'bgm_source', None):
+            return gw.bgm_source
+        elif source_id == 'announcer' and getattr(gw, 'announcer_source', None):
+            return gw.announcer_source
         elif source_id == 'playback' and getattr(gw, 'playback_source', None):
             return gw.playback_source
         elif source_id == 'loop_playback' and getattr(gw, 'loop_playback_source', None):

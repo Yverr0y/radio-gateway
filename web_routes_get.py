@@ -1237,6 +1237,13 @@ def handle_routing_levels(handler, parent):
             data['playback'] = getattr(gw.playback_source, 'audio_level', 0)
         if getattr(gw, 'loop_playback_source', None):
             data['loop_playback'] = getattr(gw.loop_playback_source, 'audio_level', 0)
+        # BGM + Announcer are routable source nodes, so the routing page needs
+        # their meters too — without these entries their nodes render with a
+        # permanently dead activity bar even while they are producing audio.
+        if getattr(gw, 'bgm_source', None):
+            data['bgm'] = getattr(gw.bgm_source, 'audio_level', 0)
+        if getattr(gw, 'announcer_source', None):
+            data['announcer'] = getattr(gw.announcer_source, 'audio_level', 0)
         if getattr(gw, 'announce_input_source', None):
             data['announce'] = getattr(gw.announce_input_source, 'audio_level', 0)
         if getattr(gw, 'web_mic_source', None):

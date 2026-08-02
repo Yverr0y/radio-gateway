@@ -323,6 +323,23 @@ class Config:
             'WEB_MIC_VOLUME': 4.0,              # volume multiplier for browser mic audio
             # Web Monitor (browser mic → mixer via WebSocket, no PTT)
             'ENABLE_WEB_MONITOR': True,
+            # How far the BGM bed drops while the announcer speaks, in dB.
+            # Broadcast-style: attenuated, not muted, so the bed stays audible.
+            # Only BGM uses this — every other source keeps hard-mute ducking.
+            'BGM_DUCK_DB': -12.0,
+            # BGM duck envelope. Down fast, hold across gaps, back up slowly —
+            # the broadcast/DJ feel. Seconds for the FULL transition.
+            'BGM_DUCK_ATTACK': 0.25,
+            'BGM_DUCK_HOLD': 0.4,
+            'BGM_DUCK_RELEASE': 1.2,
+            # Seconds between repeats of the announcer message (min 2).
+            'ANNOUNCER_INTERVAL': 10.0,
+            # Background music beds, comma-separated. Relative names resolve
+            # against PLAYBACK_DIRECTORY; absolute paths are used as-is. These
+            # play looped through the System Sounds node, so they follow
+            # whatever that node is wired to in the routing graph. They are
+            # excluded from the numbered soundboard slots.
+            'BGM_FILES': 'bgm1.mp3, bgm2.mp3, bgm3.mp3',
             # Number of soundboard slots (1..N). Slot 0 is always the station ID.
             # NOTE only 1-9 are reachable from the physical keyboard — a keypress
             # is a single character. Higher slots work from the web UI, `!play <n>`

@@ -118,6 +118,16 @@ def setup_playback(gw):
         gw.playback_source = None
 
     gw.loop_playback_source = LoopPlaybackSource(gw)
+    # BGM + Announcer are their own sources (own routing nodes) so the bed
+    # and the repeating message can play at once and duck against each other.
+    from audio_sources import BGMSource, AnnouncerSource
+    gw.bgm_source = BGMSource(gw)
+    gw.announcer_source = AnnouncerSource(gw)
+    try:
+        import announcer
+        announcer.apply(gw)          # restore the persisted message
+    except Exception as _e:
+        print(f'  [Announcer] restore failed: {_e}')
     gw.loop_playback_source._stream_trace = gw._stream_trace
 
 

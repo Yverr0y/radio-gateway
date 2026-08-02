@@ -574,3 +574,170 @@ function toggleTestLoop(btn) {
       _sbNotify('Loop failed: ' + e, 'error');
     });
 }
+
+// ── Background music ────────────────────────────────────────────────────────
+// BGM plays through the playback source, so it lands wherever the "System
+// Sounds" node is wired in /routing. Buttons reflect SERVER state on every
+// poll — same lesson as the Loop button, which used to keep its lit state only
+// in the browser and end up inverted.
+
+function renderBgm(s) {
+  var row = document.getElementById('bgm-row');
+  if (!row || !s.bgm) return;
+
+  var key = s.bgm.map(function (b) { return b.slot + ':' + b.file; }).join(',');
+  if (row.dataset.bgmKey !== key) {
+    row.dataset.bgmKey = key;
+    row.innerHTML = s.bgm.map(function (b) {
+      return '<button class="ctrl-btn" id="bgm-' + b.slot + '" ' +
+             'onclick="toggleBgm(' + b.slot + ')" ' +
+             'aria-label="Background music ' + b.slot + '">' +
+             '<span class="pb-key">BGM ' + b.slot + '</span>' +
+             '<span class="pb-name" id="bgm-name-' + b.slot + '"></span></button>';
+    }).join('');
+  }
+
+  s.bgm.forEach(function (b) {
+    var btn = document.getElementById('bgm-' + b.slot);
+    var nm = document.getElementById('bgm-name-' + b.slot);
+    if (btn) {
+      if (btn.dataset.busy === '1') return;
+      btn.classList.toggle('muted', !!b.playing);
+      btn.classList.toggle('dim', !b.available);
+      btn.title = b.available
+        ? (b.file + (b.playing ? ' — playing (click to stop)' : ' — click to loop'))
+        : (b.file + ' not found in the audio directory');
+    }
+    if (nm) nm.textContent = b.file.replace(/\.[^.]+$/, '').substring(0, 11);
+  });
+}
+
+function toggleBgm(slot) {
+  var btn = document.getElementById('bgm-' + slot);
+  if (btn) btn.dataset.busy = '1';
+  fetch('/bgm', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({slot: slot, action: 'toggle'})
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (btn) btn.dataset.busy = '';
+      if (!d.ok && d.error) _sbNotify(d.error, 'error');
+      // Let the next /status poll paint the result — one source of truth.
+    })
+    .catch(function (e) {
+      if (btn) btn.dataset.busy = '';
+      _sbNotify('BGM failed: ' + e, 'error');
+    });
+}
+
+// ── Announcer (repeating message over the BGM bed) ──────────────────────────
+// Text persists server-side (~/.config/radio-gateway/announcer.json), so it
+// survives restarts and is shared by every page.
+
+function openAnnouncer() {
+  fetch('/announcer')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok && d.error) { _sbNotify(d.error, 'error'); return; }
+      _annDialog(d);
+    })
+    .catch(function (e) { _sbNotify('Announcer unavailable: ' + e, 'error'); });
+}
+
+function _annDialog(d) {
+  var old = document.getElementById('ann-dlg');
+  if (old) old.remove();
+  var beds = d.beds && d.beds.length ? d.beds
+           : [{slot: 1, file: 'bgm1'}, {slot: 2, file: 'bgm2'}, {slot: 3, file: 'bgm3'}];
+
+  var voices = d.voices_available || [];
+  var vopts = function (sel) {
+    // Blank entry = "use the engine default", so a bed can opt out of a
+    // specific voice without clearing its message.
+    return '<option value="">— engine default —</option>' + voices.map(function (v) {
+      return '<option value="' + _sbEsc(v.value) + '"' +
+             (String(v.value) === String(sel) ? ' selected' : '') + '>' +
+             _sbEsc(v.label) + '</option>';
+    }).join('');
+  };
+
+  var rows = beds.map(function (b) {
+    var txt = (d.messages && d.messages[String(b.slot)]) || '';
+    var vc = (d.voices && d.voices[String(b.slot)]) || '';
+    var now = d.playing_slot === b.slot ? ' <span class="ann-live">playing</span>' : '';
+    return '<div class="ann-row">' +
+             '<span class="ann-lbl">BGM ' + b.slot +
+               '<span class="ann-file">' + _sbEsc(b.file || '') + '</span>' + now + '</span>' +
+             '<textarea class="ctrl-input ann-msg" data-slot="' + b.slot + '" rows="2" ' +
+               'maxlength="500" placeholder="Message spoken over this bed">' +
+               _sbEsc(txt) + '</textarea>' +
+             '<select class="ctrl-input ann-voice" data-slot="' + b.slot + '" ' +
+               'aria-label="Voice for bed ' + b.slot + '">' + vopts(vc) + '</select>' +
+           '</div>';
+  }).join('');
+
+  var dlg = document.createElement('dialog');
+  dlg.id = 'ann-dlg';
+  dlg.className = 'sb-dialog';
+  dlg.innerHTML =
+    '<h3 class="sb-title">Bed messages</h3>' +
+    '<p class="sb-sub">Each bed has its own message and voice, spoken over it at ' +
+      'a fixed interval while the bed plays. The music ducks but stays audible. ' +
+      'Routed via the <strong>Announcer</strong> node in /routing.' +
+      (d.tts_backend ? ' Voices shown are for the active <strong>' +
+        _sbEsc(d.tts_backend) + '</strong> engine.' : '') + '</p>' +
+    '<div class="ann-list">' + rows + '</div>' +
+    '<div class="sb-bar" style="margin-top:var(--s-2)">' +
+      '<label class="sb-sub" style="margin:0">Every</label>' +
+      '<input id="ann-interval" class="ctrl-input" type="number" min="2" max="3600" ' +
+        'step="1" style="width:5em">' +
+      '<label class="sb-sub" style="margin:0">seconds</label>' +
+      '<label class="sb-sub" style="margin:0 0 0 auto">' +
+        '<input id="ann-enabled" type="checkbox"> Enabled</label>' +
+    '</div>' +
+    '<div class="sb-foot">' +
+      '<button type="button" class="sb-btn" id="ann-cancel">Cancel</button>' +
+      '<button type="button" class="sb-btn sb-primary" id="ann-save">Save</button>' +
+    '</div>';
+  document.body.appendChild(dlg);
+
+  dlg.querySelector('#ann-interval').value = d.interval || 10;
+  dlg.querySelector('#ann-enabled').checked = !!d.enabled;
+  dlg.querySelector('#ann-cancel').onclick = function () { dlg.close(); };
+  dlg.querySelector('#ann-save').onclick = function () {
+    var msgs = {}, vcs = {};
+    dlg.querySelectorAll('textarea.ann-msg').forEach(function (t) {
+      msgs[t.dataset.slot] = t.value;
+    });
+    dlg.querySelectorAll('select.ann-voice').forEach(function (v) {
+      vcs[v.dataset.slot] = v.value;
+    });
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    fetch('/announcer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        messages: msgs,
+        voices: vcs,
+        interval: parseFloat(dlg.querySelector('#ann-interval').value) || 10,
+        enabled: dlg.querySelector('#ann-enabled').checked
+      })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        dlg.close();
+        if (!res.ok) _sbNotify('Saved, but TTS failed: ' + (res.error || 'unknown'), 'error');
+        else if (!res.enabled) _sbNotify('Messages saved (announcer off)');
+        else if (res.playing_slot) _sbNotify('Announcing bed ' + res.playing_slot +
+                                             ' every ' + res.interval + 's');
+        else _sbNotify('Saved — starts when you play a bed');
+      })
+      .catch(function (e) { dlg.close(); _sbNotify('Save failed: ' + e, 'error'); });
+  };
+  dlg.addEventListener('close', function () { dlg.remove(); });
+  dlg.showModal();
+}

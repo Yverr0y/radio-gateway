@@ -396,7 +396,9 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         ('playback', 'System Sounds', [
             'ENABLE_PLAYBACK', 'PLAYBACK_DIRECTORY',
             'PLAYBACK_ANNOUNCEMENT_FILE', 'PLAYBACK_ANNOUNCEMENT_INTERVAL',
-            'PLAYBACK_VOLUME', 'PLAYBACK_SLOTS', 'ENABLE_SOUNDBOARD', 'SOUNDBOARD_CATEGORIES',
+            'PLAYBACK_VOLUME', 'PLAYBACK_SLOTS', 'BGM_FILES', 'BGM_DUCK_DB', 'BGM_DUCK_ATTACK', 'BGM_DUCK_HOLD',
+            'BGM_DUCK_RELEASE', 'ANNOUNCER_INTERVAL',
+            'ENABLE_SOUNDBOARD', 'SOUNDBOARD_CATEGORIES',
             'SOUNDBOARD_MAX_SECONDS',
         ]),
         ('kv4p', 'KV4P HT Radio', [
@@ -770,6 +772,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             _GET_EXACT = {
                 '/status':                'g:handle_status',
                 '/soundboard/categories': 'p:handle_soundboard_categories',
+                '/announcer':             'p:handle_announcer',
                 '/tts/engine':            'p:handle_tts_engine',
                 '/metrics':               'g:handle_metrics',
                 '/sinkstats':             'g:handle_sinkstats',
@@ -919,6 +922,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 '/transcribe_config':          'p:handle_transcribe_config',
                 '/transcribe_worker/register': 'p:handle_transcribe_worker_register',
                 '/testloop':                   'p:handle_testloop',
+                '/bgm':                        'p:handle_bgm',
+                '/announcer':                  'p:handle_announcer',
                 '/mixer':                      'p:handle_mixer',
                 '/aitext':                     'p:handle_aitext',
                 '/cw':                         'p:handle_cw',
@@ -1411,6 +1416,12 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             if getattr(gw, 'playback_source', None):
                 sources.append({**{'id': 'playback', 'name': 'System Sounds', 'enabled': True,
                                 'can_rx': False, 'can_tx': True, 'can_ptt': True}, **_src_info(gw.playback_source)})
+            if getattr(gw, 'bgm_source', None):
+                sources.append({**{'id': 'bgm', 'name': 'BGM', 'enabled': True,
+                                'can_rx': False, 'can_tx': True, 'can_ptt': True}, **_src_info(gw.bgm_source)})
+            if getattr(gw, 'announcer_source', None):
+                sources.append({**{'id': 'announcer', 'name': 'Announcer', 'enabled': True,
+                                'can_rx': False, 'can_tx': True, 'can_ptt': True}, **_src_info(gw.announcer_source)})
             if getattr(gw, 'loop_playback_source', None):
                 sources.append({**{'id': 'loop_playback', 'name': 'Loop Playback', 'enabled': True,
                                 'can_rx': True, 'can_tx': False, 'can_ptt': False}, **_src_info(gw.loop_playback_source)})

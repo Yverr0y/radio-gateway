@@ -39,6 +39,22 @@ except ImportError:
     print("Install it with: sudo apt-get install python3-pyaudio")
     sys.exit(1)
 
+def bgm_files(config):
+    """[(slot, name_or_path), ...] from BGM_FILES. 1-based.
+
+    Module-level because two classes need it: BGMSource plays these, and
+    FilePlaybackSource must keep them out of the numbered soundboard slots.
+    """
+    raw = str(getattr(config, 'BGM_FILES', '') or '').strip()
+    names = ([n.strip() for n in raw.replace('\n', ',').split(',') if n.strip()]
+             if raw else ['bgm1.mp3', 'bgm2.mp3', 'bgm3.mp3'])
+    return list(enumerate(names, 1))
+
+
+def bgm_path(config, name, audio_dir):
+    return name if os.path.isabs(name) else os.path.join(audio_dir, name)
+
+
 class AudioSource:
     """Base class for all audio sources"""
     def __init__(self, name, config):
@@ -97,7 +113,8 @@ class FilePlaybackSource(AudioSource):
         self._play_seq = 0  # Sequence counter — each button press gets a unique ID
         import threading as _th
         self._play_lock = _th.Lock()  # Serializes stop+decode+queue
-        self._loop_active = False  # Test loop mode
+        self._loop_active = False  # Test loop / BGM mode
+        self._loop_label = None    # 'test' or 'bgm<N>' — which bed is looping
         
         # Periodic announcement - auto-detect station_id file
         self.last_announcement_time = 0
@@ -140,7 +157,20 @@ class FilePlaybackSource(AudioSource):
     def _is_reserved(cls, filename):
         name = os.path.basename(filename).lower()
         return any(name.startswith(p) for p in cls._RESERVED_PREFIXES)
-    
+
+    def _is_reserved_for_slots(self, filename):
+        """Class-level reservations PLUS the configured BGM beds.
+
+        BGM files sit in the same directory as the soundboard cache, so without
+        this they would be handed a numbered slot — the same trap loop.mp3 fell
+        into.
+        """
+        if self._is_reserved(filename):
+            return True
+        base = os.path.basename(filename).lower()
+        return base in {os.path.basename(n).lower()
+                        for _, n in bgm_files(self.config)}
+
     def check_file_availability(self):
         """Scan audio directory and intelligently load files"""
         import os
@@ -180,7 +210,7 @@ class FilePlaybackSource(AudioSource):
         # so 12_siren.mp3 lands in slot 12.
         for filepath in all_files:
             filename = os.path.basename(filepath)
-            if self._is_reserved(filename):
+            if self._is_reserved_for_slots(filename):
                 continue
             prefix = filename.split('_', 1)[0]
             if prefix.isdigit() and prefix in slot_keys and prefix not in file_map:
@@ -190,7 +220,7 @@ class FilePlaybackSource(AudioSource):
         claimed = {v[1] for v in file_map.values()}
         unassigned_files = [f for f in all_files
                             if os.path.basename(f) not in claimed
-                            and not self._is_reserved(f)]
+                            and not self._is_reserved_for_slots(f)]
 
         empty = [k for k in slot_keys if k not in file_map]
         for filepath, key in zip(unassigned_files, empty):
@@ -813,6 +843,7 @@ class FilePlaybackSource(AudioSource):
         if want_stop:
             was = self._loop_active
             self._loop_active = False
+            self._loop_label = None
             if was:
                 self.stop_playback()
                 print("[Playback] Test loop stopped")
@@ -822,6 +853,7 @@ class FilePlaybackSource(AudioSource):
             path = os.path.join(self.announcement_directory, name)
             if os.path.exists(path):
                 self._loop_active = True
+                self._loop_label = 'test'
                 self.queue_file(path)
                 print(f"[Playback] Test loop started: {name}")
                 return {'ok': True, 'looping': True, 'file': name}
@@ -843,6 +875,7 @@ class FilePlaybackSource(AudioSource):
 
         # Clear current playback
         self._loop_active = False
+        self._loop_label = None
         self.current_file = None
         # Inject 200ms silence to flush downstream buffers (endpoint aplay,
         # WebSocket send queue, browser audio buffer) before clearing file_data
@@ -904,16 +937,37 @@ class FilePlaybackSource(AudioSource):
                 if sample_rate != self.config.AUDIO_RATE:
                     if self.gateway.config.VERBOSE_LOGGING:
                         print(f"  Resampling: {sample_rate}Hz → {self.config.AUDIO_RATE}Hz")
+                    # soxr first: same quality tier as resampy but roughly two
+                    # orders of magnitude faster on this hardware. Measured on
+                    # a 5-minute 44.1 kHz bed — resampy ~57s, soxr 0.48s. That
+                    # 25s decode was the whole reason a BGM button took ~26s to
+                    # make a sound; 48 kHz files skip this block entirely, which
+                    # is why only some files were slow.
+                    audio_float = audio_data.astype('float32') / 32768.0
+                    resampled = None
                     try:
-                        import resampy
-                        # resampy works with float data
-                        audio_float = audio_data.astype('float32') / 32768.0
-                        audio_resampled = resampy.resample(audio_float, sample_rate, self.config.AUDIO_RATE)
-                        audio_data = (audio_resampled * 32768.0).astype('int16')
+                        import soxr
+                        resampled = soxr.resample(audio_float, sample_rate,
+                                                  self.config.AUDIO_RATE)
                     except ImportError:
+                        try:
+                            import resampy
+                            resampled = resampy.resample(audio_float, sample_rate,
+                                                         self.config.AUDIO_RATE)
+                        except ImportError:
+                            resampled = None
+
+                    if resampled is not None:
+                        # Clip before the int16 cast. Both resamplers can ring
+                        # slightly past full scale on transients, and the old
+                        # unclipped cast wrapped that round to the opposite
+                        # polarity — an audible tick rather than a soft clip.
+                        audio_data = np.clip(resampled * 32768.0,
+                                             -32768, 32767).astype('int16')
+                    else:
                         # Fallback: simple linear interpolation
                         if self.gateway.config.VERBOSE_LOGGING:
-                            print(f"    (using basic resampling - install resampy for better quality)")
+                            print(f"    (basic resampling — install soxr for better quality)")
                         ratio = self.config.AUDIO_RATE / sample_rate
                         new_length = int(len(audio_data) * ratio)
                         indices = (np.arange(new_length) / ratio).astype(int)
@@ -3515,3 +3569,300 @@ class StreamOutputSource:
 
 # CW generation moved to audio_util.py — re-exported above for backward compat
 
+
+
+class BGMSource(AudioSource):
+    """Looping background-music bed, as its own routing node.
+
+    Separate from FilePlaybackSource on purpose: that source decodes one file
+    at a time, so BGM sharing it meant the music stopped the moment anything
+    else played. A repeating message over a music bed needs both running at
+    once, which means BGM needs its own buffer and its own node in /routing.
+
+    Ducking: every other duckable source is DROPPED from the mix when a ducker
+    is active. This one instead reports `duck_level`, a linear gain the bus
+    applies in place of muting, so the bed stays audible underneath — the
+    broadcast behaviour rather than a hard cut.
+    """
+
+    def __init__(self, gateway):
+        super().__init__("BGM", gateway.config)
+        self.gateway = gateway
+        self.priority = 12
+        self.ptt_control = True
+        self.volume = 1.0
+        self.audio_level = 0
+        self._lock = threading.Lock()
+        self._pcm = None        # decoded bed, played on repeat
+        self._pos = 0
+        self._slot = None
+        # Duck envelope — 1.0 = full level, duck_level = fully ducked.
+        # Timed in AUDIO time (samples produced), not wall clock: the ramp
+        # advances per chunk, so a wall-clock hold would drift out of step
+        # whenever the bus stalls or runs ahead.
+        self._duck_gain = 1.0
+        self._audio_secs = 0.0
+        self._duck_hold_until = 0.0
+
+    @property
+    def duck_level(self):
+        """Linear gain used instead of muting when ducked (0.0-1.0)."""
+        try:
+            db = float(getattr(self.config, 'BGM_DUCK_DB', -12.0))
+        except (TypeError, ValueError):
+            db = -12.0
+        return max(0.0, min(1.0, 10.0 ** (db / 20.0)))
+
+    def _cfg_secs(self, key, default):
+        try:
+            return max(0.01, float(getattr(self.config, key, default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _duck_target(self):
+        """Full gain, or the ducked gain while the announcer is speaking.
+
+        This is a deliberate side-channel: BGM asks the announcer directly
+        rather than the bus doing it. The bus-level duck only exists on a
+        ListenBus, and a ListenBus gates its Mumble sink on a bus-wide VAD
+        flag that steady music does not hold open — so routing the bed through
+        one made the music disappear between announcements. Ducking here works
+        on ANY bus type. The coupling is narrow (one is_active() read) and
+        stated plainly so it is not a mystery later.
+        """
+        ann = getattr(self.gateway, 'announcer_source', None)
+        speaking = bool(ann is not None and ann.is_active())
+        if speaking:
+            # Hold keeps the bed down across short gaps so it cannot pump
+            # between words or over the tail of a phrase.
+            self._duck_hold_until = self._audio_secs + self._cfg_secs('BGM_DUCK_HOLD', 0.4)
+        held = self._audio_secs < self._duck_hold_until
+        return self.duck_level if (speaking or held) else 1.0
+
+    def _duck_ramp(self, frames):
+        """Advance the duck envelope one chunk. Returns (start_gain, end_gain).
+
+        Travels at a constant rate across the full duck range, so the times
+        below are the real transition durations rather than a vague
+        coefficient. Ramped per sample by the caller — stepping the gain once
+        per chunk is audible as zipper noise on sustained music.
+        """
+        chunk_secs = frames / float(getattr(self.config, 'AUDIO_RATE', 48000) or 48000)
+        self._audio_secs += chunk_secs
+        target = self._duck_target()
+        start = self._duck_gain
+        # Down fast (get out of the way), back up slowly — the broadcast feel.
+        t_const = (self._cfg_secs('BGM_DUCK_ATTACK', 0.25) if target < start
+                   else self._cfg_secs('BGM_DUCK_RELEASE', 1.2))
+        span = max(1e-6, 1.0 - self.duck_level)
+        max_step = span * (chunk_secs / t_const)
+        delta = target - start
+        end = target if abs(delta) <= max_step else start + _math_mod.copysign(max_step, delta)
+        self._duck_gain = end
+        return start, end
+
+    @property
+    def _audio_dir(self):
+        ps = getattr(self.gateway, 'playback_source', None)
+        return (getattr(ps, 'announcement_directory', None)
+                or getattr(self.config, 'PLAYBACK_DIRECTORY', './audio/'))
+
+    def bgm_state(self):
+        """Per-bed availability and which is playing, for the UI."""
+        out = []
+        for n, name in bgm_files(self.config):
+            out.append({
+                'slot': n,
+                'file': os.path.basename(name),
+                'available': os.path.exists(bgm_path(self.config, name, self._audio_dir)),
+                'playing': self._slot == n,
+            })
+        return out
+
+    def play_slot(self, slot, action='toggle'):
+        """Start/stop a bed by slot number. Returns a dict for the endpoint.
+
+        Only one bed at a time — this source has a single decode buffer, so
+        starting bed 2 while 1 runs swaps rather than stacking. Unlike the old
+        implementation this no longer touches FilePlaybackSource, so BGM keeps
+        playing while soundboard hits, TTS and the announcer come and go.
+        """
+        try:
+            slot = int(slot)
+        except (TypeError, ValueError):
+            return {'ok': False, 'error': f'bad BGM slot {slot!r}', 'bgm': self.bgm_state()}
+
+        mapping = dict(bgm_files(self.config))
+        if slot not in mapping:
+            return {'ok': False, 'error': f'BGM slot {slot} not configured',
+                    'bgm': self.bgm_state()}
+
+        action = str(action or 'toggle').lower()
+        if action == 'stop' or (action == 'toggle' and self._slot == slot):
+            self.stop()
+            print(f"[BGM] Bed {slot} stopped")
+            return {'ok': True, 'playing': None, 'bgm': self.bgm_state()}
+
+        path = bgm_path(self.config, mapping[slot], self._audio_dir)
+        if not os.path.exists(path):
+            return {'ok': False,
+                    'error': f'{os.path.basename(path)} not found in the audio directory',
+                    'bgm': self.bgm_state()}
+        if not self.play(slot, path):
+            self.stop()
+            return {'ok': False, 'error': f'could not decode {os.path.basename(path)}',
+                    'bgm': self.bgm_state()}
+        print(f"[BGM] Bed {slot} started: {os.path.basename(path)}")
+        return {'ok': True, 'playing': slot, 'bgm': self.bgm_state()}
+
+    def play(self, slot, path):
+        """Decode `path` and start looping it. Returns True on success."""
+        # Reuse FilePlaybackSource's decoder rather than reimplementing the
+        # resample/channel handling — identical format guarantees, one place
+        # to fix.
+        ps = getattr(self.gateway, 'playback_source', None)
+        if ps is None:
+            return False
+        pcm = ps._decode_file(path)
+        if not pcm:
+            return False
+        with self._lock:
+            self._pcm = pcm
+            self._pos = 0
+            self._slot = slot
+        return True
+
+    def stop(self):
+        with self._lock:
+            self._pcm = None
+            self._pos = 0
+            self._slot = None
+            self.audio_level = 0
+            self._duck_gain = 1.0
+            self._audio_secs = 0.0
+            self._duck_hold_until = 0.0
+
+    @property
+    def playing_slot(self):
+        return self._slot
+
+    def is_active(self):
+        return self._pcm is not None
+
+    def get_audio(self, chunk_size):
+        want = chunk_size * getattr(self.config, 'AUDIO_CHANNELS', 1) * 2
+        with self._lock:
+            pcm = self._pcm
+            if not pcm:
+                return None, False
+            # Wrap around the end of the bed, splicing across the seam so a
+            # short bed cannot emit a part-frame (which would desynchronise
+            # stereo for the rest of the loop).
+            out = pcm[self._pos:self._pos + want]
+            self._pos += len(out)
+            while len(out) < want:
+                self._pos = 0
+                take = min(want - len(out), len(pcm))
+                out += pcm[:take]
+                self._pos = take
+            frames = len(out) // 2
+            g0, g1 = self._duck_ramp(frames)
+            if self.volume != 1.0 or g0 != 1.0 or g1 != 1.0:
+                arr = np.frombuffer(out, dtype=np.int16).astype(np.float32)
+                if g0 != 1.0 or g1 != 1.0:
+                    # Per-sample ramp across the chunk — a single step per
+                    # chunk is audible as zipper noise on sustained music.
+                    arr = arr * np.linspace(g0, g1, num=frames, dtype=np.float32)
+                out = np.clip(arr * self.volume, -32768, 32767).astype(np.int16).tobytes()
+            self.audio_level = pcm_level(out, self.audio_level)
+        return out, True
+
+    @property
+    def ducking(self):
+        """True when the bed is below full level (for the UI)."""
+        return self._duck_gain < 0.999
+
+    def cleanup(self):
+        self.stop()
+
+
+class AnnouncerSource(AudioSource):
+    """Repeats a short TTS message at a fixed interval.
+
+    Its own node so it can be routed independently of the music, and so it can
+    act as the DUCKER against BGM — higher priority and not duckable, which is
+    what the bus uses to decide who ducks whom.
+
+    Between announcements it returns None (silent, inactive), so it only
+    occupies the bus while actually speaking.
+    """
+
+    def __init__(self, gateway):
+        super().__init__("Announcer", gateway.config)
+        self.gateway = gateway
+        self.priority = 1
+        self.ptt_control = True
+        self.volume = 1.0
+        self.audio_level = 0
+        self._lock = threading.Lock()
+        self._pcm = None            # decoded message, replayed each cycle
+        self._pos = None            # None = idle between announcements
+        self._next_at = 0.0
+        self._enabled = False
+        self._last_error = ''
+
+    def set_message_pcm(self, pcm):
+        with self._lock:
+            self._pcm = pcm or None
+            self._pos = None
+
+    def set_enabled(self, on, interval=None):
+        with self._lock:
+            self._enabled = bool(on)
+            self._pos = None
+            # Speak once promptly on enable rather than waiting a full cycle.
+            self._next_at = time.monotonic() + (1.0 if on else 0.0)
+
+    @property
+    def interval(self):
+        try:
+            v = float(getattr(self.config, 'ANNOUNCER_INTERVAL', 10.0))
+        except (TypeError, ValueError):
+            v = 10.0
+        return max(2.0, v)
+
+    def is_active(self):
+        return self._pos is not None
+
+    def get_audio(self, chunk_size):
+        want = chunk_size * getattr(self.config, 'AUDIO_CHANNELS', 1) * 2
+        now = time.monotonic()
+        with self._lock:
+            if not self._enabled or not self._pcm:
+                self._pos = None
+                return None, False
+            if self._pos is None:
+                if now < self._next_at:
+                    return None, False
+                self._pos = 0           # start an announcement
+            out = self._pcm[self._pos:self._pos + want]
+            self._pos += len(out)
+            if self._pos >= len(self._pcm):
+                # Finished — interval is measured from the END of speech, so a
+                # long message cannot overlap its own next cycle.
+                self._pos = None
+                self._next_at = now + self.interval
+            if not out:
+                return None, False
+            if len(out) < want:
+                out = out.ljust(want, b'\x00')
+            if self.volume != 1.0:
+                arr = np.frombuffer(out, dtype=np.int16).astype(np.float32)
+                out = np.clip(arr * self.volume, -32768, 32767).astype(np.int16).tobytes()
+            self.audio_level = pcm_level(out, self.audio_level)
+        return out, True
+
+    def cleanup(self):
+        with self._lock:
+            self._enabled = False
+            self._pos = None

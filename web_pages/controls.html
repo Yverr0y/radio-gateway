@@ -260,7 +260,9 @@
       <button onclick="toggleTestLoop(this)" id="btn-test-loop" title="Loop audio/loop.mp3">Loop</button>
       <button onclick="refreshSounds()" title="Load a fresh set of random sounds">&#x21bb; New</button>
       <button onclick="openSoundboardPicker()" title="Choose soundboard categories">Cats</button>
+      <button onclick="openAnnouncer()" title="Repeating message over the BGM bed">Msg</button>
     </div>
+    <div class="bgm-row" id="bgm-row"></div>
     <div class="smart-row" id="smart-announce-group">
       <button onclick="sendKey('[')">Smart #1</button>
       <button onclick="sendKey(']')">Smart #2</button>
@@ -522,6 +524,7 @@ createPoller('/status', 1000, function(s) {
   // Playback button states + name fragments
   renderPlaybackGrid(s);
   syncLoopButton(s);
+  renderBgm(s);
   // Show/hide sections
   function showIf(id, cond) { var e = document.getElementById(id); if (e) e.style.display = cond ? '' : 'none'; }
   showIf('playback-group', s.playback_enabled);

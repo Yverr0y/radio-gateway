@@ -111,5 +111,20 @@ check("property reflects the flag", s3.loop_active is False)
 s3.toggle_test_loop('start')
 check("property follows a start", s3.loop_active is True)
 
+print("\n8. BGM beds are excluded from numbered slots")
+s = make_src(slots=20, files=['bgm1.mp3', 'bgm2.mp3', 'bgm3.mp3', 'horn.mp3', 'loop.mp3'])
+s.check_file_availability()
+slotted = {v.get('filename') for k, v in s.file_status.items() if v['exists'] and k != '0'}
+check("no BGM bed occupies a numbered slot",
+      not any(str(n).startswith('bgm') for n in slotted), str(slotted))
+check("loop.mp3 still excluded too", 'loop.mp3' not in slotted, str(slotted))
+check("ordinary sounds still load", 'horn.mp3' in slotted, str(slotted))
+
+s4 = make_src(slots=9, files=['a.mp3', 'b.mp3'])
+s4.config.BGM_FILES = 'a.mp3, b.mp3'
+s4.check_file_availability()
+slotted4 = {v.get('filename') for k, v in s4.file_status.items() if v['exists'] and k != '0'}
+check("custom BGM_FILES are excluded too", not slotted4, str(slotted4))
+
 print(f"\n{'ALL PASS' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")
 sys.exit(1 if FAIL else 0)

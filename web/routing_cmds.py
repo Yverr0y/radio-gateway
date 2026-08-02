@@ -461,6 +461,8 @@ class _RoutingCmdsMixin:
             'aioc': getattr(gw, 'th9800_plugin', None),
             'aioc_tx': getattr(gw, 'th9800_plugin', None),
             'playback': getattr(gw, 'playback_source', None),
+            'bgm': getattr(gw, 'bgm_source', None),
+            'announcer': getattr(gw, 'announcer_source', None),
             'loop_playback': getattr(gw, 'loop_playback_source', None),
             'webmic': getattr(gw, 'web_mic_source', None),
             'announce': getattr(gw, 'announce_input_source', None),

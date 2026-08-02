@@ -711,6 +711,7 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             # other than that button (Stop, a queued announcement, a
             # restart). Without it the button stayed lit for ever.
             'loop_active': bool(getattr(self.playback_source, 'loop_active', False)),
+            'bgm': (self.bgm_source.bgm_state() if getattr(self, 'bgm_source', None) else []),
             'playback_slots': int(getattr(self.playback_source, 'slot_count', 9))
                               if self.playback_source else 0,
             'tts_enabled': bool(getattr(self, 'tts_engine', None)),

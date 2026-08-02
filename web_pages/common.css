@@ -607,3 +607,21 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--t-accent); }
 .sb-btn:hover:not(:disabled) { background: var(--t-btn-hover); }
 .sb-btn:disabled { opacity: 0.55; cursor: default; }
 .sb-primary { border-color: var(--t-accent); }
+
+/* Background music beds — one row of wide pads under the transport controls. */
+.bgm-row { display: flex; flex-wrap: wrap; gap: 3px; margin-top: var(--s-2); }
+.bgm-row button {
+  flex: 1 1 0; min-width: 72px; height: 42px; margin: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; padding: 2px var(--s-1); overflow: hidden;
+}
+
+/* Per-bed announcer messages */
+.ann-list { display: flex; flex-direction: column; gap: var(--s-2); }
+.ann-row  { display: flex; flex-direction: column; gap: 2px; }
+.ann-voice { width: 100%; box-sizing: border-box; }
+.ann-lbl  { font-size: var(--f-xs); color: var(--t-text-dim); display: flex;
+            align-items: baseline; gap: var(--s-1); }
+.ann-file { color: var(--t-text-mute); }
+.ann-live { color: var(--t-ok); margin-left: auto; }
+.ann-msg  { width: 100%; box-sizing: border-box; resize: vertical; }

@@ -664,9 +664,19 @@ class ListenBus(AudioBus):
             if _boost != 1.0 and audio:
                 audio = apply_gain(audio, _boost)
             if should_duck:
-                duckee_audio[slot] = None  # ducked — discard
-                if audio is not None:
+                # Partial duck, opt-in. A source exposing `duck_level` (linear
+                # gain 0-1) is ATTENUATED rather than dropped, so it stays
+                # audible under the ducker — broadcast-style, used by the BGM
+                # bed. Every other source has no such attribute and keeps the
+                # original hard-mute behaviour exactly.
+                _dl = getattr(slot.source, 'duck_level', None)
+                if _dl is not None and audio is not None:
+                    duckee_audio[slot] = apply_gain(audio, float(_dl))
                     ducked_sources.append(slot.source.name)
+                else:
+                    duckee_audio[slot] = None  # ducked — discard
+                    if audio is not None:
+                        ducked_sources.append(slot.source.name)
             else:
                 duckee_audio[slot] = audio
 

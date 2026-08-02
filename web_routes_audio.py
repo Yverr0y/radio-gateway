@@ -47,6 +47,108 @@ def handle_testloop(handler, parent):
     handler.wfile.write(json_mod.dumps(result).encode('utf-8'))
     return
 
+def handle_bgm(handler, parent):
+    """POST /bgm  {"slot": 1|2|3, "action": "start"|"stop"|"toggle"}
+
+    BGM plays through the playback source, so it follows the "System Sounds"
+    node's routing. Only one bed loops at a time — they share this source's
+    single decode buffer.
+    """
+    result = {'ok': False, 'error': 'playback not available'}
+    slot, action = None, 'toggle'
+    try:
+        length = int(handler.headers.get('Content-Length', 0))
+        if length:
+            d = json_mod.loads(handler.rfile.read(length).decode('utf-8') or '{}')
+            slot = d.get('slot')
+            action = str(d.get('action', 'toggle'))
+    except Exception:
+        pass
+    src = parent.gateway.bgm_source if parent.gateway else None
+    if src is not None:
+        if slot is None:
+            result = {'ok': True, 'bgm': src.bgm_state()}     # GET-ish query
+        else:
+            result = src.play_slot(slot, action)
+            # The announcer follows the bed: each bed carries its own message.
+            try:
+                import announcer
+                announcer.on_bgm_changed(parent.gateway)
+            except Exception as e:
+                print(f"  [Announcer] follow-BGM failed: {e}")
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.end_headers()
+    try:
+        handler.wfile.write(json_mod.dumps(result).encode('utf-8'))
+    except BrokenPipeError:
+        pass
+    return
+
+
+def handle_announcer(handler, parent):
+    """GET/POST /announcer
+
+    Messages are PER BGM BED — {"messages": {"1": "...", "2": "..."}} — plus a
+    global interval, voice and master enable. The announcer speaks whichever
+    bed is currently playing.
+    """
+    import announcer as _ann
+    gw = parent.gateway
+    result = {'ok': False, 'error': 'gateway not ready'}
+    if gw is not None:
+        try:
+            st = _ann.load()
+            if handler.command == 'POST':
+                length = int(handler.headers.get('Content-Length', 0))
+                body = handler.rfile.read(length).decode('utf-8') if length else '{}'
+                d = json_mod.loads(body or '{}')
+                if isinstance(d.get('messages'), dict):
+                    for k, v in d['messages'].items():
+                        st['messages'][str(k)] = str(v or '')[:500]
+                        _ann.invalidate(k)
+                if 'interval' in d:
+                    try:
+                        st['interval'] = max(2.0, float(d['interval']))
+                    except (TypeError, ValueError):
+                        pass
+                if isinstance(d.get('voices'), dict):
+                    for k, v in d['voices'].items():
+                        st['voices'][str(k)] = str(v or '')
+                        _ann.invalidate(k)         # that bed only
+                if 'enabled' in d:
+                    st['enabled'] = bool(d['enabled'])
+                _ann.save(st)
+                ok, err = _ann.on_bgm_changed(gw, st)
+                # Text is saved even when synthesis fails, so a transient TTS
+                # outage never loses what was typed.
+                result = dict(st, ok=ok, error=err)
+            else:
+                result = dict(st, ok=True, error='')
+            src = getattr(gw, 'announcer_source', None)
+            bgm = getattr(gw, 'bgm_source', None)
+            result['live'] = bool(src and src._enabled and src._pcm)
+            result['playing_slot'] = getattr(bgm, 'playing_slot', None) if bgm else None
+            result['beds'] = (bgm.bgm_state() if bgm else [])
+            # The dialog builds its per-bed pickers from this, so it always
+            # offers the ACTIVE engine's voices rather than a stale list.
+            try:
+                result['voices_available'] = gw._get_tts_voices()
+            except Exception:
+                result['voices_available'] = []
+            result['tts_backend'] = getattr(gw, '_tts_backend', '')
+        except Exception as e:
+            result = {'ok': False, 'error': str(e)}
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.end_headers()
+    try:
+        handler.wfile.write(json_mod.dumps(result).encode('utf-8'))
+    except BrokenPipeError:
+        pass
+    return
+
+
 def handle_mixer(handler, parent):
     """POST /mixer"""
     length = int(handler.headers.get('Content-Length', 0))

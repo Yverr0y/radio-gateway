@@ -4,6 +4,62 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Added — background music beds with a repeating spoken message
+
+Three looping music beds and a per-bed TTS announcement, mixed together with
+broadcast-style ducking.
+
+- **`BGMSource`** and **`AnnouncerSource`** are their own routing nodes (`bgm`,
+  `announcer`), each with its own decode buffer. BGM originally shared
+  `FilePlaybackSource`, which plays one file at a time — so the music stopped
+  the moment anything else played. Separate sources are what let a message run
+  over a bed at all.
+- **Per-bed messages and voices.** Each bed carries its own text and voice; the
+  announcer speaks whichever bed is playing and goes quiet when BGM stops.
+  State persists to `~/.config/radio-gateway/announcer.json`. Synthesis is
+  cached per bed on `(text, voice, backend)`, so the repeat cycle is free and
+  editing one bed does not re-render another. A voice belonging to a different
+  engine is dropped rather than allowed to raise (`valid_voice`).
+- **Duck envelope in `BGMSource`** — attack `BGM_DUCK_ATTACK` (0.25s), hold
+  `BGM_DUCK_HOLD` (0.4s), release `BGM_DUCK_RELEASE` (1.2s), depth
+  `BGM_DUCK_DB` (−12 dB, never to zero). Ramped per sample; stepping the gain
+  once per chunk is audible as zipper noise on sustained music. Timed in AUDIO
+  time rather than wall clock so the hold cannot drift out of step with the
+  ramp when the bus stalls.
+
+  The bed ducks itself rather than relying on bus ducking, because only
+  `ListenBus` implements ducking at all, and a listen bus gates its Mumble sink
+  on a bus-wide VAD flag that steady music does not hold open — routing a bed
+  through one made the music vanish between announcements. Ducking in the
+  source works on any bus type. The coupling is documented in `_duck_target`.
+- Opt-in partial ducking in `audio_bus`: a source exposing `duck_level` is
+  attenuated instead of dropped. No existing source has the attribute, so every
+  live audio path keeps its exact hard-mute behaviour.
+- BGM beds are excluded from the numbered soundboard slots, the same
+  reservation that keeps `loop.*` out.
+
+### Fixed — resampling was ~100x slower than it needed to be
+
+`_decode_file` resampled with `resampy`. On a 5-minute 44.1 kHz bed that took
+**25.9s**, which is why a BGM button could take half a minute to make a sound —
+48 kHz files skipped the block entirely, so only some files were slow.
+
+Now prefers `soxr` (already a dependency), falling back to resampy then linear.
+Same file decodes in **1.30s**. Verified equivalent: correlation 1.000000
+against resampy on a known tone, max sample difference 0.00088.
+
+The int16 cast is now clipped. Both resamplers can ring past full scale on
+transients, and the old unclipped cast wrapped that round to the opposite
+polarity — an audible tick rather than a soft clip.
+
+`_decode_file` is shared, so soundboard clips, announcements and TTS decode all
+benefit whenever the source is not already 48 kHz.
+
+### Fixed — BGM and Announcer had no meters on the routing page
+
+`/routing/levels` lists sources explicitly and did not include the new nodes, so
+they rendered with a permanently dead activity bar while producing audio.
+
 ### Fixed — the test loop's Stop button could not stop it
 
 The Loop button was a blind toggle whose lit state lived only in the browser.
