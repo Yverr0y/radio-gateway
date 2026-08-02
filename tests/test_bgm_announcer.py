@@ -343,5 +343,90 @@ check("no discontinuity inside the chunk", steps.max() < 40, f"max step {steps.m
 check("stop() resets the envelope", (be3.stop(), be3._duck_gain)[1] == 1.0)
 check("ducking flag exposed for the UI", audio_sources.BGMSource(env_gw()).ducking is False)
 
+print("\n15. BGM runtime cap")
+
+
+class _Ann2:
+    def __init__(self): self.speaking=False; self.enabled=True
+    def is_active(self): return self.speaking
+    def set_enabled(self, on, interval=None): self.enabled = bool(on)
+
+
+def cap_gw(maxs):
+    g = fake_gw(BGM_DUCK_DB=-12.0, BGM_DUCK_ATTACK=0.25, BGM_DUCK_HOLD=0.4,
+                BGM_DUCK_RELEASE=1.2, BGM_MAX_SECONDS=maxs)
+    g.announcer_source = _Ann2()
+    return g
+
+
+CH2 = 2400          # 50 ms chunks
+gcap = cap_gw(1.0)  # 1 second cap = 20 chunks
+bc = audio_sources.BGMSource(gcap)
+bc._pcm = b'\x00\x40' * 4800
+bc._slot = 1
+n = 0
+while bc.get_audio(CH2)[0] is not None and n < 100:
+    n += 1
+check("stops at the cap", 19 <= n <= 21, f"{n} chunks = {n*0.05:.2f}s (want ~1.0s)")
+check("bed cleared", bc.is_active() is False)
+check("playing_slot cleared", bc.playing_slot is None)
+check("announcer silenced too", gcap.announcer_source.enabled is False)
+check("silent afterwards", bc.get_audio(CH2)[0] is None)
+
+print("\n16. cap edge cases")
+g0 = cap_gw(0)      # 0 = no cap
+b0 = audio_sources.BGMSource(g0); b0._pcm = b'\x00\x40' * 4800; b0._slot = 1
+for _ in range(200):
+    b0.get_audio(CH2)
+check("0 means run for ever", b0.is_active() is True)
+gbad = cap_gw('nonsense')
+check("junk falls back to 120s", audio_sources.BGMSource(gbad).max_secs == 120.0,
+      str(audio_sources.BGMSource(gbad).max_secs))
+check("default is 120s", audio_sources.BGMSource(fake_gw()).max_secs == 120.0)
+gneg = cap_gw(-5)
+check("negative clamps to 0 (no cap)", audio_sources.BGMSource(gneg).max_secs == 0.0)
+
+# The cap must measure THIS bed, not total uptime since boot.
+gr = cap_gw(1.0)
+br = audio_sources.BGMSource(gr)
+br.gateway.playback_source = types.SimpleNamespace(
+    announcement_directory=_d, _decode_file=lambda p: b'\x00\x40' * 4800)
+br.play(1, os.path.join(_d, 'bgm1.mp3'))
+for _ in range(10):
+    br.get_audio(CH2)          # half the cap
+br.play(2, os.path.join(_d, 'bgm2.mp3'))   # switching resets the clock
+n2 = 0
+while br.get_audio(CH2)[0] is not None and n2 < 100:
+    n2 += 1
+check("switching beds restarts the clock", 19 <= n2 <= 21, f"{n2} chunks")
+
+print("\n17. remaining time is reported for the UI")
+gu = cap_gw(10.0)
+bu = audio_sources.BGMSource(gu); bu._pcm = b'\x00\x40' * 4800; bu._slot = 1
+for _ in range(20):
+    bu.get_audio(CH2)          # 1 second in
+st = [x for x in bu.bgm_state() if x['playing']][0]
+check("remaining counts down", 8.5 < st['remaining'] < 9.5, str(st['remaining']))
+idle = [x for x in bu.bgm_state() if not x['playing']][0]
+check("idle beds report no remaining", idle['remaining'] is None, str(idle['remaining']))
+gnc = cap_gw(0)
+bnc = audio_sources.BGMSource(gnc); bnc._pcm = b'\x00\x40'*4800; bnc._slot = 1
+st2 = [x for x in bnc.bgm_state() if x['playing']][0]
+check("no cap reports no remaining", st2['remaining'] is None, str(st2['remaining']))
+
+print("\n18. max_seconds persists")
+announcer._PATH = os.path.join(_tf.mkdtemp(), 'announcer.json')
+check("default 120", announcer.load()['max_seconds'] == 120.0)
+announcer.save({'messages': {}, 'voices': {}, 'interval': 10.0,
+                'max_seconds': 45.0, 'voice': '', 'enabled': False})
+check("round-trips", announcer.load()['max_seconds'] == 45.0)
+announcer.save({'messages': {}, 'voices': {}, 'interval': 10.0,
+                'max_seconds': 0, 'voice': '', 'enabled': False})
+check("0 survives (not coerced to the default)", announcer.load()['max_seconds'] == 0.0,
+      str(announcer.load()['max_seconds']))
+announcer.save({'messages': {}, 'voices': {}, 'interval': 10.0,
+                'max_seconds': 'x', 'voice': '', 'enabled': False})
+check("junk falls back to 120", announcer.load()['max_seconds'] == 120.0)
+
 print(f"\n{'ALL PASS' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")
 sys.exit(1 if FAIL else 0)

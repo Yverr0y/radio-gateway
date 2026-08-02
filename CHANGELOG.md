@@ -4,6 +4,20 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Added — BGM runtime cap
+
+`BGM_MAX_SECONDS` (default 120, `0` = never) stops a bed automatically so an
+unattended loop cannot run for ever. Editable from the Msg dialog and persisted
+with the messages; the playing pad's tooltip shows the countdown.
+
+Reaching the cap also silences the announcer — a voice talking over music that
+has ended is worse than either on its own. Timed in audio time, matching the
+duck envelope, and `play()` resets the clock so switching beds gives a fresh
+allowance rather than inheriting the previous bed's.
+
+`0` is treated as a real value throughout rather than a falsy default, or "no
+cap" would be impossible to set.
+
 ### Added — background music beds with a repeating spoken message
 
 Three looping music beds and a per-bed TTS announcement, mixed together with

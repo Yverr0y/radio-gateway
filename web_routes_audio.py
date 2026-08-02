@@ -112,6 +112,11 @@ def handle_announcer(handler, parent):
                         st['interval'] = max(2.0, float(d['interval']))
                     except (TypeError, ValueError):
                         pass
+                if 'max_seconds' in d:
+                    try:
+                        st['max_seconds'] = max(0.0, float(d['max_seconds']))
+                    except (TypeError, ValueError):
+                        pass
                 if isinstance(d.get('voices'), dict):
                     for k, v in d['voices'].items():
                         st['voices'][str(k)] = str(v or '')

@@ -24,6 +24,7 @@ DEFAULTS = {
     'messages': {},     # {"1": "text", "2": "...", "3": "..."}
     'voices': {},       # {"1": "19"} — per bed; blank/absent = engine default
     'interval': 10.0,
+    'max_seconds': 120.0,   # bed runtime cap; 0 = run until stopped
     'voice': '',        # legacy global fallback, kept so old files still load
     'enabled': False,
 }
@@ -57,6 +58,11 @@ def load():
         state['interval'] = max(2.0, float(state.get('interval') or 10.0))
     except (TypeError, ValueError):
         state['interval'] = 10.0
+    try:
+        # 0 is meaningful (no cap), so clamp at 0 rather than a minimum runtime.
+        state['max_seconds'] = max(0.0, float(state.get('max_seconds', 120.0)))
+    except (TypeError, ValueError):
+        state['max_seconds'] = 120.0
     state['enabled'] = bool(state.get('enabled'))
     state['voice'] = str(state.get('voice') or '')
     return state
@@ -185,6 +191,7 @@ def on_bgm_changed(gw, state=None):
 
     try:
         gw.config.ANNOUNCER_INTERVAL = float(st['interval'])
+        gw.config.BGM_MAX_SECONDS = float(st['max_seconds'])
     except Exception:
         pass
 

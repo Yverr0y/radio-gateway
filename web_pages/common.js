@@ -605,7 +605,10 @@ function renderBgm(s) {
       btn.classList.toggle('muted', !!b.playing);
       btn.classList.toggle('dim', !b.available);
       btn.title = b.available
-        ? (b.file + (b.playing ? ' — playing (click to stop)' : ' — click to loop'))
+        ? (b.file + (b.playing
+            ? ' — playing' + (b.remaining != null ? ', stops in ' + b.remaining + 's' : '') +
+              ' (click to stop)'
+            : ' — click to loop'))
         : (b.file + ' not found in the audio directory');
     }
     if (nm) nm.textContent = b.file.replace(/\.[^.]+$/, '').substring(0, 11);
@@ -697,6 +700,12 @@ function _annDialog(d) {
       '<label class="sb-sub" style="margin:0 0 0 auto">' +
         '<input id="ann-enabled" type="checkbox"> Enabled</label>' +
     '</div>' +
+    '<div class="sb-bar">' +
+      '<label class="sb-sub" style="margin:0">Stop bed after</label>' +
+      '<input id="ann-maxsecs" class="ctrl-input" type="number" min="0" max="86400" ' +
+        'step="10" style="width:6em">' +
+      '<label class="sb-sub" style="margin:0">seconds (0 = never)</label>' +
+    '</div>' +
     '<div class="sb-foot">' +
       '<button type="button" class="sb-btn" id="ann-cancel">Cancel</button>' +
       '<button type="button" class="sb-btn sb-primary" id="ann-save">Save</button>' +
@@ -704,6 +713,9 @@ function _annDialog(d) {
   document.body.appendChild(dlg);
 
   dlg.querySelector('#ann-interval').value = d.interval || 10;
+  // 0 is a real value (no cap), so don't fall through to a default on falsy.
+  dlg.querySelector('#ann-maxsecs').value =
+    (d.max_seconds === undefined || d.max_seconds === null) ? 120 : d.max_seconds;
   dlg.querySelector('#ann-enabled').checked = !!d.enabled;
   dlg.querySelector('#ann-cancel').onclick = function () { dlg.close(); };
   dlg.querySelector('#ann-save').onclick = function () {
@@ -724,6 +736,7 @@ function _annDialog(d) {
         messages: msgs,
         voices: vcs,
         interval: parseFloat(dlg.querySelector('#ann-interval').value) || 10,
+        max_seconds: Math.max(0, parseFloat(dlg.querySelector('#ann-maxsecs').value) || 0),
         enabled: dlg.querySelector('#ann-enabled').checked
       })
     })

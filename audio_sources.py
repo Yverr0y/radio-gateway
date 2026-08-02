@@ -3603,6 +3603,15 @@ class BGMSource(AudioSource):
         self._duck_gain = 1.0
         self._audio_secs = 0.0
         self._duck_hold_until = 0.0
+        self._auto_stopped = False
+
+    @property
+    def _max_secs(self):
+        """Seconds a bed may run before stopping itself. 0 disables the cap."""
+        try:
+            return max(0.0, float(getattr(self.config, 'BGM_MAX_SECONDS', 120.0)))
+        except (TypeError, ValueError):
+            return 120.0
 
     @property
     def duck_level(self):
@@ -3676,6 +3685,8 @@ class BGMSource(AudioSource):
                 'file': os.path.basename(name),
                 'available': os.path.exists(bgm_path(self.config, name, self._audio_dir)),
                 'playing': self._slot == n,
+                'remaining': (round(max(0.0, self._max_secs - self._audio_secs), 1)
+                              if (self._slot == n and self._max_secs) else None),
             })
         return out
 
@@ -3730,6 +3741,11 @@ class BGMSource(AudioSource):
             self._pcm = pcm
             self._pos = 0
             self._slot = slot
+            # Reset elapsed play time so the runtime cap measures this bed,
+            # not the total since the gateway started.
+            self._audio_secs = 0.0
+            self._duck_gain = 1.0
+            self._duck_hold_until = 0.0
         return True
 
     def stop(self):
@@ -3767,6 +3783,18 @@ class BGMSource(AudioSource):
                 self._pos = take
             frames = len(out) // 2
             g0, g1 = self._duck_ramp(frames)
+            # Runtime cap. _duck_ramp has just advanced _audio_secs, which is
+            # elapsed play time for THIS bed. Cleared inline rather than via
+            # stop(): stop() takes the same non-reentrant lock we are holding.
+            if self._max_secs and self._audio_secs >= self._max_secs:
+                self._pcm = None
+                self._pos = 0
+                self._slot = None
+                self.audio_level = 0
+                self._duck_gain = 1.0
+                self._audio_secs = 0.0
+                self._duck_hold_until = 0.0
+                self._auto_stopped = True
             if self.volume != 1.0 or g0 != 1.0 or g1 != 1.0:
                 arr = np.frombuffer(out, dtype=np.int16).astype(np.float32)
                 if g0 != 1.0 or g1 != 1.0:
@@ -3775,7 +3803,20 @@ class BGMSource(AudioSource):
                     arr = arr * np.linspace(g0, g1, num=frames, dtype=np.float32)
                 out = np.clip(arr * self.volume, -32768, 32767).astype(np.int16).tobytes()
             self.audio_level = pcm_level(out, self.audio_level)
+        if self._auto_stopped:
+            self._auto_stopped = False
+            print(f"[BGM] Bed stopped — reached BGM_MAX_SECONDS ({self._max_secs:.0f}s)")
+            # Cheap, no I/O: the announcer follows the bed, so it must go quiet
+            # too. Done outside the lock and without touching the JSON store,
+            # because this runs on the audio thread.
+            ann = getattr(self.gateway, 'announcer_source', None)
+            if ann is not None:
+                ann.set_enabled(False)
         return out, True
+
+    @property
+    def max_secs(self):
+        return self._max_secs
 
     @property
     def ducking(self):

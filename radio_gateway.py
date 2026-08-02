@@ -332,6 +332,9 @@ class Config:
             'BGM_DUCK_ATTACK': 0.25,
             'BGM_DUCK_HOLD': 0.4,
             'BGM_DUCK_RELEASE': 1.2,
+            # Stop a BGM bed automatically after this many seconds so an
+            # unattended loop cannot run for ever. 0 = no cap.
+            'BGM_MAX_SECONDS': 120.0,
             # Seconds between repeats of the announcer message (min 2).
             'ANNOUNCER_INTERVAL': 10.0,
             # Background music beds, comma-separated. Relative names resolve
