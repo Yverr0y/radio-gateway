@@ -24,7 +24,7 @@ from web_routes_audio  import (
 from web_routes_text  import handle_aitext, handle_cw, handle_tts
 from web_routes_fart  import handle_fart_preview, handle_fart_send
 from web_routes_automation  import (handle_automationcmd, handle_refreshsounds,
-                                    handle_soundboard_categories)
+                                    handle_soundboard_categories, handle_tts_engine)
 from web_routes_system  import (
     handle_key, handle_gpscmd, handle_reboothost,
     handle_restartgateway, handle_telegramcmd, handle_open_tmux,

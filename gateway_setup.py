@@ -123,9 +123,80 @@ def setup_playback(gw):
 
 # ── Phase 4: TTS engine ────────────────────────────────────────────────────
 
+TTS_ENGINES = ('kokoro', 'edge', 'gtts')
+
+TTS_ENGINE_LABELS = {
+    'kokoro': 'Kokoro — offline, 55 voices',
+    'edge':   'Edge — Microsoft Neural, 47 voices (needs internet)',
+    'gtts':   'gTTS — Google, 22 accents (needs internet)',
+}
+
+
+def apply_tts_engine(gw, backend):
+    """(Re)initialise the TTS backend in place. Returns (ok, message).
+
+    Split out of setup_tts so the engine can be swapped at runtime without a
+    gateway restart. The swap is atomic from a caller's point of view: the new
+    engine is built first, and gw.tts_engine / gw._tts_backend are only
+    published together, under _tts_lock, once it succeeded. A failed switch
+    therefore leaves the previous working engine in place rather than dropping
+    TTS entirely.
+    """
+    import threading
+    if not hasattr(gw, '_tts_lock'):
+        gw._tts_lock = threading.Lock()
+    backend = str(backend or '').lower().strip()
+    if backend not in TTS_ENGINES:
+        return False, f"unknown engine '{backend}' (expected one of {', '.join(TTS_ENGINES)})"
+
+    engine = None
+    try:
+        if backend == 'kokoro':
+            import os as _os
+            from kokoro_onnx import Kokoro
+            _base = _os.path.join(_os.path.dirname(__file__), 'tools', 'models', 'kokoro')
+            _model = _os.path.join(_base, 'kokoro-v1.0.onnx')
+            _voices = _os.path.join(_base, 'voices-v1.0.bin')
+            if not _os.path.exists(_model) or not _os.path.exists(_voices):
+                return False, f"Kokoro model files missing in {_base}"
+            # Reuse an already-loaded Kokoro rather than paying the model load
+            # again on every switch back to it.
+            engine = getattr(gw, '_kokoro_instance', None) or Kokoro(_model, _voices)
+            gw._kokoro_instance = engine
+        elif backend == 'edge':
+            import edge_tts
+            engine = edge_tts
+        else:
+            from gtts import gTTS
+            engine = gTTS
+    except ImportError as e:
+        pkg = {'kokoro': 'kokoro-onnx', 'edge': 'edge-tts', 'gtts': 'gtts'}[backend]
+        return False, f"{pkg} not installed ({e}) — pip3 install {pkg} --break-system-packages"
+    except Exception as e:
+        return False, f"could not initialise {backend}: {e}"
+
+    with gw._tts_lock:
+        gw.tts_engine = engine
+        gw._tts_backend = backend
+    return True, TTS_ENGINE_LABELS.get(backend, backend)
+
+
+def switch_tts_engine(gw, backend, persist=True):
+    """Swap the live TTS engine and optionally write it to the config file."""
+    ok, msg = apply_tts_engine(gw, backend)
+    if ok and persist:
+        try:
+            gw.config.TTS_ENGINE = gw._tts_backend
+        except Exception:
+            pass
+    return ok, msg
+
+
 def setup_tts(gw):
     """Initialize text-to-speech (Kokoro ONNX, Edge TTS, or gTTS)."""
+    import threading
     gw.tts_engine = None
+    gw._tts_lock = threading.Lock()
     gw._tts_backend = str(getattr(gw.config, 'TTS_ENGINE', 'kokoro')).lower().strip()
     gw._kokoro_instance = None  # lazy-initialised on first use
     if not gw.config.ENABLE_TTS:

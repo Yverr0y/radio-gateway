@@ -433,3 +433,62 @@ function _sbShowPicker(d, onSaved) {
   tally();
   dlg.showModal();
 }
+
+// ── TTS engine selector ─────────────────────────────────────────────────────
+// Populates a <select id="tts-engine"> and hot-swaps the backend on change.
+// The voice dropdowns repopulate on their own: switching the engine changes
+// what /status reports in tts_voices, and the poller already rebuilds when the
+// value set changes.
+
+function initTtsEngineSelect() {
+  var sel = document.getElementById('tts-engine');
+  if (!sel) return;
+  fetch('/tts/engine')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok || !d.engines) return;
+      sel.innerHTML = d.engines.map(function (e) {
+        // An engine whose package is missing is shown but not selectable —
+        // clearer than hiding it and leaving the user wondering where it went.
+        return '<option value="' + _sbEsc(e.value) + '"' +
+               (e.active ? ' selected' : '') +
+               (e.available ? '' : ' disabled') + '>' +
+               _sbEsc(e.label) + (e.available ? '' : ' (not installed)') +
+               '</option>';
+      }).join('');
+      sel.dataset.active = d.active || '';
+    })
+    .catch(function () { /* selector is optional; never break the page */ });
+
+  sel.addEventListener('change', function () {
+    var want = sel.value, prev = sel.dataset.active || '';
+    sel.disabled = true;
+    fetch('/tts/engine', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({engine: want})
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        sel.disabled = false;
+        if (!d.ok) {
+          // Failed switch leaves the OLD engine live server-side, so put the
+          // dropdown back rather than showing a selection that isn't real.
+          if (prev) sel.value = prev;
+          _sbNotify('Could not switch engine: ' + (d.message || 'unknown'), 'error');
+          return;
+        }
+        sel.dataset.active = d.active || want;
+        // Force the voice poller to rebuild on the next tick.
+        window._ttsVoiceKey = null;
+        _sbNotify('TTS engine: ' + (d.message || d.active));
+      })
+      .catch(function (e) {
+        sel.disabled = false;
+        if (prev) sel.value = prev;
+        _sbNotify('Could not switch engine: ' + e, 'error');
+      });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', initTtsEngineSelect);

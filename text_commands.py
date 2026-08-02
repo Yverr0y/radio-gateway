@@ -23,6 +23,35 @@ from audio_sources import generate_cw_pcm
 # TTS
 # ---------------------------------------------------------------------------
 
+def _resolve_voice_index(gw, voice, table):
+    """Resolve a requested voice to a valid integer key in `table`.
+
+    The edge and gTTS voice tables are keyed by INT, but the web UI sends the
+    selection as a STRING (_get_tts_voices publishes 'value': str(k), and JSON
+    keeps it a string all the way into handle_tts). The old check was
+    `voice if isinstance(voice, int) else <config default>`, so every web
+    request failed the isinstance test and silently fell back to
+    TTS_DEFAULT_VOICE — which is why every edge voice came out as Andrew no
+    matter what you picked. Kokoro was unaffected because it tests for str.
+
+    Also tolerates a stale selection from the other backend: right after a hot
+    engine switch the dropdown may still hold e.g. 'af_heart', which is not a
+    valid index here, so fall back to the configured default rather than raise.
+    """
+    n = None
+    # bool is an int subclass — exclude it before the int check.
+    if isinstance(voice, int) and not isinstance(voice, bool):
+        n = voice
+    elif isinstance(voice, str) and voice.strip().lstrip('+').isdigit():
+        n = int(voice.strip())
+    if n is None or n not in table:
+        try:
+            n = int(getattr(gw.config, 'TTS_DEFAULT_VOICE', 1))
+        except (TypeError, ValueError):
+            n = 1
+    return n if n in table else 1
+
+
 def speak_text(gw, text, voice=None):
     """
     Generate TTS audio from text and play it on radio
@@ -34,7 +63,17 @@ def speak_text(gw, text, voice=None):
     Returns:
         bool: True if successful, False otherwise
     """
-    if not gw.tts_engine:
+    # Snapshot the (backend, engine) pair together. They are swapped as a unit
+    # under _tts_lock by apply_tts_engine(), so reading them separately mid-swap
+    # could pair 'kokoro' with the edge module. Snapshotting rather than holding
+    # the lock means a hot-swap never has to wait for a long synthesis to end.
+    _lock = getattr(gw, '_tts_lock', None)
+    if _lock is not None:
+        with _lock:
+            _backend, _engine = gw._tts_backend, gw.tts_engine
+    else:
+        _backend, _engine = gw._tts_backend, gw.tts_engine
+    if not _engine:
         gw.notify("TTS not available (install edge-tts or gtts)")
         return False
 
@@ -48,7 +87,7 @@ def speak_text(gw, text, voice=None):
 
         temp_path = None
 
-        if gw._tts_backend == 'kokoro':
+        if _backend == 'kokoro':
             # Kokoro ONNX — offline, high quality
             voice_id = voice if isinstance(voice, str) else str(getattr(gw.config, 'KOKORO_DEFAULT_VOICE', 'af_heart'))
             lang_map = {'a': 'en-us', 'b': 'en-gb', 'j': 'ja', 'z': 'zh', 'e': 'es', 'f': 'fr-fr', 'h': 'hi', 'i': 'it', 'p': 'pt-br'}
@@ -58,7 +97,7 @@ def speak_text(gw, text, voice=None):
             try:
                 import soundfile as sf
                 import numpy as np
-                samples, sample_rate = gw.tts_engine.create(text, voice=voice_id, speed=1.0, lang=lang)
+                samples, sample_rate = _engine.create(text, voice=voice_id, speed=1.0, lang=lang)
                 tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False, prefix='tts_')
                 tmp.close()
                 temp_path = tmp.name
@@ -74,9 +113,9 @@ def speak_text(gw, text, voice=None):
                         pass
                 return False
 
-        elif gw._tts_backend == 'edge':
+        elif _backend == 'edge':
             # Edge TTS — Microsoft Neural voices (natural sounding)
-            voice_num = voice if isinstance(voice, int) else int(getattr(gw.config, 'TTS_DEFAULT_VOICE', 1))
+            voice_num = _resolve_voice_index(gw, voice, gw.EDGE_TTS_VOICES)
             edge_voice, voice_desc = gw.EDGE_TTS_VOICES.get(voice_num, gw.EDGE_TTS_VOICES[1])
             if gw.config.VERBOSE_LOGGING:
                 print(f"[TTS] Calling Edge TTS (voice {voice_num}: {voice_desc})...")
@@ -85,7 +124,7 @@ def speak_text(gw, text, voice=None):
             temp_path = tmp.name
             try:
                 import asyncio
-                communicate = gw.tts_engine.Communicate(text, edge_voice)
+                communicate = _engine.Communicate(text, edge_voice)
                 asyncio.run(communicate.save(temp_path))
                 if gw.config.VERBOSE_LOGGING:
                     print(f"[TTS] ✓ Audio file saved")
@@ -99,7 +138,7 @@ def speak_text(gw, text, voice=None):
 
         else:
             # gTTS — Google Translate voices (robotic but reliable)
-            voice_num = voice if isinstance(voice, int) else int(getattr(gw.config, 'TTS_DEFAULT_VOICE', 1))
+            voice_num = _resolve_voice_index(gw, voice, gw.TTS_VOICES)
             lang, tld, voice_desc = gw.TTS_VOICES.get(voice_num, gw.TTS_VOICES[1])
             if gw.config.VERBOSE_LOGGING:
                 print(f"[TTS] Calling gTTS (voice {voice_num}: {voice_desc})...")
@@ -107,7 +146,7 @@ def speak_text(gw, text, voice=None):
             tmp.close()
             temp_path = tmp.name
             try:
-                tts = gw.tts_engine(text, lang=lang, tld=tld, slow=False)
+                tts = _engine(text, lang=lang, tld=tld, slow=False)
                 if gw.config.VERBOSE_LOGGING:
                     print(f"[TTS] Saving to {temp_path}...")
                 tts.save(temp_path)
@@ -165,7 +204,7 @@ def speak_text(gw, text, voice=None):
             print(f"[TTS] File size: {size} bytes")
 
         # For MP3 backends (edge/gtts), validate it's actually an MP3 and not an HTML error page
-        if gw._tts_backend != 'kokoro':
+        if _backend != 'kokoro':
             try:
                 with open(temp_path, 'rb') as f:
                     header = f.read(10)
@@ -325,7 +364,12 @@ def on_text_message(gw, text_message):
                         speak_txt = speak_parts[1]
                     elif tok.isdigit():
                         v = int(tok)
-                        if v in gw.TTS_VOICES:
+                        # Validate against the ACTIVE backend's table. This used
+                        # to always check TTS_VOICES (gTTS), so on edge any
+                        # number above the gTTS table size was rejected and
+                        # silently spoken in the default voice instead.
+                        _tbl = gw.EDGE_TTS_VOICES if gw._tts_backend == 'edge' else gw.TTS_VOICES
+                        if v in _tbl:
                             voice = v
                             speak_txt = speak_parts[1]
                 if speak_text(gw, speak_txt, voice=voice):
@@ -337,6 +381,11 @@ def on_text_message(gw, text_message):
                 if gw._tts_backend == 'kokoro':
                     voices = " | ".join(f"{k}={v}" for k, v in list(gw.KOKORO_VOICES.items())[:6])
                     gw.send_text_message(f"Usage: !speak [voice_id] <text>\nVoices (first 6): {voices}")
+                elif gw._tts_backend == 'edge':
+                    # Label is index 1 in the edge tuple, 2 in the gTTS tuple.
+                    voices = " | ".join(f"{k}={v[1]}" for k, v in list(gw.EDGE_TTS_VOICES.items())[:8])
+                    gw.send_text_message(f"Usage: !speak [voice#] <text>\n"
+                                         f"Voices (first 8 of {len(gw.EDGE_TTS_VOICES)}): {voices}")
                 else:
                     voices = " | ".join(f"{k}={v[2]}" for k, v in gw.TTS_VOICES.items())
                     gw.send_text_message(f"Usage: !speak [voice#] <text> — Voices: {voices}")

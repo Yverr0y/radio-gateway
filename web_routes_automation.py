@@ -45,6 +45,78 @@ def handle_automationcmd(handler, parent):
     handler.wfile.write(json_mod.dumps(result).encode())
     return
 
+def handle_tts_engine(handler, parent):
+    """GET/POST /tts/engine
+
+    GET  -> available engines, which is active, and whether each is importable.
+    POST -> {"engine": "edge"} swaps the live engine and persists it.
+
+    Swapping is hot: apply_tts_engine() rebuilds the backend in place, so the
+    next /status poll serves that engine's voice list and the dropdowns
+    repopulate themselves. No gateway restart.
+    """
+    import gateway_setup
+    gw = parent.gateway
+
+    def state(extra=None):
+        active = getattr(gw, '_tts_backend', '') if gw else ''
+        engines = []
+        for name in gateway_setup.TTS_ENGINES:
+            # Report importability so the UI can grey out an engine whose
+            # package is missing rather than letting it be selected and fail.
+            try:
+                if name == 'kokoro':
+                    import kokoro_onnx  # noqa: F401
+                elif name == 'edge':
+                    import edge_tts     # noqa: F401
+                else:
+                    import gtts         # noqa: F401
+                ok = True
+            except Exception:
+                ok = False
+            engines.append({'value': name,
+                            'label': gateway_setup.TTS_ENGINE_LABELS.get(name, name),
+                            'available': ok,
+                            'active': name == active})
+        d = {'ok': True, 'engines': engines, 'active': active,
+             'enabled': bool(getattr(gw.config, 'ENABLE_TTS', False)) if gw else False}
+        if extra:
+            d.update(extra)
+        return d
+
+    if handler.command == 'POST':
+        try:
+            length = int(handler.headers.get('Content-Length', 0))
+            body = handler.rfile.read(length).decode('utf-8') if length else '{}'
+            want = str(json_mod.loads(body or '{}').get('engine', '')).lower().strip()
+            if gw is None:
+                raise RuntimeError('gateway not available')
+            ok, msg = gateway_setup.switch_tts_engine(gw, want, persist=False)
+            if ok:
+                # Persist through the same path the config page uses so the
+                # choice survives a restart.
+                parent._save_config({'TTS_ENGINE': gw._tts_backend})
+                parent.config.load_config()
+                print(f"  [TTS] Engine switched to {gw._tts_backend}")
+            result = state({'ok': ok, 'message': msg})
+        except Exception as e:
+            result = state({'ok': False, 'message': str(e)})
+    else:
+        try:
+            result = state()
+        except Exception as e:
+            result = {'ok': False, 'message': str(e)}
+
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'application/json')
+    handler.end_headers()
+    try:
+        handler.wfile.write(json_mod.dumps(result).encode())
+    except BrokenPipeError:
+        pass
+    return
+
+
 def _soundboard_state(parent):
     """Everything the category picker needs to render itself."""
     gw = parent.gateway

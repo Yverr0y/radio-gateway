@@ -4,6 +4,55 @@ All notable changes to Radio Gateway.
 
 ## [Unreleased]
 
+### Fixed — every Edge/gTTS voice came out as voice 1
+
+Voice selection has never worked on the Edge or gTTS backends. The web UI
+publishes the voice as a string (`_get_tts_voices` returns `'value': str(k)`,
+and JSON keeps it a string into `handle_tts`), but both branches resolved it
+with `voice if isinstance(voice, int) else <config default>` — so every web
+request failed the isinstance test and silently fell back to
+`TTS_DEFAULT_VOICE`. Kokoro was unaffected because its branch tests for `str`,
+which is why the bug stayed hidden while Kokoro was the default.
+
+`_resolve_voice_index()` now accepts an int or a digit-string, rejects `bool`
+(an int subclass), falls back cleanly for an out-of-range or stale value, and
+survives a non-numeric `TTS_DEFAULT_VOICE`.
+
+Two related fixes: `!speak <n>` validated against `TTS_VOICES` (gTTS) even when
+Edge was active, so indices above the gTTS table were rejected and spoken in
+the default voice; and bare `!speak` listed gTTS voices while on Edge.
+
+### Added — hot-swappable TTS engine with a GUI dropdown
+
+`gw._tts_backend` was resolved once in `setup_tts()` at startup, so changing
+`TTS_ENGINE` needed a gateway restart.
+
+- `apply_tts_engine()` rebuilds the backend in place. The new engine is
+  constructed first and published with `_tts_backend` together under
+  `_tts_lock`, so a *failed* switch leaves the previous working engine live
+  rather than dropping TTS, and config is only written on success.
+- `speak_text()` snapshots the `(backend, engine)` pair under the lock and then
+  releases it — reading them separately mid-swap could pair `'kokoro'` with the
+  edge module, and holding the lock would make a switch wait for a long
+  synthesis to finish.
+- `GET/POST /tts/engine` — GET reports each engine, which is active, and
+  whether its package actually imports; POST swaps and persists via
+  `_save_config`. Verified to survive a restart for all three engines.
+- Engine dropdown on `/controls` and `/dashboard/operate`. Unavailable engines
+  are shown disabled rather than hidden. The voice list repopulates itself: the
+  switch changes what `/status` reports in `tts_voices` and the existing poller
+  rebuilds when the value set changes.
+
+### Added — many more TTS voices
+
+Edge exposed 9 of the 47 English voices Microsoft actually serves, and gTTS 9
+of its accents. Now 47 and 22 respectively (Kokoro was already complete at 55).
+Edge labels carry Microsoft's own `VoicePersonalities` tag where it is useful —
+`Ana` is tagged Cartoon/Cute, `Christopher` Authority, `Roger` Lively.
+
+Indices 1-9 keep their positions in both tables: `TTS_DEFAULT_VOICE` is a
+number, so renumbering would silently change a user's configured voice.
+
 ### Added — soundboard category picker and a clip-length cap
 
 The Refresh button drew uniformly from all 784 sounds, so the eight biggest

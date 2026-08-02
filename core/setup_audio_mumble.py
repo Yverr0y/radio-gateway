@@ -237,29 +237,89 @@ class _SetupAudioMumbleMixin:
     
     # gTTS voice map: number → (lang, tld, description)
     # gTTS voices (Google Translate, robotic but reliable)
+    # gTTS voices — (lang, tld, label). The tld picks the ACCENT for a given
+    # language, which is why 'en' appears many times.
+    # 1-9 keep their indices: TTS_DEFAULT_VOICE is a number, so renumbering
+    # would silently change a user's configured voice. Append only.
     TTS_VOICES = {
-        1: ('en', 'com',    'US English'),
-        2: ('en', 'co.uk',  'British English'),
-        3: ('en', 'com.au', 'Australian English'),
-        4: ('en', 'co.in',  'Indian English'),
-        5: ('en', 'co.za',  'South African English'),
-        6: ('en', 'ca',     'Canadian English'),
-        7: ('en', 'ie',     'Irish English'),
-        8: ('fr', 'fr',     'French'),
-        9: ('de', 'de',     'German'),
+        1: ('en', 'com',                  'US English'),
+        2: ('en', 'co.uk',                'British English'),
+        3: ('en', 'com.au',               'Australian English'),
+        4: ('en', 'co.in',                'Indian English'),
+        5: ('en', 'co.za',                'South African English'),
+        6: ('en', 'ca',                   'Canadian English'),
+        7: ('en', 'ie',                   'Irish English'),
+        8: ('fr', 'fr',                   'French'),
+        9: ('de', 'de',                   'German'),
+        10: ('en', 'com.ng',              'Nigerian English'),
+        11: ('en', 'com.ph',              'Philippine English'),
+        12: ('es', 'es',                  'Spanish (Spain)'),
+        13: ('es', 'com.mx',              'Spanish (Mexico)'),
+        14: ('it', 'it',                  'Italian'),
+        15: ('pt', 'com.br',              'Portuguese (Brazil)'),
+        16: ('nl', 'nl',                  'Dutch'),
+        17: ('pl', 'pl',                  'Polish'),
+        18: ('sv', 'se',                  'Swedish'),
+        19: ('ja', 'co.jp',               'Japanese'),
+        20: ('ko', 'co.kr',               'Korean'),
+        21: ('hi', 'co.in',               'Hindi'),
+        22: ('ru', 'ru',                  'Russian'),
     }
 
-    # Edge TTS voices (Microsoft Neural, natural sounding)
+    # Edge TTS voices (Microsoft Neural, natural sounding).
+    # 1-9 are the original set and MUST keep their indices — TTS_DEFAULT_VOICE
+    # in gateway_config.txt is a number, so renumbering silently changes a
+    # user's configured voice. Append new voices only.
+    # Labels carry Microsoft's own VoicePersonalities tag where it is useful
+    # (Ana is genuinely tagged Cartoon/Cute; Christopher is tagged Authority).
     EDGE_TTS_VOICES = {
-        1: ('en-US-AndrewNeural',    'US English (Andrew)'),
-        2: ('en-GB-RyanNeural',      'British English (Ryan)'),
-        3: ('en-AU-WilliamMultilingualNeural', 'Australian English (William)'),
-        4: ('en-IN-PrabhatNeural',   'Indian English (Prabhat)'),
-        5: ('en-US-GuyNeural',       'US English (Guy)'),
-        6: ('en-CA-LiamNeural',      'Canadian English (Liam)'),
-        7: ('en-IE-ConnorNeural',    'Irish English (Connor)'),
-        8: ('en-US-AvaNeural',       'US English (Ava)'),
-        9: ('en-US-EmmaNeural',      'US English (Emma)'),
+        1: ('en-US-AndrewNeural',                         'Andrew (US M) — Confident'),
+        2: ('en-GB-RyanNeural',                           'Ryan (GB M)'),
+        3: ('en-AU-WilliamMultilingualNeural',            'William ML (AU M)'),
+        4: ('en-IN-PrabhatNeural',                        'Prabhat (IN M)'),
+        5: ('en-US-GuyNeural',                            'Guy (US M) — Passion'),
+        6: ('en-CA-LiamNeural',                           'Liam (CA M)'),
+        7: ('en-IE-ConnorNeural',                         'Connor (IE M)'),
+        8: ('en-US-AvaNeural',                            'Ava (US F) — Expressive'),
+        9: ('en-US-EmmaNeural',                           'Emma (US F) — Cheerful'),
+        10: ('en-US-AnaNeural',                           'Ana (US F) — Cartoon'),
+        11: ('en-US-AriaNeural',                          'Aria (US F) — Confident'),
+        12: ('en-US-AvaMultilingualNeural',               'Ava ML (US F) — Expressive'),
+        13: ('en-US-EmmaMultilingualNeural',              'Emma ML (US F) — Cheerful'),
+        14: ('en-US-JennyNeural',                         'Jenny (US F) — Comfort'),
+        15: ('en-US-MichelleNeural',                      'Michelle (US F) — Pleasant'),
+        16: ('en-US-AndrewMultilingualNeural',            'Andrew ML (US M) — Confident'),
+        17: ('en-US-BrianMultilingualNeural',             'Brian ML (US M) — Casual'),
+        18: ('en-US-BrianNeural',                         'Brian (US M) — Casual'),
+        19: ('en-US-ChristopherNeural',                   'Christopher (US M) — Authority'),
+        20: ('en-US-EricNeural',                          'Eric (US M) — Rational'),
+        21: ('en-US-RogerNeural',                         'Roger (US M) — Lively'),
+        22: ('en-US-SteffanNeural',                       'Steffan (US M) — Rational'),
+        23: ('en-AU-NatashaNeural',                       'Natasha (AU F)'),
+        24: ('en-CA-ClaraNeural',                         'Clara (CA F)'),
+        25: ('en-GB-LibbyNeural',                         'Libby (GB F)'),
+        26: ('en-GB-MaisieNeural',                        'Maisie (GB F)'),
+        27: ('en-GB-SoniaNeural',                         'Sonia (GB F)'),
+        28: ('en-GB-ThomasNeural',                        'Thomas (GB M)'),
+        29: ('en-HK-YanNeural',                           'Yan (HK F)'),
+        30: ('en-HK-SamNeural',                           'Sam (HK M)'),
+        31: ('en-IE-EmilyNeural',                         'Emily (IE F)'),
+        32: ('en-IN-NeerjaExpressiveNeural',              'NeerjaExpressive (IN F)'),
+        33: ('en-IN-NeerjaNeural',                        'Neerja (IN F)'),
+        34: ('en-KE-AsiliaNeural',                        'Asilia (KE F)'),
+        35: ('en-KE-ChilembaNeural',                      'Chilemba (KE M)'),
+        36: ('en-NG-EzinneNeural',                        'Ezinne (NG F)'),
+        37: ('en-NG-AbeoNeural',                          'Abeo (NG M)'),
+        38: ('en-NZ-MollyNeural',                         'Molly (NZ F)'),
+        39: ('en-NZ-MitchellNeural',                      'Mitchell (NZ M)'),
+        40: ('en-PH-RosaNeural',                          'Rosa (PH F)'),
+        41: ('en-PH-JamesNeural',                         'James (PH M)'),
+        42: ('en-SG-LunaNeural',                          'Luna (SG F)'),
+        43: ('en-SG-WayneNeural',                         'Wayne (SG M)'),
+        44: ('en-TZ-ImaniNeural',                         'Imani (TZ F)'),
+        45: ('en-TZ-ElimuNeural',                         'Elimu (TZ M)'),
+        46: ('en-ZA-LeahNeural',                          'Leah (ZA F)'),
+        47: ('en-ZA-LukeNeural',                          'Luke (ZA M)'),
     }
 
     # Kokoro voices — voice_id → human label

@@ -770,6 +770,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             _GET_EXACT = {
                 '/status':                'g:handle_status',
                 '/soundboard/categories': 'p:handle_soundboard_categories',
+                '/tts/engine':            'p:handle_tts_engine',
                 '/metrics':               'g:handle_metrics',
                 '/sinkstats':             'g:handle_sinkstats',
                 '/sourcestats':           'g:handle_sourcestats',
@@ -936,6 +937,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
                 '/restartgateway':             'p:handle_restartgateway',
                 '/refreshsounds':              'p:handle_refreshsounds',
                 '/soundboard/categories':      'p:handle_soundboard_categories',
+                '/tts/engine':                 'p:handle_tts_engine',
                 '/darkicecmd':                 'p:handle_darkicecmd',
                 '/recordingsdelete':           'p:handle_recordingsdelete',
                 '/telegramcmd':                'p:handle_telegramcmd',
