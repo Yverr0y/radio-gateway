@@ -133,14 +133,45 @@ class CIVSimulator:
             def write(self, data: bytes):
                 sock.sendall(data)
 
-            def read(self, n: int) -> bytes:
-                # Return buffered data if available, else wait up to 0.1s
+            def _drain(self):
+                """Pull anything the simulator has sent into the local buffer."""
                 try:
-                    sock.settimeout(0.1)
-                    chunk = sock.recv(n)
-                    return chunk
-                except Exception:
-                    return b''
+                    sock.setblocking(False)
+                    while True:
+                        try:
+                            chunk = sock.recv(4096)
+                        except BlockingIOError:
+                            break
+                        except Exception:
+                            break
+                        if not chunk:
+                            break
+                        self._buf += chunk
+                finally:
+                    try:
+                        sock.setblocking(True)
+                    except Exception:
+                        pass
+
+            @property
+            def in_waiting(self) -> int:
+                """Bytes available. _transact polls this instead of doing a
+                blocking read of the full frame size — an optimisation the
+                plugin gained after this fake was written, which is why every
+                transaction here failed with AttributeError."""
+                self._drain()
+                return len(self._buf)
+
+            def read(self, n: int) -> bytes:
+                if not self._buf:
+                    # Nothing buffered — wait briefly, as the old read() did.
+                    try:
+                        sock.settimeout(0.1)
+                        self._buf += sock.recv(max(n, 4096))
+                    except Exception:
+                        pass
+                out, self._buf = self._buf[:n], self._buf[n:]
+                return out
 
             def close(self):
                 pass  # sim socket closed by stop()
@@ -402,13 +433,14 @@ class CIVSimulator:
 
 def _make_patched_controller(sim: CIVSimulator) -> CIVController:
     """Return a CIVController wired to the simulator instead of a real port."""
-    ctrl = CIVController.__new__(CIVController)
-    ctrl._port = '/dev/null (simulated)'
-    ctrl._baud = 19200
-    ctrl._addr = 0x88
-    ctrl._timeout = 1.0
+    # Run the REAL __init__ (it only assigns attributes — it does not open the
+    # port), then swap in the simulator. The old version used __new__ and
+    # hand-listed every attribute, so each field added to CIVController since
+    # silently went missing here: _tls and data_mode both did, and _tls raised
+    # in setUp so the whole suite errored before running. Calling __init__
+    # keeps this fixture in sync with the class for free.
+    ctrl = CIVController('/dev/null (simulated)', 19200, 0x88, 1.0)
     ctrl._serial = sim.make_fake_serial()
-    ctrl._lock = threading.Lock()
     ctrl.connected = True
     ctrl.freq_hz = 0
     ctrl.mode = 'FM'
@@ -677,8 +709,12 @@ class TestCIVController(unittest.TestCase):
         self.assertEqual(self.ctrl.preamp, 2)
 
     def test_atten_on_off(self):
+        # 0x12 = 12 dB. The IC-7100's pad is a fixed 12 dB, not the 20 dB of the
+        # IC-7300/IC-7610, and the value byte is the dB amount in BCD. This
+        # asserted 0x20 — a value commit 509222a records the radio NG'ing —
+        # and was never noticed because the suite errored in setUp.
         self.assertTrue(self.ctrl.set_atten(True))
-        self.assertEqual(self.sim.atten, 0x20)
+        self.assertEqual(self.sim.atten, 0x12)
         self.assertTrue(self.ctrl.set_atten(False))
         self.assertEqual(self.sim.atten, 0x00)
 
@@ -883,8 +919,12 @@ class TestIC7100PluginExecute(unittest.TestCase):
 
     def setUp(self):
         self.sim = CIVSimulator()
-        self.plugin = IC7100Plugin.__new__(IC7100Plugin)
-        # Minimal init matching __init__ but without threads
+        # Call the REAL __init__ — it is pure assignment; threads and devices
+        # are started in setup(), which we never call. Hand-listing "minimal
+        # init matching __init__" meant every field added since went missing:
+        # _user_cmd_pending was one, and it raised in execute() so 37 tests
+        # errored without exercising anything.
+        self.plugin = IC7100Plugin()
         self.plugin._civ = _make_patched_controller(self.sim)
         self.plugin._capture = None
         self.plugin._playback = None
