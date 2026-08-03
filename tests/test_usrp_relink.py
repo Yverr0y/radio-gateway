@@ -6,38 +6,20 @@ morning. The two things worth testing are that it DOES reconnect, and that it
 STOPS — an unbounded retry loop against a node that is off the air for a week
 is its own kind of broken.
 """
-import atexit
 import json
 import os
 import sys
-import tempfile
 import types
 
 _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.join(_ROOT, 'plugins'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _tmpdirs import mkdtemp  # noqa: E402
 import usrp  # noqa: E402
 
 FAIL = []
 
-_TMPDIRS = []
-
-
-def mkdtemp(prefix):
-    """Temp dir removed on exit — see the inode exhaustion note in
-    tests/test_soundboard_categories.py. Small leaks here, but a test that
-    tidies up after itself costs nothing."""
-    import tempfile as _tf
-    d = _tf.mkdtemp(prefix=prefix)
-    _TMPDIRS.append(d)
-    return d
-
-
-@atexit.register
-def _cleanup_tmpdirs():
-    import shutil
-    for d in _TMPDIRS:
-        shutil.rmtree(d, ignore_errors=True)
 
 
 

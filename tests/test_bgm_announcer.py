@@ -4,9 +4,13 @@ import sys
 import time
 import types
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from _tmpdirs import mkdtemp  # noqa: E402
 import audio_sources  # noqa: E402
 import audio_bus  # noqa: E402
+
+
 
 FAIL = []
 RATE_BYTES = 4800          # one 50ms mono chunk at 48k, 16-bit
@@ -97,8 +101,7 @@ check("silent once disabled", a.get_audio(2400)[0] is None)
 
 print("\n7. message store persists")
 import announcer  # noqa: E402
-import tempfile  # noqa: E402
-announcer._PATH = os.path.join(tempfile.mkdtemp(), 'announcer.json')
+announcer._PATH = os.path.join(mkdtemp('bgm-test-'), 'announcer.json')
 check("defaults when absent",
       announcer.load()['messages'] == {} and announcer.load()['interval'] == 10.0)
 announcer.save({'messages': {'1': 'Net at 8pm', '3': 'ID please'},
@@ -122,8 +125,7 @@ print("\n8. apply() is the startup alias for on_bgm_changed")
 check("apply exists for setup to call", callable(announcer.apply))
 
 print("\n9. BGM play/stop lives on BGMSource now (not the playback source)")
-import tempfile as _tf  # noqa: E402
-_d = _tf.mkdtemp()
+_d = mkdtemp('bgm-test-')
 for _f in ('bgm1.mp3', 'bgm2.mp3', 'bgm3.mp3'):
     open(os.path.join(_d, _f), 'wb').write(b'\0' * 16)
 gwb = fake_gw(BGM_FILES='', PLAYBACK_DIRECTORY=_d)
@@ -152,7 +154,7 @@ check("decode failure reported and cleared",
 
 print("\n10. per-bed messages follow the playing bed")
 announcer.invalidate()
-announcer._PATH = os.path.join(_tf.mkdtemp(), 'announcer.json')
+announcer._PATH = os.path.join(mkdtemp('bgm-test-'), 'announcer.json')
 announcer.save({'messages': {'1': 'one', '2': 'two'}, 'interval': 10.0,
                 'voice': '', 'enabled': True})
 st = announcer.load()
@@ -207,7 +209,7 @@ finally:
 
 print("\n12. per-bed voices")
 announcer.invalidate()
-announcer._PATH = os.path.join(_tf.mkdtemp(), 'announcer.json')
+announcer._PATH = os.path.join(mkdtemp('bgm-test-'), 'announcer.json')
 announcer.save({'messages': {'1': 'one', '2': 'two'},
                 'voices': {'1': '19', '2': 'af_heart'},
                 'interval': 10.0, 'voice': '', 'enabled': True})
@@ -415,7 +417,7 @@ st2 = [x for x in bnc.bgm_state() if x['playing']][0]
 check("no cap reports no remaining", st2['remaining'] is None, str(st2['remaining']))
 
 print("\n18. max_seconds persists")
-announcer._PATH = os.path.join(_tf.mkdtemp(), 'announcer.json')
+announcer._PATH = os.path.join(mkdtemp('bgm-test-'), 'announcer.json')
 check("default 120", announcer.load()['max_seconds'] == 120.0)
 announcer.save({'messages': {}, 'voices': {}, 'interval': 10.0,
                 'max_seconds': 45.0, 'voice': '', 'enabled': False})

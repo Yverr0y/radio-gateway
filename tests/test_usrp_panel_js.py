@@ -10,40 +10,22 @@ So: render through the REAL code path (_render_panel, including the usrp2
 rewrites) and parse the result. Extracting the template by hand and tidying up
 the backslashes is what hid the bug the first time.
 """
-import atexit
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 
 _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.join(_ROOT, 'plugins'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _tmpdirs import mkdtemp  # noqa: E402
 import usrp   # noqa: E402
 import usrp2  # noqa: E402
 
 FAIL = []
 
-_TMPDIRS = []
-
-
-def mkdtemp(prefix):
-    """Temp dir removed on exit — see the inode exhaustion note in
-    tests/test_soundboard_categories.py. Small leaks here, but a test that
-    tidies up after itself costs nothing."""
-    import tempfile as _tf
-    d = _tf.mkdtemp(prefix=prefix)
-    _TMPDIRS.append(d)
-    return d
-
-
-@atexit.register
-def _cleanup_tmpdirs():
-    import shutil
-    for d in _TMPDIRS:
-        shutil.rmtree(d, ignore_errors=True)
 
 
 

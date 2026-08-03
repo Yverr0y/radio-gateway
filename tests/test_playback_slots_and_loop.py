@@ -1,11 +1,14 @@
 """Playback slot count, reserved files, and the test-loop state machine."""
 import os
 import sys
-import tempfile
 import types
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from _tmpdirs import mkdtemp  # noqa: E402
 import audio_sources  # noqa: E402
+
+
 
 FP = audio_sources.FilePlaybackSource
 FAIL = []
@@ -18,7 +21,7 @@ def check(name, cond, detail=''):
 
 
 def make_src(slots=20, files=(), enable_soundboard=False):
-    d = tempfile.mkdtemp()
+    d = mkdtemp('playback-test-')
     for f in files:
         open(os.path.join(d, f), 'wb').write(b'\0' * 16)
     s = object.__new__(FP)
