@@ -1668,6 +1668,20 @@ class BusManager:
             # ── Flush per-tick PCM/MP3: mix contributions from all buses ──
             # Multiple buses routed to pcm/mp3 are mixed (summed with soft
             # limiter) into one chunk per tick rather than interleaved.
+            # Browser monitor taps. EXCLUSIVE with the bus mix: the PCM stream
+            # carries either the routing-selected buses, or one tapped node —
+            # never both. Mixing them meant pressing AS1 also brought in every
+            # bus with 'P' set, which is not what "monitor this node" means.
+            # Selecting a tap therefore discards this tick's bus contributions.
+            _taps = [pl for pl in getattr(gw, '_external_plugins', {}).values()
+                     if getattr(pl, 'pcm_tap', False)]
+            if _taps:
+                self._pcm_tick.clear()
+                for _plg in _taps:
+                    _tapped = _plg.take_tap()
+                    if _tapped:
+                        self._pcm_tick.append(_tapped)
+
             if self._pcm_tick:
                 # Same-tick contributions from different buses ARE mixed
                 # (they're simultaneous) — additive_mix sums once and

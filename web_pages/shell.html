@@ -297,6 +297,8 @@
       <button id="ws-btn" class="rb rb-caps rb-sm" onclick="toggleWS()"><span class="icon icon-play"></span> PCM</button>
       <input id="ws-vol" type="range" min="0" max="100" value="50" aria-label="PCM stream volume" oninput="setWSVol(this.value)">
       <button id="mic-btn" class="rb rb-caps rb-sm" onclick="toggleMic()"><span class="icon icon-mic"></span> MIC</button>
+      <button id="as1-btn" class="rb rb-caps rb-sm" onclick="toggleAsTap('usrp',this)" title="Monitor AllStar 1 in the PCM stream" style="display:none">AS1</button>
+      <button id="as2-btn" class="rb rb-caps rb-sm" onclick="toggleAsTap('usrp2',this)" title="Monitor AllStar 2 in the PCM stream" style="display:none">AS2</button>
     </span>
   </div>
 </div>
@@ -606,6 +608,10 @@ function stopWS() {
   var _wb = document.getElementById('ws-btn');
   _wb.innerHTML = '<span class="icon icon-play"></span> PCM';
   _wb.classList.remove('connecting', 'live');
+  // Stopping the player stops any node tap too. The tap exists only to feed
+  // this stream, so leaving it on would keep a node feeding audio nobody is
+  // listening to — and the AS button would claim "live" with the player shut.
+  clearAsTaps();
 }
 
 function setWSVol(v) {
@@ -837,6 +843,62 @@ function updateNavFromStatus(s) {
   _navShow('nav-adsb', s.adsb_enabled !== false);
   _navShow('nav-telegram', s.telegram_enabled !== false);
 }
+
+// Turn off every node tap. Called when the PCM player stops — see stopWS.
+// Silent no-op when nothing is tapped, so it is safe on every stop.
+function clearAsTaps() {
+  ['usrp', 'usrp2'].forEach(function (pid) {
+    var btn = document.getElementById(pid === 'usrp' ? 'as1-btn' : 'as2-btn');
+    if (!btn || !btn.classList.contains('live')) return;   // nothing to do
+    fetch('/' + pid + '/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'pcm_tap', on: '0'})
+    }).then(function () { _refreshAsTaps(); }).catch(function () {});
+  });
+}
+
+// AS1/AS2 monitor taps. These feed the node's RX audio straight into the PCM
+// stream — they do NOT touch /routing, so listening never rewrites the graph.
+// Both can be on at once; the tick loop mixes them like any other contributor.
+function toggleAsTap(pid, btn) {
+  var want = !btn.classList.contains('live');
+  fetch('/' + (pid === 'usrp' ? 'usrp' : pid) + '/control', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'pcm_tap', on: want ? '1' : '0'})
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      // Re-read BOTH buttons from the server rather than toggling only the one
+      // clicked. The taps are mutually exclusive server-side, so enabling AS1
+      // silently clears AS2 — without this the other button kept showing lit
+      // until the next 15 s refresh.
+      _refreshAsTaps();
+      // The tap only produces sound if the PCM player is actually running.
+      if (d && d.pcm_tap && !_wsPlaying) startWS();
+    })
+    .catch(function () { _refreshAsTaps(); });
+}
+
+// Show a button per discovered instance and reflect the server's tap state, so
+// a reload does not show a tap as off while audio is still flowing.
+function _refreshAsTaps() {
+  [['usrp', 'as1-btn'], ['usrp2', 'as2-btn']].forEach(function (pair) {
+    var btn = document.getElementById(pair[1]);
+    if (!btn) return;
+    fetch('/' + pair[0] + '/status')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        if (!s) { btn.style.display = 'none'; return; }
+        btn.style.display = '';
+        btn.classList.toggle('live', !!s.pcm_tap);
+      })
+      .catch(function () { btn.style.display = 'none'; });
+  });
+}
+setInterval(_refreshAsTaps, 15000);
+_refreshAsTaps();
 
 // AllStar entries come from /usrp/nodes — discovered plugin instances get
 // menu items automatically instead of hardcoded "AllStar 1/2" links.

@@ -2,6 +2,30 @@
 
 All notable changes to Radio Gateway.
 
+## [Unreleased]
+
+### Added — AS1 / AS2 monitor taps in the shell bar
+
+Two toggles beside MP3 / PCM / MIC that play an AllStar node's RX audio
+straight into the browser PCM stream.
+
+The tap is filled in the plugin's RX path, not by a second `get_audio()` call —
+that pops `_rx_queue` and would have stolen audio from the bus, causing
+dropouts on the AllStar bus while monitoring. Filling it in the RX path also
+means the tap works whether or not the node is wired to a bus, and it never
+touches `/routing`: a listen button should not rewrite the graph.
+
+Selection is exclusive — **PCM main, AS1 or AS2**. A tap replaces that tick's
+bus contributions rather than mixing with them, so pressing AS1 gives you AS1
+alone instead of AS1 plus every bus with `P` set. Enabling one tap clears the
+other, and stopping the PCM player clears any tap (it exists only to feed that
+stream). Button state is always re-read from the server after a toggle, so the
+display cannot drift from what is actually playing.
+
+The tap queue is bounded at 4 chunks (~200 ms), so a stalled browser cannot
+grow it, and turning a tap off clears it so re-enabling never replays stale
+audio.
+
 ## [4.3.1] -- 2026-08-02
 
 AllStar panel usability: the two nodes are now distinguishable, and the panel

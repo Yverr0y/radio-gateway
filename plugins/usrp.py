@@ -380,6 +380,12 @@ class UsrpPlugin:
         self._stats_cache_mono = 0.0
         self._ami_thread = None
         self._poll_err = {}            # what -> {n, last, msg} for rate-limited logging
+        # Browser monitor tap. Filled in the RX path, NOT by a second
+        # get_audio() call — that pops _rx_queue and would steal audio from the
+        # bus. Filling it here also means the tap works even if this node is
+        # not wired to any bus.
+        self.pcm_tap = False
+        self._tap_queue = collections.deque(maxlen=4)
         self._recent = []              # last 10 connected node numbers (dropdown)
         self._recent_path = None       # JSON persistence path (set in setup)
 
@@ -550,7 +556,20 @@ class UsrpPlugin:
             self._rx48k = self._rx48k[BUS_CHUNK_SAMPLES:]
             chunk_bytes = chunk.tobytes()
             self._rx_queue.append(chunk_bytes)  # deque drops oldest at maxlen
+            if self.pcm_tap:
+                self._tap_queue.append(chunk_bytes)
             self.audio_level = pcm_level(chunk_bytes, self.audio_level)
+
+    def take_tap(self):
+        """One tapped RX chunk for the browser PCM monitor, or None.
+
+        Separate from get_audio() so monitoring never competes with the bus for
+        the same queue.
+        """
+        try:
+            return self._tap_queue.popleft()
+        except IndexError:
+            return None
 
     def get_audio(self, chunk_size=None):
         """Return one 48 kHz bus chunk of RX audio, or (None, False)."""
@@ -983,6 +1002,7 @@ class UsrpPlugin:
             'ami': f'{self.ami_host}:{self.ami_port}',
             'ami_ready': bool(self.ami_user),
             'last_ctrl': self._last_ctrl,
+            'pcm_tap': self.pcm_tap,
             'links': list(self._links_cache),
             'links_direct': list(self._links_direct),
             'links_indirect': list(self._links_indirect),
@@ -1056,12 +1076,14 @@ class UsrpPlugin:
             length = 0
         raw = req.rfile.read(length).decode(errors='replace') if length else ''
         action, node, mode = '', '', 'transceive'
+        on = ''                                   # used by pcm_tap
         if raw.strip().startswith('{'):
             try:
                 d = json.loads(raw)
                 action = str(d.get('action', ''))
                 node = str(d.get('node', ''))
                 mode = str(d.get('mode', 'transceive'))
+                on = str(d.get('on', ''))
             except ValueError:
                 pass
         else:
@@ -1070,6 +1092,7 @@ class UsrpPlugin:
             action = (q.get('action') or [''])[0]
             node = (q.get('node') or [''])[0]
             mode = (q.get('mode') or ['transceive'])[0]
+            on = (q.get('on') or [''])[0]
 
         if action == 'connect':
             m = ILINK_MONITOR if mode == 'monitor' else ILINK_TRANSCEIVE
@@ -1085,6 +1108,26 @@ class UsrpPlugin:
             res = self.link_status()
         elif action == 'node_stats':
             res = self.node_stats()
+        elif action == 'pcm_tap':
+            # Monitor this node in the browser PCM stream. Deliberately does
+            # NOT touch routing — a listen button should not rewrite the graph.
+            want = str(on).lower() not in ('0', 'false', 'off', '')
+            self.pcm_tap = want
+            if not want:
+                self._tap_queue.clear()
+            else:
+                # Exclusive: PCM main, AS1 or AS2 — never two nodes at once.
+                # Enabling one clears the others so the stream carries a single
+                # identifiable source.
+                gw = getattr(self, '_gateway', None)   # set in setup(); NOT self.gateway
+                for _pid, _plg in (getattr(gw, '_external_plugins', {}) or {}).items():
+                    if _plg is not self and getattr(_plg, 'pcm_tap', False):
+                        _plg.pcm_tap = False
+                        try:
+                            _plg._tap_queue.clear()
+                        except Exception:
+                            pass
+            res = {'ok': True, 'pcm_tap': self.pcm_tap}
         else:
             return self._send_json(req, {'ok': False, 'error': f'bad action: {action}'}, 400)
         self._send_json(req, res)
