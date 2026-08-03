@@ -752,6 +752,18 @@ WEB_CONFIG_PASSWORD =
 WEB_CONFIG_HTTPS = false           # false, self-signed, or letsencrypt (uses DDNS_HOSTNAME)
 ENABLE_CLOUDFLARE_TUNNEL = false   # free public HTTPS via *.trycloudflare.com (no port fwd needed)
 
+# Browser microphone (the MIC button in the shell bar) -> radio TX.
+# Hold to talk; releasing unkeys. Route it by dropping the "Web Mic" source
+# onto a solo bus with a TX sink in /routing — it transmits nowhere until you do.
+# Needs HTTPS or localhost: getUserMedia is blocked on plain-HTTP LAN origins.
+ENABLE_WEB_MIC = true
+WEB_MIC_VOLUME = 4.0           # gain multiplier; tanh soft-clipped above 1.0
+# Two watchdogs bound the transmission. Both are enforced gateway-side, so a
+# browser that crashes, sleeps or loses wifi cannot strand a keyed transmitter.
+WEB_MIC_KEY_TIMEOUT = 2.0      # s without a key refresh from the browser -> unkey
+WEB_MIC_MAX_TX = 120.0         # s max single transmission (time-out timer);
+                               # release the button and press again to reset
+
 # Internal SDR autostart (rtl_airband via web SDR page)
 # Automatically starts the SDR receiver when the gateway starts.
 # Channel -1 = use last settings; 0-9 = recall saved channel slot on startup.
