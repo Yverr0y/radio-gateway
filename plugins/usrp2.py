@@ -68,16 +68,9 @@ class Usrp2Plugin(UsrpPlugin):
             ('/usrp2/control', self._http_control),
         ]
 
-    def _http_panel(self, req, parent):
-        # Reuse parent's panel but point JS fetch calls at /usrp2/*
-        from usrp import _PANEL_HTML
-        html = (_PANEL_HTML
-                .replace('__NODE__', self.node)
-                .replace("'/usrp/control'", "'/usrp2/control'")
-                .replace("'/usrp/status'", "'/usrp2/status'"))
-        body = html.encode()
-        req.send_response(200)
-        req.send_header('Content-Type', 'text/html; charset=utf-8')
-        req.send_header('Content-Length', str(len(body)))
-        req.end_headers()
-        req.wfile.write(body)
+    def _panel_rewrites(self):
+        # Only the URL swaps — the parent handles __NODE__/__LABEL__ and the
+        # response itself. This used to be a full _http_panel copy, which is
+        # why a placeholder added upstream rendered literally here.
+        return (("'/usrp/control'", "'/usrp2/control'"),
+                ("'/usrp/status'",  "'/usrp2/status'"))

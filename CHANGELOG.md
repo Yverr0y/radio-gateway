@@ -2,6 +2,58 @@
 
 All notable changes to Radio Gateway.
 
+## [4.3.1] -- 2026-08-02
+
+AllStar panel usability: the two nodes are now distinguishable, and the panel
+paints from a warm cache instead of waiting on AMI.
+
+### Fixed — the two AllStar instances were indistinguishable
+
+The nav labelled entries by NODE number (`AllStar 683970` / `AllStar 683971`),
+which cannot be matched against the routing page's ALLSTAR 1 / ALLSTAR 2. The
+`1`/`2` fallback in that expression only fired when the node was `0`, which
+never happens on a working node. Instance 1's `PLUGIN_NAME` was also unnumbered
+(`AllStar (USRP)`) while instance 2 already said `AllStar 2 (USRP)`.
+
+Nav, panel title and services card now all read `AllStar 1` / `AllStar 2`,
+matching `/routing`. The node number moved to the nav tooltip and stays in each
+panel title.
+
+`usrp2` carried a full copy of `_http_panel` just to swap two URLs, so a
+placeholder added upstream rendered literally on that instance
+(`__LABEL__ — node 683971`). Substitution moved to `_render_panel()` on the
+parent; the subclass now overrides only `_panel_rewrites()`.
+
+### Fixed — AllStar panel took ~9s to populate
+
+The page made three serial AMI calls on load (`rpt lstats`, `rpt nodes`,
+`rpt stats`), each bounded at 3s. A background poller now keeps links and node
+stats warm from gateway startup, and the panel paints from `/usrp/status` — a
+cheap local read — before the AMI-backed refresh returns.
+
+Cached data is never presented as live: `/usrp/status` reports `links_age` /
+`stats_age` and `links_stale` / `stats_stale`, the panel labels stale data
+rather than showing it as current, and a cold cache counts as stale so a fresh
+gateway never shows an empty list as "nothing connected". Caches update only on
+a successful AMI call, so a failed poll ages out rather than blanking.
+
+Three bugs found while building it:
+
+- The poller called `self.get_links()`, which does not exist — the method is
+  `link_status()`. Node stats refreshed correctly while links never did, so
+  `links_age` climbed forever and the data still waited on a page visit.
+- The cache paint ran once on load, so opening the page during the first ~10s
+  after a restart showed "not current" and never re-checked. It is now driven
+  by the existing 1.5s status poll.
+- Only the direct links were cached; the indirect/conference list was computed
+  and discarded, so that group still waited on AMI and the panel filled in two
+  visible stages. Both are cached now, and one `renderLinks()` serves the
+  cached and live paths so they cannot drift apart.
+
+Poll failures are rate-limited: first occurrence, then at most once a minute
+with a suppressed count, plus a recovery line. Unbounded, this wrote ~12k lines
+a day per node during an outage.
+
 ## [4.3.0] -- 2026-08-02
 
 Background music beds with a repeating spoken message and broadcast ducking, a

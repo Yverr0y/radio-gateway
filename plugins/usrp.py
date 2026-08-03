@@ -88,7 +88,7 @@ ILINK_PERMA_TRANSCEIVE = 13
 _PANEL_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AllStar (USRP) — node __NODE__</title>
+<title>__LABEL__ — node __NODE__</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, sans-serif; background:#14171c; color:#e6e9ef;
@@ -123,7 +123,7 @@ _PANEL_HTML = """<!DOCTYPE html>
   .grouplbl { color:#8b94a3; font-size:.72rem; text-transform:uppercase;
               letter-spacing:.04em; margin:.6rem 0 .1rem; }
 </style></head><body>
-<h1>AllStar link — node __NODE__</h1>
+<h1>__LABEL__ — node __NODE__</h1>
 <div class="sub" id="amiline">via USRP bridge</div>
 
 <div class="card">
@@ -159,6 +159,7 @@ _PANEL_HTML = """<!DOCTYPE html>
     <span>TX time today</span><b id="nd-txtime">—</b>
     <span>Timeouts</span><b id="nd-timeouts">—</b>
   </div>
+  <div id="cache-note" style="font-size:.7rem;color:#6b7480;margin-top:.25rem"></div>
   <div id="nd-links-stats" style="margin-top:.25rem"></div>
 </div>
 
@@ -189,12 +190,35 @@ async function act(action, mode){
 }
 async function dis(node){ $('msg').textContent='disconnecting '+node+'…';
   const res = await post('disconnect',{node}); $('msg').textContent=(res.ok?'✓ ':'✗ ')+node; refreshLinks(); }
-async function refreshLinks(){
-  const res = await post('links');
+// Cache painting is driven by poll() (every 1.5 s) rather than run once on
+// load. As a one-shot it painted whatever the cache held at that instant — so
+// opening the page during the ~10 s after a gateway restart showed "not
+// current" and then never re-checked, which looked exactly like the original
+// slow load it was meant to fix.
+let _liveLinks = false;   // true once an AMI-backed refresh has painted
+function applyCache(s){
+  const note = $('cache-note');
+  if(note){
+    // Only speak up when the data is NOT current. When it is fresh the
+    // existing "updated Ns ago" line already says so.
+    const stale = s.links_stale || s.stats_stale;
+    note.textContent = stale ? 'node data not current, refreshing' : '';
+    note.style.color = stale ? '#c9a227' : '#6b7480';
+  }
+  if(s.stats && s.stats.ok && !s.stats_stale) renderNodeStats(s.stats);
+  // Paint cached links only until the richer AMI view arrives — that one has
+  // direct/indirect grouping and disconnect buttons, so it must win.
+  if(!_liveLinks && !s.links_stale &&
+     ((s.links_direct && s.links_direct.length) || (s.links_indirect && s.links_indirect.length))){
+    renderLinks(s.links_direct, s.links_indirect, true);
+  }
+}
+
+function renderLinks(direct, indirect, cached){
   const ul = $('links'); ul.innerHTML='';
-  const direct = (res && res.direct) || [];
-  const indirect = (res && res.indirect) || [];
+  direct = direct || []; indirect = indirect || [];
   if(!direct.length && !indirect.length){ ul.innerHTML='<li class="none">none connected</li>'; return; }
+  const tag = cached ? ' <small>cached</small>' : '';
   // Direct links — these you can disconnect (ilink 1 on your own link).
   if(direct.length){
     const lbl=document.createElement('li'); lbl.className='grouplbl';
@@ -203,7 +227,7 @@ async function refreshLinks(){
   }
   for(const d of direct){
     const li=document.createElement('li');
-    li.innerHTML=`<span>${d.node}<small>${(d.dir||'').toLowerCase()} ${(d.state||'').toLowerCase()}</small></span>`;
+    li.innerHTML=`<span>${d.node}<small>${(d.dir||'').toLowerCase()} ${(d.state||'').toLowerCase()}</small>${tag}</span>`;
     const b=document.createElement('button'); b.className='b-dis'; b.textContent='Disconnect';
     b.onclick=()=>dis(d.node); li.appendChild(b); ul.appendChild(li);
   }
@@ -219,6 +243,12 @@ async function refreshLinks(){
     }
   }
 }
+async function refreshLinks(){
+  const res = await post('links');
+  if(res && res.ok) _liveLinks = true;
+  renderLinks(res && res.direct, res && res.indirect, false);
+}
+
 async function poll(){
   try{
     const s = await (await fetch('/usrp/status')).json();
@@ -232,6 +262,7 @@ async function poll(){
     $('amiline').textContent = 'via USRP bridge — AMI ' +
         (s.ami_ready ? ('ready ('+s.ami+')') : 'NOT configured');
     if(s.links_age!=null) $('age').textContent = 'updated '+s.links_age+'s ago';
+    applyCache(s);
     if(Array.isArray(s.recent)){
       const sel=$('recent'), sig=s.recent.join(',');
       if(sel.dataset.sig!==sig){
@@ -242,15 +273,16 @@ async function poll(){
     }
   }catch(e){}
 }
+function renderNodeStats(r){
+  if(!r || !r.ok) return;
+  $('nd-uptime').textContent   = r.uptime || '—';
+  $('nd-keyups').textContent   = r.keyups_today || '—';
+  $('nd-txtime').textContent   = r.tx_time_today || '—';
+  $('nd-timeouts').textContent = r.timeouts || '0';
+}
 async function pollNodeStats(){
   try{
-    const r = await post('node_stats');
-    if(r.ok){
-      $('nd-uptime').textContent   = r.uptime || '—';
-      $('nd-keyups').textContent   = r.keyups_today || '—';
-      $('nd-txtime').textContent   = r.tx_time_today || '—';
-      $('nd-timeouts').textContent = r.timeouts || '0';
-    }
+    renderNodeStats(await post('node_stats'));
   }catch(e){}
   try{
     const r = await post('links');
@@ -265,7 +297,13 @@ async function pollNodeStats(){
     }
   }catch(e){}
 }
-refreshLinks(); poll(); pollNodeStats();
+// Paint from the cached snapshot FIRST — /usrp/status is a cheap local read,
+// so the panel is populated immediately. The AMI-backed refreshes still run,
+// but after the page is already usable rather than blocking it for ~9 s.
+// poll() paints from the warm cache on its first pass (cheap, no AMI), so the
+// panel is populated before the AMI-backed calls below have returned.
+poll();
+refreshLinks(); pollNodeStats();
 setInterval(poll, 1500);
 setInterval(refreshLinks, 6000);
 setInterval(pollNodeStats, 15000);
@@ -291,7 +329,7 @@ TX_HANG_S = 0.20                       # auto-unkey if no put_audio for this lon
 
 class UsrpPlugin:
     PLUGIN_ID = 'usrp'
-    PLUGIN_NAME = 'AllStar (USRP)'
+    PLUGIN_NAME = 'AllStar 1 (USRP)'   # numbered to match /routing and the nav
     CAPABILITIES = {
         CAPABILITY_AUDIO_RX,
         CAPABILITY_AUDIO_TX,
@@ -332,7 +370,16 @@ class UsrpPlugin:
         self.ami_secret = ''
         self._last_ctrl = ''           # last control result text (for the panel)
         self._links_cache = []         # last-known connected nodes (panel display)
+        self._links_direct = []        # rich rows: node/peer/dir/state/reconnects
+        self._links_indirect = []      # conference members reached via a hub
         self._links_cache_mono = 0.0
+        # Node stats (rpt stats) cached alongside links. Both are refreshed by
+        # _ami_poll_loop so the panel can paint immediately instead of waiting
+        # on three serial AMI round trips at 3 s each.
+        self._stats_cache = {}
+        self._stats_cache_mono = 0.0
+        self._ami_thread = None
+        self._poll_err = {}            # what -> {n, last, msg} for rate-limited logging
         self._recent = []              # last 10 connected node numbers (dropdown)
         self._recent_path = None       # JSON persistence path (set in setup)
 
@@ -411,6 +458,9 @@ class UsrpPlugin:
         self._tx_thread = threading.Thread(target=self._tx_loop, name='usrp-tx', daemon=True)
         self._rx_thread.start()
         self._tx_thread.start()
+        self._ami_thread = threading.Thread(target=self._ami_poll_loop,
+                                            name=f'{self.PLUGIN_ID}-ami', daemon=True)
+        self._ami_thread.start()
         self.enabled = True
         print(f"  [USRP] up: listen :{self.listen_port}  →  "
               f"{self.remote_host}:{self.remote_port}")
@@ -418,7 +468,7 @@ class UsrpPlugin:
 
     def cleanup(self):
         self._stop.set()
-        for t in (self._rx_thread, self._tx_thread):
+        for t in (self._rx_thread, self._tx_thread, self._ami_thread):
             if t and t.is_alive():
                 t.join(timeout=1.5)
         if self._sock:
@@ -798,7 +848,13 @@ class UsrpPlugin:
                     indirect.append(m)
             indirect.sort(key=int)   # tidy numeric order for the read-only list
         if ok_l or ok_n:
+            # Cache direct AND indirect. Caching only direct_nodes meant the
+            # "Your links" group painted instantly from cache while "In
+            # conference" waited on the live AMI round trip — the panel filled
+            # in two visible stages.
             self._links_cache = direct_nodes
+            self._links_direct = direct
+            self._links_indirect = indirect
             self._links_cache_mono = time.monotonic()
         return {'ok': ok_l or ok_n, 'direct': direct, 'indirect': indirect,
                 'nodes': direct_nodes, 'raw': out_n}
@@ -809,10 +865,11 @@ class UsrpPlugin:
         ok, out = self._ami_command(f'rpt stats {self.node}')
         if not ok:
             return {'ok': False, 'error': out}
+        # (cached below once parsed)
         def _val(key):
             m = _re.search(r'%s\.+:\s*(.+)' % _re.escape(key), out)
             return m.group(1).strip() if m else ''
-        return {
+        stats = {
             'ok': True,
             'uptime':        _val('Uptime'),
             'keyups_today':  _val('Keyups today'),
@@ -822,6 +879,9 @@ class UsrpPlugin:
             'timeouts':      _val('Time outs since system initialization'),
             'kerchunks_today': _val('Kerchunks today'),
         }
+        self._stats_cache = stats
+        self._stats_cache_mono = time.monotonic()
+        return stats
 
     # ── control surface ────────────────────────────────────────────
     def execute(self, cmd):
@@ -847,6 +907,60 @@ class UsrpPlugin:
             return {'ok': True, **self.link_status()}
         return {'ok': False, 'error': f'unknown cmd: {c}'}
 
+    # ── background AMI poller ──────────────────────────────────────
+    # Ages are reported so the UI can distinguish "current" from "last known".
+    AMI_POLL_SEC = 10.0        # how often to refresh links + node stats
+    AMI_STALE_SEC = 45.0       # beyond this the cache is not presented as fact
+    AMI_ERR_LOG_SEC = 60.0     # min seconds between repeats of the same poll error
+
+    def _ami_poll_loop(self):
+        """Keep links + node stats warm so the panel paints instantly.
+
+        Without this the page made three serial AMI calls on load (rpt lstats,
+        rpt nodes, rpt stats), each bounded at 3 s — up to ~9 s of staring at an
+        empty panel. Polling here is bounded by the same timeouts and runs on
+        its own thread, so a wedged AMI never blocks a page load.
+        """
+        while not self._stop.is_set():
+            if self.ami_user:
+                self._poll_step('links', self.link_status)   # -> _links_cache
+                self._poll_step('stats', self.node_stats)    # -> _stats_cache
+            self._stop.wait(self.AMI_POLL_SEC)
+
+    def _poll_step(self, what, fn):
+        """Run one poll, logging failures at a bounded rate.
+
+        An unconditional print here writes a line every AMI_POLL_SEC per plugin
+        instance — ~12k lines a day per node during a sustained outage, which
+        buries everything else in the journal. So: log the first failure
+        immediately (you want to know), then at most once a minute while it
+        persists, with a count of what was suppressed, and one line when it
+        recovers. Silence is not an option either — a poll that fails quietly
+        just looks like a slow panel.
+        """
+        try:
+            fn()
+        except Exception as e:
+            st = self._poll_err.setdefault(what, {'n': 0, 'last': 0.0, 'msg': ''})
+            st['n'] += 1
+            st['msg'] = str(e)
+            now = time.monotonic()
+            # Gate on when we last REPORTED, not on the failure count. Testing
+            # `n == 1` and then resetting n to 0 made every failure look like
+            # the first one, so nothing was suppressed at all.
+            never_reported = st['last'] == 0.0
+            if never_reported or now - st['last'] >= self.AMI_ERR_LOG_SEC:
+                extra = f" (x{st['n']} since last report)" if st['n'] > 1 else ''
+                print(f"  [{self.PLUGIN_ID}] {what} poll failed: {e}{extra}")
+                st['last'] = now
+                st['n'] = 0
+            return
+        if self._poll_err.pop(what, None) is not None:
+            print(f"  [{self.PLUGIN_ID}] {what} poll recovered")
+
+    def _cache_age(self, mono):
+        return round(time.monotonic() - mono, 1) if mono else None
+
     def get_status(self):
         with self._tx_lock:
             tx_buf = sum(a.size for a in self._tx8k)
@@ -870,8 +984,17 @@ class UsrpPlugin:
             'ami_ready': bool(self.ami_user),
             'last_ctrl': self._last_ctrl,
             'links': list(self._links_cache),
-            'links_age': (round(time.monotonic() - self._links_cache_mono, 1)
-                          if self._links_cache_mono else None),
+            'links_direct': list(self._links_direct),
+            'links_indirect': list(self._links_indirect),
+            'links_age': self._cache_age(self._links_cache_mono),
+            'stats': dict(self._stats_cache),
+            'stats_age': self._cache_age(self._stats_cache_mono),
+            # The UI must never present a warm cache as live. True means "this
+            # is the last known value, not the current one".
+            'links_stale': (self._cache_age(self._links_cache_mono) is None
+                            or self._cache_age(self._links_cache_mono) > self.AMI_STALE_SEC),
+            'stats_stale': (self._cache_age(self._stats_cache_mono) is None
+                            or self._cache_age(self._stats_cache_mono) > self.AMI_STALE_SEC),
             'recent': list(self._recent),
         }
 
@@ -966,9 +1089,31 @@ class UsrpPlugin:
             return self._send_json(req, {'ok': False, 'error': f'bad action: {action}'}, 400)
         self._send_json(req, res)
 
+    def _panel_rewrites(self):
+        """Extra (find, replace) pairs applied to the panel. Subclasses that
+        serve the template on a different path override THIS, not the whole
+        handler."""
+        return ()
+
+    def _render_panel(self):
+        """Panel HTML with every placeholder substituted.
+
+        Both instances share one template, so the label has to come from the
+        plugin — otherwise every panel reads identically apart from a node
+        number you cannot map back to the routing page. Centralised because the
+        usrp2 subclass used to copy this substitution chain into its own
+        handler, so a placeholder added here rendered literally on that
+        instance ("__LABEL__ — node 683971").
+        """
+        html = (_PANEL_HTML
+                .replace('__NODE__', self.node)
+                .replace('__LABEL__', getattr(self, 'PLUGIN_NAME', 'AllStar (USRP)')))
+        for find, repl in self._panel_rewrites():
+            html = html.replace(find, repl)
+        return html
+
     def _http_panel(self, req, parent):
-        html = _PANEL_HTML.replace('__NODE__', self.node)
-        body = html.encode()
+        body = self._render_panel().encode()
         req.send_response(200)
         req.send_header('Content-Type', 'text/html; charset=utf-8')
         req.send_header('Content-Length', str(len(body)))

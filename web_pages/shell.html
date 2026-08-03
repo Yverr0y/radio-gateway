@@ -848,16 +848,21 @@ function _navRefreshAsl() {
       var id = 'nav-' + inst.id;
       if (!inst.enabled && !_navSeen[id]) return;
       var el = document.getElementById(id);
+      // Label by INSTANCE number, not node number. Node numbers (683970 /
+      // 683971) are impossible to match against the routing page, which calls
+      // these ALLSTAR 1 and ALLSTAR 2. The node still shows in the tooltip.
+      var instNum = inst.id.replace(/^usrp/, '') || '1';
       if (!el) {
         el = document.createElement('a');
         el.id = id;
         el.href = inst.panel_url;
         el.target = 'content';
-        el.textContent = 'AllStar ' + (inst.node && inst.node !== '0'
-                          ? inst.node : (inst.id.replace(/^usrp/, '') || '1'));
         el.onclick = function(){ setActive(el); };
         drop.appendChild(el);
       }
+      el.textContent = 'AllStar ' + instNum;
+      el.title = inst.name + (inst.node && inst.node !== '0'
+                   ? ' — node ' + inst.node : '');
       _navSeen[id] = true;
       el.style.display = '';
     });
