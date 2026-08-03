@@ -10,6 +10,7 @@ So: render through the REAL code path (_render_panel, including the usrp2
 rewrites) and parse the result. Extracting the template by hand and tidying up
 the backslashes is what hid the bug the first time.
 """
+import atexit
 import os
 import re
 import shutil
@@ -25,6 +26,27 @@ import usrp2  # noqa: E402
 
 FAIL = []
 
+_TMPDIRS = []
+
+
+def mkdtemp(prefix):
+    """Temp dir removed on exit — see the inode exhaustion note in
+    tests/test_soundboard_categories.py. Small leaks here, but a test that
+    tidies up after itself costs nothing."""
+    import tempfile as _tf
+    d = _tf.mkdtemp(prefix=prefix)
+    _TMPDIRS.append(d)
+    return d
+
+
+@atexit.register
+def _cleanup_tmpdirs():
+    import shutil
+    for d in _TMPDIRS:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+
 
 def check(name, cond, detail=''):
     print(f"  {'PASS' if cond else 'FAIL'}  {name}{' — ' + detail if detail else ''}")
@@ -35,7 +57,7 @@ def check(name, cond, detail=''):
 print("\n=== USRP panel JS ===\n")
 
 _node = shutil.which('node')
-_tmp = tempfile.mkdtemp(prefix='panel-js-')
+_tmp = mkdtemp('panel-js-')
 
 for cls, label in ((usrp.UsrpPlugin, 'usrp'), (usrp2.Usrp2Plugin, 'usrp2')):
     p = cls()

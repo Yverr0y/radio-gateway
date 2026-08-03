@@ -6,6 +6,7 @@ morning. The two things worth testing are that it DOES reconnect, and that it
 STOPS — an unbounded retry loop against a node that is off the air for a week
 is its own kind of broken.
 """
+import atexit
 import json
 import os
 import sys
@@ -18,6 +19,27 @@ sys.path.insert(0, os.path.join(_ROOT, 'plugins'))
 import usrp  # noqa: E402
 
 FAIL = []
+
+_TMPDIRS = []
+
+
+def mkdtemp(prefix):
+    """Temp dir removed on exit — see the inode exhaustion note in
+    tests/test_soundboard_categories.py. Small leaks here, but a test that
+    tidies up after itself costs nothing."""
+    import tempfile as _tf
+    d = _tf.mkdtemp(prefix=prefix)
+    _TMPDIRS.append(d)
+    return d
+
+
+@atexit.register
+def _cleanup_tmpdirs():
+    import shutil
+    for d in _TMPDIRS:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 
 
 def check(name, cond, detail=''):
@@ -70,7 +92,7 @@ def set_links(p, clock, nodes):
 
 print("\n=== USRP relink reconciler ===\n")
 
-_tmp = tempfile.mkdtemp(prefix='usrp-test-')
+_tmp = mkdtemp('usrp-test-')
 _clock = FakeClock()
 usrp.time = _clock                     # module-level clock swap (no threads here)
 usrp.NODE_BOOK = usrp._NodeBook(os.path.join(_tmp, 'book.json'))
@@ -265,7 +287,7 @@ check("message suggests the node number", 'node number' in res['output'], res['o
 print("\n19. THE PROMISE: a link comes back after a gateway restart")
 # Simulate the whole cycle: connect, process dies, new process reads only what
 # is on disk, and the link is restored with nobody clicking anything.
-restart_dir = tempfile.mkdtemp(prefix='usrp-restart-')
+restart_dir = mkdtemp('usrp-restart-')
 a = make_plugin(restart_dir, _clock)
 a.connect_node('45412')
 check("connect recorded on disk", os.path.exists(a._desired_path))
@@ -318,7 +340,7 @@ check("name survived reload", fresh.name_of('45412') == 'Bay-Net Hub')
 usrp._gw_root = _real_root2
 
 print("\n14. Old per-instance recents are migrated, not discarded")
-mig = tempfile.mkdtemp(prefix='usrp-mig-')
+mig = mkdtemp('usrp-mig-')
 with open(os.path.join(mig, 'usrp_recent.json'), 'w') as f:
     json.dump(['49172', '41413'], f)
 with open(os.path.join(mig, 'usrp2_recent.json'), 'w') as f:

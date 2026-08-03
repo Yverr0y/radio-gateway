@@ -1,6 +1,9 @@
 """Verify the SOUNDBOARD_CATEGORIES filter."""
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -8,6 +11,32 @@ import audio_sources  # noqa: E402
 
 FP = audio_sources.FilePlaybackSource
 FAIL = []
+
+_TMPDIRS = []
+
+
+def mkdtemp():
+    """A temp dir that is removed when this test exits.
+
+    Every case here pre-creates one stub file per pool entry (~780 of them) so
+    _fill_soundboard_slots never touches the network. That is fine — until the
+    directories are left behind. Measured 2026-08-03: one run leaked 144 dirs
+    and ~64,000 inodes, and repeated runs exhausted /tmp's inode table
+    (2,035,767 inodes, 100% used, ~3000 stale dirs). Everything on the box
+    writing to /tmp then failed with "No space left on device" while df -h
+    still showed gigabytes free — the files are empty, so it is inodes that
+    run out, not bytes. Use this instead of tempfile.mkdtemp() directly.
+    """
+    d = tempfile.mkdtemp(prefix='soundboard-test-')
+    _TMPDIRS.append(d)
+    return d
+
+
+@atexit.register
+def _cleanup_tmpdirs():
+    """Runs even when a check fails and the script exits non-zero."""
+    for d in _TMPDIRS:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def check(name, cond, detail=''):
@@ -92,14 +121,13 @@ check("defaults to the full pool", len(s._select_soundboard_pool()[0]) == TOTAL)
 
 print("\n10. picking never hands the same clip to two slots")
 import random  # noqa: E402
-import tempfile  # noqa: E402
 
 
 def run_pick(cat_filter, slots=9, seed=0):
     """Drive the real _fill_soundboard_slots with downloads stubbed out."""
     s = object.__new__(FP)
     s.config = types.SimpleNamespace(SOUNDBOARD_CATEGORIES=cat_filter)
-    s.announcement_directory = tempfile.mkdtemp()
+    s.announcement_directory = mkdtemp()
     s.slot_count = 9      # these cases are written around 9 numbered slots
     s.file_status = {str(k): {'exists': False, 'path': '', 'filename': ''}
                      for k in range(10)}
@@ -156,7 +184,7 @@ def cap_src(max_secs, durations, tmpdir=None):
     """Source whose downloads are stubbed; `durations` maps id -> seconds."""
     s = object.__new__(FP)
     s.config = types.SimpleNamespace(SOUNDBOARD_CATEGORIES='', SOUNDBOARD_MAX_SECONDS=max_secs)
-    s.announcement_directory = tmpdir or tempfile.mkdtemp()
+    s.announcement_directory = tmpdir or mkdtemp()
     s.slot_count = 9
     s.file_status = {str(k): {'exists': False, 'path': '', 'filename': ''} for k in range(10)}
     s._durations = durations
@@ -223,7 +251,7 @@ finally:
 check("all 9 slots filled regardless of length", len(fm3) == 9, f"{len(fm3)}")
 
 print("\n14. _sound_duration is real and bounded")
-tmp = tempfile.mkdtemp()
+tmp = mkdtemp()
 bogus = os.path.join(tmp, 'x_1.mp3')
 open(bogus, 'wb').write(b'not an mp3')
 check("undecodable file returns None", FP._sound_duration(bogus) is None)
