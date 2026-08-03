@@ -2,7 +2,10 @@
 
 All notable changes to Radio Gateway.
 
-## [Unreleased]
+## [4.4.0] -- 2026-08-02
+
+Monitor either AllStar node directly in the browser, without going through the
+routing graph.
 
 ### Added — AS1 / AS2 monitor taps in the shell bar
 
