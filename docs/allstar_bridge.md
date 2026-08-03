@@ -142,6 +142,107 @@ container). Check it registered: `podman exec asl-bridge asterisk -rx "iax2 show
    and a TX bus (mic/Mumble → AllStar).
 3. Open `/usrp`, type a node number, hit **Connect**. Talk.
 
+### Links are PERSISTENT, not "permanent"
+
+Connect makes a link **persistent**: you asked for it, so it is restored after
+a gateway restart, an ASL restart, a reboot, or a three-month absence — and it
+stays gone the moment you Disconnect. That is the whole contract.
+
+Persistence lives in `usrp_desired.json` (per instance; the node *names* are
+shared — see below) plus `_reconcile_links`, which runs once per AMI poll,
+compares the desired set against what `rpt lstats` actually reports, and
+reconnects anything missing.
+
+**We deliberately do NOT use app_rpt's "permanent" mode** (`ilink 12`/`13`).
+Despite the name it is weaker than persistence and worse behaved: the flag
+lives only in Asterisk's memory, so it does not survive an ASL restart or a
+reboot at all, and while set app_rpt re-dials every ~10 s for ever, with no
+backoff and no way to tune it. Running it alongside the reconciler meant two
+independent retry loops fighting, only one of which could be told to slow
+down. Connects use plain `ilink 3`/`2`; the reconciler owns all retry timing.
+`ilink 11` is still issued on disconnect to clear flags older builds may have
+left set.
+
+Retry pacing, and why it never stops:
+
+* Exponential backoff, 30 s doubling to 30 min, for the first 10 attempts.
+* Then the target goes **dormant** — retried once an hour, indefinitely,
+  still in the desired set. Dormant is reported loudly (log + red row in the
+  panel's "Kept connected (persistent)" card) but is not abandonment: a node
+  that comes back next month relinks itself with nobody clicking anything.
+  Abandoning it would break the persistence promise; hammering it every 10 s
+  would be the other failure. Only Disconnect removes a link.
+* A manual Connect resets a dormant target to full retry speed.
+
+Two guards worth keeping:
+
+* An attempt is judged on a LATER poll, never on the AMI command's return.
+  `rpt cmd … ilink` returns ok because Asterisk accepted the command, not
+  because the link came up — and `connect_node` re-reads `lstats` after a
+  short settle so the UI can only show a tick for a link that is genuinely
+  ESTABLISHED. A link sitting in CONNECTING is *not* connected and is counted
+  as missing; treating presence in `lstats` as success made a node that
+  silently refuses us report "ok, 0 fails" for ever.
+* The reconciler refuses to run against a link list it did not just read
+  successfully, so an AMI outage does not read as "every link is down".
+
+### Node address book
+
+`usrp_nodes.json` maps node numbers to **your** names for them and is **shared
+by both panels** — name 45412 once on AS1 and AS2 shows the name too. The
+dropdown sorts most-recently-used first, so it subsumes the old per-instance
+recents lists (whose contents migrate in on first load). Desired *links* stay
+per-instance; only the names are shared.
+
+### Linking your own nodes to each other
+
+A private node is only reachable if it is defined in `[nodes]` in `rpt.conf` on
+**both** ends — the AllStarLink directory will not resolve it for you. Missing
+definitions fail as `Cannot find specified system node <n>`:
+
+```
+; on .140 (~/asl-bridge/etc/rpt.conf — bind-mounted, survives recreation)
+683971 = radio@192.168.2.141:4569/683971,NONE
+; on .141 (inside the container — NOT bind-mounted, lost if recreated)
+683970 = radio@192.168.2.140:4569/683970,NONE
+```
+
+Both ends need it, and both ends need to actually LOAD it. Three traps, all hit
+on 2026-08-03 and all now fixed:
+
+* **There is no `rpt reload`, and `rpt restart` is broken in this ASL3 build.**
+  It throws `FRACK!, Failed assertion user_data is NULL` in `ao2_container_dup`
+  and leaves app_rpt unable to process any `rpt cmd` — the node stops
+  connecting to anything until the container is restarted. **Restart the
+  container, never `rpt restart`.**
+* **An unloaded `[nodes]` entry fails silently and misleadingly.** app_rpt falls
+  back to the AllStarLink directory, which returns your *public* IP. With both
+  nodes behind one NAT the call goes out to the internet and the router
+  forwards 4569 straight back to the first node — it calls itself and sits at
+  CONNECTING forever. `tcpdump -ni any udp port 4569` tells you instantly:
+  a packet to your public IP means the entry is not loaded.
+* **The receiving end checks the source IP against its own node list.** If it
+  is missing the definition it rejects the call with
+  `Node <n> IP <public> does not match link IP <lan>!!` — the mirror image of
+  the same problem.
+
+### Config persistence — check the bind mount
+
+`/etc/asterisk` must be bind-mounted out of the container on **both** hosts, or
+every config edit is destroyed the next time the container is recreated:
+
+| Host | Mount | Recreate script |
+|------|-------|-----------------|
+| .140 `asl-bridge` (podman) | `~/asl-bridge/etc` → `/etc/asterisk` | see section 2 |
+| .141 `asl-node` (docker) | `~/asl-node/etc` → `/etc/asterisk` | `~/asl-node/run.sh` |
+
+.141 ran for weeks with **no** config mount — `~/asl-node/etc` existed but was
+never wired up, so its live config only existed inside the container layer.
+Fixed 2026-08-03 by copying the live config out (`docker cp asl-node:/etc/asterisk/.`)
+and recreating with the mount; `~/asl-node/run.sh` now records the exact run
+command so it cannot be lost again. The superseded container was kept as
+`asl-node-old` with `--restart=no` so it cannot fight the new one at boot.
+
 ## 5. MCP tools
 
 The MCP server exposes 7 AllStar tools in `mcp_server/tools/usrp.py`:

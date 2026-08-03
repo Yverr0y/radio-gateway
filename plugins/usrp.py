@@ -81,7 +81,158 @@ ILINK_DISCONNECT = 1        # disconnect one specified link
 ILINK_MONITOR = 2           # connect — receive (monitor) only
 ILINK_TRANSCEIVE = 3        # connect — full transceive (talk + listen)
 ILINK_DISCONNECT_ALL = 6
-ILINK_PERMA_TRANSCEIVE = 13
+ILINK_PERMA_DISCONNECT = 11  # drop a link previously connected as permanent
+ILINK_PERMA_MONITOR = 12    # permanent connect — monitor only
+ILINK_PERMA_TRANSCEIVE = 13  # permanent connect — full transceive
+
+# We deliberately do NOT use app_rpt's permanent mode (12/13) to hold links up.
+#
+# "Permanent" is app_rpt's word and it means something narrower than what a
+# user wants: the flag lives only in Asterisk's memory, so it does not survive
+# an ASL restart or a reboot at all, and while set app_rpt re-dials every ~10s
+# for ever with no backoff and no way to tune it. Running it alongside the
+# reconciler meant two independent retry loops fighting, only one of which
+# could be told to slow down.
+#
+# What is wanted is PERSISTENCE: a link you asked for is restored after a
+# gateway restart, an ASL restart, a reboot, or a three-month absence — and
+# stays gone once you disconnect it. That comes from usrp_desired.json on disk
+# plus the reconciler below, which owns all retry timing. ILINK_PERMA_DISCONNECT
+# is still used defensively to clear flags older builds may have left set.
+_CONNECT_MODES = (ILINK_TRANSCEIVE, ILINK_MONITOR)
+
+
+def _gw_root():
+    """Gateway root — plugins/ lives one level down."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+# ── shared node address book ─────────────────────────────────────────────
+class _NodeBook:
+    """Node number → the name YOU gave it, shared by every USRP instance.
+
+    Both panels reach the same AllStar network, so a per-instance list means
+    naming 45412 twice and then remembering which panel you named it in. One
+    file, one list, both panels — and because both plugin instances live in
+    the same process, one in-memory copy behind one lock.
+
+    Entries carry last_used/uses so the dropdown can sort most-recent-first:
+    that subsumes the two old per-instance recents files, whose contents are
+    migrated in on first load rather than thrown away.
+    """
+
+    # Kept in step with the maxlength on the panel's name field and with the
+    # 5.5rem/1fr column grid it is rendered into — a longer name would only
+    # ellipsis away, so truncate at the source rather than store what cannot
+    # be shown.
+    MAX_NAME = 30
+
+    def __init__(self, path):
+        self.path = path
+        self._d = {}
+        self._lock = threading.Lock()
+        self._loaded = False
+
+    def _load_locked(self):
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+            for node, ent in (data.get('nodes') or {}).items():
+                if str(node).isdigit() and isinstance(ent, dict):
+                    self._d[str(node)] = {
+                        'name': str(ent.get('name', ''))[:self.MAX_NAME],
+                        'last_used': float(ent.get('last_used', 0) or 0),
+                        'uses': int(ent.get('uses', 0) or 0),
+                    }
+        except (OSError, ValueError, AttributeError):
+            pass
+        self._migrate_recents_locked()
+
+    def _migrate_recents_locked(self):
+        """Fold the old per-instance recents files in, once, unnamed.
+
+        Losing the history on upgrade would mean retyping node numbers that
+        were already known — the exact friction this book exists to remove.
+        """
+        changed = False
+        for fname in ('usrp_recent.json', 'usrp2_recent.json'):
+            try:
+                with open(os.path.join(_gw_root(), fname)) as f:
+                    old = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(old, list):
+                continue
+            for i, node in enumerate(old):
+                node = str(node)
+                if node.isdigit() and node not in self._d:
+                    # Preserve relative order without inventing timestamps
+                    # that would outrank genuinely recent entries.
+                    self._d[node] = {'name': '', 'last_used': float(len(old) - i),
+                                     'uses': 0}
+                    changed = True
+        if changed:
+            self._save_locked()
+
+    def _save_locked(self):
+        try:
+            from atomic_json import save_json
+            save_json(self.path, {'nodes': self._d}, indent=1)
+        except (OSError, ImportError):
+            pass
+
+    def all(self):
+        """Entries as a list, most recently used first."""
+        with self._lock:
+            self._load_locked()
+            rows = [{'node': n, **e} for n, e in self._d.items()]
+        rows.sort(key=lambda r: (-r['last_used'], r['node']))
+        return rows
+
+    def name_of(self, node):
+        with self._lock:
+            self._load_locked()
+            ent = self._d.get(str(node))
+            return ent['name'] if ent else ''
+
+    def touch(self, node):
+        """Record a connect: creates the entry unnamed if it is new."""
+        node = str(node).strip()
+        if not node.isdigit():
+            return
+        with self._lock:
+            self._load_locked()
+            ent = self._d.setdefault(node, {'name': '', 'last_used': 0.0, 'uses': 0})
+            ent['last_used'] = time.time()
+            ent['uses'] = int(ent.get('uses', 0)) + 1
+            self._save_locked()
+
+    def set_name(self, node, name):
+        node = str(node).strip()
+        if not node.isdigit():
+            return False
+        name = ' '.join(str(name).split())[:self.MAX_NAME]
+        with self._lock:
+            self._load_locked()
+            ent = self._d.setdefault(node, {'name': '', 'last_used': 0.0, 'uses': 0})
+            ent['name'] = name
+            self._save_locked()
+        return True
+
+    def remove(self, node):
+        with self._lock:
+            self._load_locked()
+            existed = self._d.pop(str(node), None) is not None
+            if existed:
+                self._save_locked()
+        return existed
+
+
+# One book for the whole process, shared by usrp and usrp2.
+NODE_BOOK = _NodeBook(os.path.join(_gw_root(), 'usrp_nodes.json'))
 
 
 # ── control panel page ─────────────────────────────────────────────
@@ -90,7 +241,14 @@ _PANEL_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__LABEL__ — node __NODE__</title>
 <style>
-  :root { color-scheme: dark; }
+  /* This panel is standalone — it does NOT load common.css, so the theme
+     vars it references have to be defined here. They were not: every
+     `color:var(--t-err)` in this file resolved to nothing and silently
+     inherited, so the link-reconnect warning had never once shown a colour.
+     Values mirror web_pages/common.css. */
+  :root { color-scheme: dark;
+          --t-accent:#4fd6e6; --t-ok:#5dc47a;
+          --t-warn:#e89d3c;   --t-err:#e04848; }
   body { font-family: system-ui, sans-serif; background:#14171c; color:#e6e9ef;
          margin:0; padding:1.2rem; }
   h1 { font-size:1.1rem; margin:0 0 .2rem; }
@@ -118,26 +276,68 @@ _PANEL_HTML = """<!DOCTYPE html>
          word-break:break-word; }
   .none { color:#6b7480; font-size:.85rem; }
   .links li small { color:#6b7480; font-size:.72rem; margin-left:.4rem; }
+  /* Saved-node / kept-connected rows. The plain .links li above is
+     space-between with loose children, so the buttons track the length of
+     each label and stagger down the list. These rows are a fixed column
+     grid instead: node number, then name, then actions — so the buttons sit
+     on the same x no matter what you type into the name field. */
+  .links li.arow { display:grid; align-items:center; gap:.5rem;
+          grid-template-columns:5.5rem minmax(0,1fr) auto; }
+  .arow .nodenum { font-variant-numeric:tabular-nums; color:#b9c1cd; }
+  /* Node number doubles as a link to that node's AllStarLink stats page.
+     It lives in its own fixed column, so making it the link keeps the row
+     alignment intact instead of adding a third thing to the button group. */
+  /* Not scoped to .arow: every node number on this page is a stats link,
+     including the connected/conference lists and the header. */
+  a.nodenum { color:var(--t-accent); text-decoration:none; }
+  a.nodenum:hover, a.nodenum:focus { text-decoration:underline; }
+  /* Names are capped at 30 chars server-side; ellipsis is the backstop so a
+     pasted-in long one can never push the buttons out of line. */
+  .arow .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .arow .nm small { margin-left:0; display:block; }
+  .arow .acts { display:flex; gap:.35rem; justify-content:flex-end; }
+  .arow .acts button { min-width:4.4rem; }
   .links li.indirect { opacity:.6; }
   .links li.indirect span::before { content:'\\21B3 '; color:#6b7480; }
   .grouplbl { color:#8b94a3; font-size:.72rem; text-transform:uppercase;
               letter-spacing:.04em; margin:.6rem 0 .1rem; }
 </style></head><body>
-<h1>__LABEL__ — node __NODE__</h1>
+<h1>__LABEL__ — node <a class="nodenum" href="https://stats.allstarlink.org/stats/__NODE__" target="_blank" rel="noopener noreferrer" title="AllStarLink stats for this node">__NODE__</a></h1>
 <div class="sub" id="amiline">via USRP bridge</div>
 
 <div class="card">
   <div class="row">
     <input type="text" id="node" inputmode="numeric" placeholder="node #">
-    <select id="recent" title="recent nodes"
+    <select id="book" title="saved nodes — shared with the other AllStar panel"
             onchange="if(this.value){document.getElementById('node').value=this.value;} this.selectedIndex=0;">
-      <option value="">recent ▾</option>
+      <option value="">saved ▾</option>
     </select>
     <button class="b-conn" onclick="act('connect','transceive')">Connect</button>
     <button class="b-mon" onclick="act('connect','monitor')">Monitor</button>
     <button class="b-all" onclick="act('disconnect_all')">Disconnect all</button>
   </div>
+  <div class="row" style="margin-top:.4rem">
+    <input type="text" id="nodename" placeholder="name for this node (max 30)" maxlength="30"
+           style="flex:1 1 12rem">
+    <button class="b-mon" onclick="saveName()">Save name</button>
+  </div>
   <div class="msg" id="msg"></div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <strong>Saved nodes</strong>
+    <span class="sub">one list, used by both AllStar nodes</span>
+  </div>
+  <ul class="links" id="booklist"></ul>
+</div>
+
+<div class="card" id="relink-card" style="display:none">
+  <div class="row" style="justify-content:space-between">
+    <strong>Kept connected (persistent)</strong>
+    <span class="sub" id="relink-counters"></span>
+  </div>
+  <ul class="links" id="relinklist"></ul>
 </div>
 
 <div class="card">
@@ -185,7 +385,11 @@ async function act(action, mode){
   if(action!=='disconnect_all' && !/^[0-9]+$/.test(node)){ $('msg').textContent='enter a node number'; return; }
   $('msg').textContent='working…';
   const res = await post(action, {node, mode});
-  $('msg').textContent = (res.ok?'✓ ':'✗ ') + (res.output||res.error||action);
+  // A connect is only a tick when the link actually came UP. 'established'
+  // is absent on non-connect actions, so fall back to res.ok there.
+  const good = ('established' in res) ? res.established : res.ok;
+  $('msg').textContent = (good?'✓ ':'✗ ') + (res.output||res.error||action);
+  $('msg').style.color = good ? '' : 'var(--t-warn)';
   refreshLinks();
 }
 async function dis(node){ $('msg').textContent='disconnecting '+node+'…';
@@ -227,7 +431,12 @@ function renderLinks(direct, indirect, cached){
   }
   for(const d of direct){
     const li=document.createElement('li');
-    li.innerHTML=`<span>${d.node}<small>${(d.dir||'').toLowerCase()} ${(d.state||'').toLowerCase()}</small>${tag}</span>`;
+    // CONNECTING is not connected — call it out rather than showing it in
+    // the same grey as an established link, which read as "it worked".
+    const est=(d.state||'').toUpperCase()==='ESTABLISHED';
+    const sc=est?'':'color:var(--t-warn)';
+    const sl=est?'':' — not answering';
+    li.innerHTML=`<span>${statsLink(d.node)}<small style="${sc}">${(d.dir||'').toLowerCase()} ${(d.state||'').toLowerCase()}${sl}</small>${tag}</span>`;
     const b=document.createElement('button'); b.className='b-dis'; b.textContent='Disconnect';
     b.onclick=()=>dis(d.node); li.appendChild(b); ul.appendChild(li);
   }
@@ -238,7 +447,7 @@ function renderLinks(direct, indirect, cached){
     ul.appendChild(lbl);
     for(const n of indirect){
       const li=document.createElement('li'); li.className='indirect';
-      li.innerHTML=`<span>${n}</span>`;
+      li.innerHTML=`<span>${statsLink(n)}</span>`;
       ul.appendChild(li);
     }
   }
@@ -263,15 +472,90 @@ async function poll(){
         (s.ami_ready ? ('ready ('+s.ami+')') : 'NOT configured');
     if(s.links_age!=null) $('age').textContent = 'updated '+s.links_age+'s ago';
     applyCache(s);
-    if(Array.isArray(s.recent)){
-      const sel=$('recent'), sig=s.recent.join(',');
-      if(sel.dataset.sig!==sig){
-        sel.innerHTML='<option value="">recent ▾</option>'+
-          s.recent.map(n=>'<option value="'+n+'">'+n+'</option>').join('');
-        sel.dataset.sig=sig;
-      }
-    }
+    renderBook(s.book);
+    renderRelink(s.relink, s.relink_counters);
   }catch(e){}
+}
+// The saved-node list and the dropdown are the same data. Both rebuild only
+// when the signature changes — repainting every 1.5 s would close the select
+// under the user's finger and fight anything typed into the name field.
+function esc(t){ const d=document.createElement('div'); d.textContent=t==null?'':t; return d.innerHTML; }
+function label(e){ return e.name ? e.node+' — '+e.name : e.node; }
+// Node number as a link to its AllStarLink stats page. rel=noopener because
+// target=_blank otherwise hands the opened page a handle back to this one.
+const STATS_URL='https://stats.allstarlink.org/stats/';
+function statsLink(node){
+  const n=String(node);
+  return '<a class="nodenum" href="'+STATS_URL+encodeURIComponent(n)+
+         '" target="_blank" rel="noopener noreferrer"'+
+         ' title="AllStarLink stats for node '+esc(n)+'">'+esc(n)+'</a>';
+}
+function renderBook(book){
+  if(!Array.isArray(book)) return;
+  const sig = book.map(e=>e.node+':'+e.name).join(',');
+  const sel=$('book'), list=$('booklist');
+  if(sel.dataset.sig===sig) return;
+  sel.dataset.sig=sig;
+  sel.innerHTML='<option value="">saved ▾</option>'+
+    book.map(e=>'<option value="'+esc(e.node)+'">'+esc(label(e))+'</option>').join('');
+  // Buttons carry the node in a data attribute and are handled by the
+  // delegated listener below. Inline onclick with a quoted argument does not
+  // survive this file: _PANEL_HTML is a non-raw Python triple-quoted string,
+  // so \' is consumed by Python and the emitted JS fails to parse — taking
+  // the whole panel with it, buttons that never worked and no error visible
+  // anywhere but the browser console.
+  list.innerHTML = book.length
+    ? book.map(e=>'<li class="arow">'+statsLink(e.node)+
+        '<span class="nm">'+esc(e.name||'—')+'</span><span class="acts">'+
+        '<button class="b-mon" data-act="pick" data-node="'+esc(e.node)+'">Use</button>'+
+        '<button class="b-all" data-act="forget" data-node="'+esc(e.node)+'">Forget</button>'+
+        '</span></li>').join('')
+    : '<li><span class="sub">nothing saved yet — connect to a node, then name it</span></li>';
+}
+function renderRelink(rows, counters){
+  const card=$('relink-card');
+  if(!Array.isArray(rows) || !rows.length){ card.style.display='none'; return; }
+  card.style.display='';
+  $('relink-counters').textContent = counters
+    ? counters.attempts+' attempts · '+counters.recovered+' relinked'+
+      (counters.dormant ? ' · '+counters.dormant+' slow-retrying' : '')
+    : '';
+  $('relinklist').innerHTML = rows.map(r=>{
+    const slow = r.state==='dormant';
+    const col = slow ? 'var(--t-err)' : r.state==='retrying' ? 'var(--t-warn)' : '';
+    const what = slow ? 'not answering after '+r.fails+' tries — slow retry, still kept'
+               : r.state==='retrying' ? 'retrying ('+r.fails+' failed)'
+               : 'connected';
+    return '<li class="arow">'+statsLink(r.node)+
+           '<span class="nm">'+esc(r.name||'—')+
+           '<small style="color:'+col+'">'+esc(what)+
+           (r.error?' · '+esc(r.error):'')+'</small></span>'+
+           '<span class="acts">'+
+           '<button class="b-all" data-act="stop" data-node="'+esc(r.node)+'">Stop</button>'+
+           '</span></li>';
+  }).join('');
+}
+function pick(n){ $('node').value=n; $('nodename').value=''; }
+async function forget(n){
+  const r = await post('book_delete',{node:n});
+  $('msg').textContent = (r.ok?'✓ forgot ':'✗ ')+n;
+  if(r.book) { $('book').dataset.sig=''; renderBook(r.book); }
+}
+// One delegated listener for every row button in both lists.
+document.addEventListener('click', function(ev){
+  const b = ev.target.closest('button[data-act]');
+  if(!b) return;
+  const n = b.dataset.node;
+  if(b.dataset.act==='pick') pick(n);
+  else if(b.dataset.act==='forget') forget(n);
+  else if(b.dataset.act==='stop') dis(n);
+});
+async function saveName(){
+  const node=$('node').value.trim(), name=$('nodename').value.trim();
+  if(!/^[0-9]+$/.test(node)){ $('msg').textContent='enter a node number first'; return; }
+  const r = await post('book_set',{node, name});
+  $('msg').textContent = r.ok ? ('✓ saved '+node+(name?' as "'+name+'"':' (name cleared)')) : ('✗ '+(r.error||''));
+  if(r.book) { $('book').dataset.sig=''; renderBook(r.book); }
 }
 function renderNodeStats(r){
   if(!r || !r.ok) return;
@@ -290,7 +574,7 @@ async function pollNodeStats(){
       $('nd-links-stats').innerHTML = '<div style="font-size:.75rem;color:#888;margin-top:.25rem">Direct link reconnects</div>' +
         r.direct.map(d => {
           const warn = d.reconnects > 5 ? 'color:var(--t-err)' : d.reconnects > 0 ? 'color:var(--t-warn)' : '';
-          return `<div class="stat" style="margin-top:.15rem"><span>Node ${d.node} (${d.peer})</span><b style="${warn}">${d.reconnects} reconnects — ${d.state}</b></div>`;
+          return `<div class="stat" style="margin-top:.15rem"><span>Node ${statsLink(d.node)} (${d.peer})</span><b style="${warn}">${d.reconnects} reconnects — ${d.state}</b></div>`;
         }).join('');
     } else {
       $('nd-links-stats').innerHTML = '';
@@ -373,6 +657,11 @@ class UsrpPlugin:
         self._links_direct = []        # rich rows: node/peer/dir/state/reconnects
         self._links_indirect = []      # conference members reached via a hub
         self._links_cache_mono = 0.0
+        # When `rpt lstats` last SUCCEEDED. The reconciler needs this rather
+        # than _poll_step's return: _ami_command reports a dead AMI as
+        # (False, msg) instead of raising, so the poll looks successful and
+        # would have the reconciler chasing links against a stale list.
+        self._lstats_ok_mono = 0.0
         # Node stats (rpt stats) cached alongside links. Both are refreshed by
         # _ami_poll_loop so the panel can paint immediately instead of waiting
         # on three serial AMI round trips at 3 s each.
@@ -388,6 +677,15 @@ class UsrpPlugin:
         self._tap_queue = collections.deque(maxlen=4)
         self._recent = []              # last 10 connected node numbers (dropdown)
         self._recent_path = None       # JSON persistence path (set in setup)
+        # Desired link set — what SHOULD be connected on THIS node, plus the
+        # reconciler's per-target backoff state. Per-instance (AS1 and AS2
+        # hold independent links) even though the address book is shared.
+        self._desired = {}             # node -> {'mode': int}
+        self._desired_path = None
+        self._relink = {}              # node -> {fails,next,pending,state,error}
+        self.relink_attempts = 0       # instrumentation: a counter stuck at 0
+        self.relink_recovered = 0      # means the reconciler never ran
+        self.relink_dormant = 0
 
         self._sock = None
         self._stop = threading.Event()
@@ -445,10 +743,10 @@ class UsrpPlugin:
         self.ami_port = int(getattr(config, 'USRP_AMI_PORT', 5038))
         self.ami_user = str(getattr(config, 'USRP_AMI_USER', ''))
         self.ami_secret = str(getattr(config, 'USRP_AMI_SECRET', ''))
-        self._recent_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'usrp_recent.json')
+        self._recent_path = os.path.join(_gw_root(), 'usrp_recent.json')
         self._recent = self._load_recent()
+        self._desired_path = os.path.join(_gw_root(), 'usrp_desired.json')
+        self._desired = self._load_desired()
 
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -797,28 +1095,241 @@ class UsrpPlugin:
         self._recent.insert(0, node)
         del self._recent[10:]
         self._save_recent()
+        NODE_BOOK.touch(node)          # shared across AS1/AS2
 
-    def connect_node(self, target, mode=ILINK_TRANSCEIVE):
-        """Tell the bridge node to link to ``target`` (transceive by default)."""
+    # ── desired link set + reconciler ───────────────────────────────────
+    def _load_desired(self):
+        try:
+            with open(self._desired_path) as f:
+                data = json.load(f)
+            out = {}
+            for node, ent in (data or {}).items():
+                if str(node).isdigit():
+                    mode = int((ent or {}).get('mode', ILINK_TRANSCEIVE))
+                    out[str(node)] = {'mode': mode if mode in _CONNECT_MODES
+                                      else ILINK_TRANSCEIVE}
+            return out
+        except (OSError, ValueError, AttributeError, TypeError):
+            return {}
+
+    def _save_desired(self):
+        if not self._desired_path:
+            return
+        try:
+            from atomic_json import save_json
+            save_json(self._desired_path, self._desired, indent=1)
+        except (OSError, ImportError):
+            pass
+
+    def _relink_state(self, node):
+        return self._relink.setdefault(str(node), {
+            'fails': 0, 'next': 0.0, 'pending': False,
+            'state': 'ok', 'error': '', 'last_try': 0.0,
+        })
+
+    def _reconcile_links(self):
+        """Re-establish desired links that have gone away, with backoff.
+
+        Runs once per AMI poll, immediately after _links_direct was refreshed,
+        so it reconciles against evidence rather than against what we believe
+        we asked for.
+
+        Two rules matter more than the mechanism:
+
+        * An attempt is verified on a LATER poll, never by the AMI command's
+          own return. `rpt cmd ... ilink` returns ok because Asterisk accepted
+          the command, not because the link came up — trusting that is how
+          remediation reports success while nothing actually reconnects.
+        * Retries back off exponentially and then SLOW DOWN — they never stop.
+          A node off the air for a week must not be dialled every 10 seconds,
+          but abandoning it outright would break the promise that a link you
+          asked for comes back: after RELINK_MAX_FAILS the target goes dormant,
+          is said out loud once, and is retried hourly for as long as it stays
+          in the desired set. Only Disconnect removes it.
+        """
+        if not self._desired or not self.ami_user:
+            return
+        now = time.monotonic()
+        # Require a link list read successfully within the last couple of
+        # polls. Without this an AMI outage looks like "every link is down"
+        # and would burn the whole retry budget on the wrong problem.
+        if not self._lstats_ok_mono or now - self._lstats_ok_mono > self.AMI_POLL_SEC * 2.5:
+            return
+        # ESTABLISHED only. A link stuck in CONNECTING is present in lstats but
+        # is NOT connected — counting mere presence made a node that dials
+        # forever and never answers read as healthy (state ok, 0 fails), which
+        # is precisely the case that needs reporting.
+        actual = {str(r.get('node')) for r in (self._links_direct or [])
+                  if str(r.get('state', '')).upper() == 'ESTABLISHED'}
+
+        for node, want in list(self._desired.items()):
+            st = self._relink_state(node)
+
+            if node in actual:
+                if st['state'] != 'ok' or st['fails']:
+                    self.relink_recovered += 1
+                    print(f"  [{self.PLUGIN_ID}] node {node} relinked "
+                          f"(after {st['fails']} failed attempt(s))")
+                st.update(fails=0, next=0.0, pending=False, state='ok', error='')
+                continue
+
+            if now < st['next']:
+                continue
+
+            # The window for the previous attempt has elapsed and the link is
+            # still absent — that attempt failed.
+            if st['pending']:
+                st['pending'] = False
+                st['fails'] += 1
+                if (st['fails'] >= self.RELINK_MAX_FAILS
+                        and st['state'] != 'dormant'):
+                    st['state'] = 'dormant'
+                    self.relink_dormant += 1
+                    print(f"  [{self.PLUGIN_ID}] ⚠ node {node} not answering after "
+                          f"{st['fails']} attempts"
+                          f"{' — ' + st['error'] if st['error'] else ''}. Backing off "
+                          f"to one retry an hour; it stays in the persistent set "
+                          f"and will relink by itself when it comes back.")
+
+            if st['state'] == 'dormant':
+                delay = self.RELINK_DORMANT_SEC
+            else:
+                delay = min(self.RELINK_BACKOFF_START * (2 ** st['fails']),
+                            self.RELINK_BACKOFF_MAX)
+            mode = want.get('mode', ILINK_TRANSCEIVE)
+            if mode not in _CONNECT_MODES:
+                mode = ILINK_TRANSCEIVE
+            self.relink_attempts += 1
+            ok, out = self._ami_command(f'rpt cmd {self.node} ilink {mode} {node}')
+            st.update(pending=True, last_try=now, next=now + delay,
+                      state='dormant' if st['state'] == 'dormant' else 'retrying',
+                      error='' if ok else str(out)[:120])
+            _where = ('hourly retry' if st['state'] == 'dormant'
+                      else f"attempt {st['fails'] + 1}/{self.RELINK_MAX_FAILS}")
+            print(f"  [{self.PLUGIN_ID}] node {node} missing — reconnect {_where}"
+                  f"{'' if ok else ' (AMI error: ' + str(out)[:80] + ')'}; "
+                  f"next check in {int(delay)}s")
+
+    def relink_report(self):
+        """Per-target reconciler state for the panel and get_status()."""
+        rows = []
+        for node in self._desired:
+            st = self._relink.get(node, {})
+            rows.append({
+                'node': node,
+                'name': NODE_BOOK.name_of(node),
+                'mode': self._desired[node].get('mode', ILINK_TRANSCEIVE),
+                'state': st.get('state', 'ok'),
+                'fails': st.get('fails', 0),
+                'error': st.get('error', ''),
+            })
+        rows.sort(key=lambda r: r['node'])
+        return rows
+
+    def clear_dormant(self, node):
+        """A manual connect resets a dormant target to full retry speed."""
+        st = self._relink.get(str(node))
+        if st:
+            st.update(fails=0, next=0.0, pending=False, state='ok', error='')
+
+    def connect_node(self, target, mode=ILINK_TRANSCEIVE, persistent=True):
+        """Link the bridge node to ``target``.
+
+        Persistent by default: the target joins the desired set on disk, so the
+        link is restored after a gateway restart, an ASL restart, a reboot, or
+        any outage at the far end — and stays gone once you disconnect it.
+        Pass persistent=False for a one-off link that is not remembered.
+        """
         target = str(target).strip()
         if not target.isdigit():
             return {'ok': False, 'error': f'invalid node: {target!r}'}
+        wire_mode = mode if mode in _CONNECT_MODES else ILINK_TRANSCEIVE
         self._remember(target)
-        ok, out = self._ami_command(f'rpt cmd {self.node} ilink {mode} {target}')
-        self._last_ctrl = (f"connect {target} (mode {mode}): "
-                           f"{'ok' if ok else out}")
-        return {'ok': ok, 'node': target, 'mode': mode, 'output': out}
+        if persistent:
+            self._desired[target] = {'mode': wire_mode}
+            self._save_desired()
+            self.clear_dormant(target)      # a manual connect resets backoff
+        ok, out = self._ami_command(
+            f'rpt cmd {self.node} ilink {wire_mode} {target}')
+        if not ok:
+            self._last_ctrl = f"connect {target}: {out}"
+            return {'ok': False, 'node': target, 'mode': wire_mode,
+                    'persistent': persistent, 'state': 'error',
+                    'output': out or 'AMI command failed'}
+
+        # The AMI command returning ok means Asterisk ACCEPTED it, not that the
+        # link came up — reporting that as success is why a node that silently
+        # refuses us looked identical to one that connected. Verify.
+        state = self._link_state(target)
+        if state == 'ESTABLISHED':
+            msg = f'connected to {target}'
+        elif state:
+            msg = (f'{target}: dialling, no answer yet ({state.lower()}). The far '
+                   f'end is reachable but has not accepted — it may be closed to '
+                   f'node {self.node}, or off the air. Retrying with backoff.')
+        else:
+            msg = (f'{target}: no link was created. Check the node number is '
+                   f'right and reachable.')
+        self._last_ctrl = msg
+        return {'ok': ok, 'node': target, 'mode': wire_mode,
+                'persistent': persistent, 'state': state or 'none',
+                'established': state == 'ESTABLISHED',
+                'output': msg}
+
+    def _link_state(self, target, settle=1.5):
+        """CONNECT STATE for one link from a fresh lstats, or None if absent.
+
+        `settle` gives the IAX exchange a moment to get past the initial
+        CONNECTING before we judge it — without it every connect would report
+        "dialling" even when it lands immediately.
+        """
+        target = str(target)
+        if settle:
+            self._stop.wait(settle)
+        ok, out = self._ami_command(f'rpt lstats {self.node}')
+        if not ok:
+            return None
+        for line in out.splitlines():
+            p = line.split()
+            if len(p) >= 6 and p[0] == target:
+                return p[-1].upper()
+        return None
 
     def disconnect_node(self, target):
+        """Drop a link and stop wanting it — the opposite of persistent.
+
+        Order matters: leave the desired set FIRST, or the reconciler races the
+        disconnect and puts the link straight back. ilink 11 is issued as well
+        to clear any app_rpt permanent flag an older build may have left set;
+        without it that flag would keep re-dialling behind our back.
+        """
         target = str(target).strip()
         if not target.isdigit():
             return {'ok': False, 'error': f'invalid node: {target!r}'}
+        self._desired.pop(target, None)
+        self._relink.pop(target, None)
+        self._save_desired()
+        ok_p, out_p = self._ami_command(
+            f'rpt cmd {self.node} ilink {ILINK_PERMA_DISCONNECT} {target}')
         ok, out = self._ami_command(
             f'rpt cmd {self.node} ilink {ILINK_DISCONNECT} {target}')
-        self._last_ctrl = f"disconnect {target}: {'ok' if ok else out}"
-        return {'ok': ok, 'node': target, 'output': out}
+        self._last_ctrl = f"disconnect {target}: {'ok' if (ok or ok_p) else out}"
+        return {'ok': ok or ok_p, 'node': target, 'output': out or out_p}
 
     def disconnect_all(self):
+        """Drop every link and empty the persistent set.
+
+        ilink 6 drops the calls; clearing the desired set is what stops the
+        reconciler putting them back. The per-node ilink 11 clears any app_rpt
+        permanent flag an older build may have left set, which would otherwise
+        keep re-dialling after everything else had let go.
+        """
+        for target in list(self._desired):
+            self._ami_command(
+                f'rpt cmd {self.node} ilink {ILINK_PERMA_DISCONNECT} {target}')
+        self._desired.clear()
+        self._relink.clear()
+        self._save_desired()
         ok, out = self._ami_command(
             f'rpt cmd {self.node} ilink {ILINK_DISCONNECT_ALL} 0')
         self._last_ctrl = f"disconnect all: {'ok' if ok else out}"
@@ -875,6 +1386,8 @@ class UsrpPlugin:
             self._links_direct = direct
             self._links_indirect = indirect
             self._links_cache_mono = time.monotonic()
+        if ok_l:
+            self._lstats_ok_mono = time.monotonic()
         return {'ok': ok_l or ok_n, 'direct': direct, 'indirect': indirect,
                 'nodes': direct_nodes, 'raw': out_n}
 
@@ -928,6 +1441,17 @@ class UsrpPlugin:
 
     # ── background AMI poller ──────────────────────────────────────
     # Ages are reported so the UI can distinguish "current" from "last known".
+    # Reconciler pacing. Backoff doubles from START to MAX for the first
+    # MAX_FAILS attempts (~2.5 h), then the target goes DORMANT and is retried
+    # once an hour indefinitely — never abandoned. Dormant is the honest
+    # middle ground: it stops the hammering and says so, but a node that comes
+    # back next week (or next month) is still picked up without anyone having
+    # to remember to click Connect.
+    RELINK_BACKOFF_START = 30.0
+    RELINK_BACKOFF_MAX = 1800.0
+    RELINK_MAX_FAILS = 10
+    RELINK_DORMANT_SEC = 3600.0
+
     AMI_POLL_SEC = 10.0        # how often to refresh links + node stats
     AMI_STALE_SEC = 45.0       # beyond this the cache is not presented as fact
     AMI_ERR_LOG_SEC = 60.0     # min seconds between repeats of the same poll error
@@ -942,8 +1466,17 @@ class UsrpPlugin:
         """
         while not self._stop.is_set():
             if self.ami_user:
-                self._poll_step('links', self.link_status)   # -> _links_cache
+                links_ok = self._poll_step('links', self.link_status)
                 self._poll_step('stats', self.node_stats)    # -> _stats_cache
+                # Only reconcile against a link list we actually just read. A
+                # failed poll leaves _links_direct stale, and reconciling
+                # against stale data would either miss a drop or "reconnect"
+                # links that are already up.
+                if links_ok:
+                    try:
+                        self._reconcile_links()
+                    except Exception as e:
+                        print(f"  [{self.PLUGIN_ID}] reconcile failed: {e}")
             self._stop.wait(self.AMI_POLL_SEC)
 
     def _poll_step(self, what, fn):
@@ -973,9 +1506,10 @@ class UsrpPlugin:
                 print(f"  [{self.PLUGIN_ID}] {what} poll failed: {e}{extra}")
                 st['last'] = now
                 st['n'] = 0
-            return
+            return False
         if self._poll_err.pop(what, None) is not None:
             print(f"  [{self.PLUGIN_ID}] {what} poll recovered")
+        return True
 
     def _cache_age(self, mono):
         return round(time.monotonic() - mono, 1) if mono else None
@@ -1016,6 +1550,14 @@ class UsrpPlugin:
             'stats_stale': (self._cache_age(self._stats_cache_mono) is None
                             or self._cache_age(self._stats_cache_mono) > self.AMI_STALE_SEC),
             'recent': list(self._recent),
+            # Shared address book (both panels) + this node's desired links.
+            'book': NODE_BOOK.all(),
+            'relink': self.relink_report(),
+            'relink_counters': {
+                'attempts': self.relink_attempts,
+                'recovered': self.relink_recovered,
+                'dormant': self.relink_dormant,
+            },
         }
 
     # ── web control panel (web_routes hook) ────────────────────────
@@ -1077,6 +1619,7 @@ class UsrpPlugin:
         raw = req.rfile.read(length).decode(errors='replace') if length else ''
         action, node, mode = '', '', 'transceive'
         on = ''                                   # used by pcm_tap
+        name = ''                                 # used by book_set
         if raw.strip().startswith('{'):
             try:
                 d = json.loads(raw)
@@ -1084,6 +1627,7 @@ class UsrpPlugin:
                 node = str(d.get('node', ''))
                 mode = str(d.get('mode', 'transceive'))
                 on = str(d.get('on', ''))
+                name = str(d.get('name', ''))
             except ValueError:
                 pass
         else:
@@ -1093,6 +1637,7 @@ class UsrpPlugin:
             node = (q.get('node') or [''])[0]
             mode = (q.get('mode') or ['transceive'])[0]
             on = (q.get('on') or [''])[0]
+            name = (q.get('name') or [''])[0]
 
         if action == 'connect':
             m = ILINK_MONITOR if mode == 'monitor' else ILINK_TRANSCEIVE
@@ -1108,6 +1653,14 @@ class UsrpPlugin:
             res = self.link_status()
         elif action == 'node_stats':
             res = self.node_stats()
+        elif action == 'book_set':
+            # Naming writes to the SHARED book, so a node named on AS1 is
+            # named on AS2 too — the whole point of one address book.
+            res = ({'ok': True, 'node': node, 'name': name, 'book': NODE_BOOK.all()}
+                   if NODE_BOOK.set_name(node, name)
+                   else {'ok': False, 'error': f'invalid node: {node!r}'})
+        elif action == 'book_delete':
+            res = {'ok': NODE_BOOK.remove(node), 'node': node, 'book': NODE_BOOK.all()}
         elif action == 'pcm_tap':
             # Monitor this node in the browser PCM stream. Deliberately does
             # NOT touch routing — a listen button should not rewrite the graph.

@@ -321,6 +321,10 @@ class Config:
             # Web Microphone PTT (browser mic → radio TX via WebSocket)
             'ENABLE_WEB_MIC': True,
             'WEB_MIC_VOLUME': 4.0,              # volume multiplier for browser mic audio
+            # Hold-to-talk watchdogs, both enforced on the bus thread so a
+            # dead browser cannot strand a keyed transmitter.
+            'WEB_MIC_KEY_TIMEOUT': 2.0,         # s without a key refresh → unkey
+            'WEB_MIC_MAX_TX': 120.0,            # s max single over (TOT), then release to reset
             # Web Monitor (browser mic → mixer via WebSocket, no PTT)
             'ENABLE_WEB_MONITOR': True,
             # How far the BGM bed drops while the announcer speaks, in dB.

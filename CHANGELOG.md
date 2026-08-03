@@ -2,6 +2,77 @@
 
 All notable changes to Radio Gateway.
 
+## [4.5.0] -- 2026-08-03
+
+Links you ask for stay up, the browser mic is push-to-talk, and node numbers
+have names.
+
+### Added — persistent AllStar links
+
+A link you connect is now restored after a gateway restart, an ASL restart, a
+reboot or a three-month absence, and stays gone once you Disconnect. The wanted
+set lives in `usrp_desired.json`; `_reconcile_links` compares it against what
+`rpt lstats` actually reports, once per AMI poll.
+
+Links used to be one-shot `ilink 3`, which app_rpt never re-establishes — the
+reason a link dropped overnight was still down in the morning with
+`RECONNECTS 0`. We deliberately do **not** use app_rpt's "permanent" mode
+(`12`/`13`) either: despite the name it is weaker, living only in Asterisk's
+memory so it does not survive a restart, while re-dialling every ~10 s for ever
+with no backoff and no way to tune it. Two retry loops fought, and only one
+could be told to slow down. The reconciler now owns all retry timing.
+
+Retries back off 30 s doubling to 30 min, then go **dormant** — once an hour,
+indefinitely, still wanted. Dormant is reported loudly but is not abandonment:
+a node that returns next month relinks itself. An attempt is judged on a LATER
+poll, never on the AMI command's return, and a link sitting in `CONNECTING` is
+counted as missing — treating presence in `lstats` as success made a node that
+silently refuses us report "ok, 0 fails" for ever. The reconciler also refuses
+to run against a link list it did not just read, so an AMI outage does not read
+as "every link is down".
+
+### Added — shared node address book
+
+`usrp_nodes.json` maps node numbers to your own names for them, shared by both
+AllStar panels: name 45412 once and AS2 shows it too. Sorted most-recently-used
+first, so it replaces both per-instance recents dropdowns, whose contents are
+migrated in on first load. Every node number on the panel — saved, kept
+connected, your links, conference members, reconnect stats and the header — is
+a link to that node's AllStarLink stats page.
+
+### Changed — browser MIC is hold-to-talk
+
+The shell's MIC button was a latch: click it, walk away, and the transmitter
+stayed keyed. It is now press-and-hold (or hold Space), with the mic stream and
+socket lingering 30 s after release so a second over does not re-pay the
+getUserMedia + handshake latency and clip its first syllable. An open socket
+therefore no longer implies a keyed transmitter.
+
+Release is sent explicitly but is never the only thing that stops TX. Two
+watchdogs run on the BUS thread, so neither depends on the browser still being
+alive: a 2 s dead-man on the key refresh (covering a lost pointerup, a hidden
+tab, a closed lid, dead wifi) and a 120 s time-out timer measured from the
+first press, so refreshes cannot extend an over past it.
+
+### Fixed
+
+- The AllStar panel's entire `<script>` block failed to parse. `_PANEL_HTML` is
+  a non-raw Python triple-quoted string, so `\'` inside an inline `onclick` was
+  consumed by Python and reached the browser as `''`. Every button on both
+  pages did nothing, with no server-side trace. Row buttons now use
+  `data-act`/`data-node` with one delegated listener, and a test renders both
+  panels through the real path and parses the result.
+- The panel referenced `var(--t-err)` / `var(--t-warn)` but is standalone and
+  does not load `common.css`, so those colours never applied — the
+  link-reconnect warning had never once shown one. Theme vars are now declared
+  in the page, and a test asserts every var used is declared.
+- Web mic gain (`WEB_MIC_VOLUME`, 4×) hard-clipped with `np.clip` into a
+  transmitter; now `apply_gain`'s tanh soft-clip.
+- Connect reported success whenever Asterisk accepted the command, so a node
+  that silently refuses looked identical to one that connected. It now re-reads
+  `lstats` after a short settle and distinguishes connected, dialling-no-answer
+  and no-link-created.
+
 ## [4.4.0] -- 2026-08-02
 
 Monitor either AllStar node directly in the browser, without going through the

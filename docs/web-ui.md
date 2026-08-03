@@ -61,6 +61,16 @@ annunciator on the landing page so everything is visible at one glance.
   channel names) are escaped before `innerHTML` — fleet machines are trusted,
   but their status payloads shouldn't be an injection vector into the
   gateway UI.
+- The shell's **MIC** button is hold-to-talk, not a latch: press (or hold
+  Space while the shell has focus) keys, release unkeys. The mic stream and
+  `/ws_mic` socket linger 30 s after release so a follow-up over doesn't
+  re-pay the getUserMedia + handshake latency and clip its first syllable —
+  so an open socket does NOT mean a keyed transmitter, and the button shows
+  a cyan `armed` outline rather than the red `live` one. Release is sent as
+  an `UNKEY` text frame but is never the only thing that stops TX: the
+  gateway dead-mans a lapsed key refresh and enforces a 120 s TOT on the bus
+  thread, because a lost `pointerup` or a slammed lid must not be able to
+  strand a transmitter. See `WebMicSource` in `audio_sources.py`.
 - Static pages are read from disk per request: editing a page under
   `web_pages/` goes live on refresh. Adding a **route** means editing
   `_STATIC_PAGES` (pages) or the `_GET_*`/`_POST_*` dispatch tables

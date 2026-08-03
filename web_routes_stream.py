@@ -202,9 +202,15 @@ def handle_ws_mic(handler, parent):
     _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     _enable_ws_keepalive(_sock)
     _mic_src.client_connected = True
+    _mic_src.unkey('new connection')  # never inherit a previous client's key
     print(f"\n[WS-Mic] Browser mic connected from {_client_ip}")
-    # PTT is handled by the bus system -- WebMicSource has ptt_control=True,
-    # so any SoloBus with webmic as a TX source will auto-key its radio.
+    # Connecting does NOT transmit. The browser holds the socket open
+    # between overs to avoid re-paying handshake latency, and keys with
+    # explicit KEY/UNKEY text frames while the operator holds the button.
+    # PTT itself is the bus system's: WebMicSource has ptt_control=True, so
+    # a SoloBus with webmic as a TX source keys its radio while the source
+    # asks for PTT -- which it only does while keyed and inside both
+    # watchdogs (see WebMicSource).
     try:
         while True:
             try:
@@ -238,6 +244,21 @@ def handle_ws_mic(handler, parent):
                         pong[1] = len(payload)
                     pong.extend(payload)
                     _sock.sendall(bytes(pong))
+                elif opcode == 0x1:  # Text -- PTT control
+                    try:
+                        cmd = payload.decode('utf-8', 'replace').strip().upper()
+                    except Exception:
+                        continue
+                    if cmd == 'KEY':
+                        # Sent on press and repeated ~2x/sec while held.
+                        # Refused once the TOT has tripped, until release.
+                        if not _mic_src.key():
+                            try:
+                                _ws_send_text(_sock, 'TOT')
+                            except OSError:
+                                break
+                    elif cmd == 'UNKEY':
+                        _mic_src.unkey('release')
                 elif opcode == 0x2:  # Binary -- PCM audio data
                     _mic_src.push_audio(payload)
             except socket.timeout:
@@ -245,10 +266,11 @@ def handle_ws_mic(handler, parent):
             except (ConnectionResetError, BrokenPipeError, OSError):
                 break
     finally:
+        # Order matters: unkey BEFORE clearing client_connected, so the
+        # unkey is logged and counted rather than silently masked by the
+        # disconnected check in get_audio.
+        _mic_src.unkey('socket closed')
         _mic_src.client_connected = False
-        _mic_src._sub_buffer = b''
-        # PTT release handled by bus system -- SoloBus releases PTT
-        # after ptt_release_delay when WebMicSource stops producing audio.
         print(f"[WS-Mic] Disconnected {_client_ip}")
     return
 
@@ -562,6 +584,14 @@ def _ws_send_binary(sock, data):
         frame.append(127)
         frame.extend(length.to_bytes(8, 'big'))
     frame.extend(data)
+    sock.sendall(bytes(frame))
+
+
+def _ws_send_text(sock, text):
+    """Send a short (<126 byte) text WS frame."""
+    payload = text.encode('utf-8')
+    frame = bytearray([0x81, len(payload)])  # FIN + text opcode
+    frame.extend(payload)
     sock.sendall(bytes(frame))
 
 

@@ -83,6 +83,10 @@
   .shell-pcm .rb { min-width: 56px; text-align: center; }
   .shell-pcm .rb.connecting { color: var(--t-warn); border-color: var(--t-warn); }
   .shell-pcm .rb.live { color: var(--t-err); border-color: var(--t-err); }
+  /* MIC only: mic open and ready, NOT transmitting. Deliberately reads as
+     an unpressed button — the red .live state is the only "on air" look. */
+  .shell-pcm .rb.armed { border-color: var(--t-accent); }
+  #mic-btn { touch-action: none; user-select: none; -webkit-user-select: none; }
   .shell-pcm input[type="range"] { width: 52px; height: 3px; }
 
   #shell-frame { flex: 1; border: none; width: 100%; background: var(--t-bg); }
@@ -296,7 +300,7 @@
       <input id="vol-slider" type="range" min="0" max="100" value="50" aria-label="MP3 stream volume" oninput="setVolume(this.value)">
       <button id="ws-btn" class="rb rb-caps rb-sm" onclick="toggleWS()"><span class="icon icon-play"></span> PCM</button>
       <input id="ws-vol" type="range" min="0" max="100" value="50" aria-label="PCM stream volume" oninput="setWSVol(this.value)">
-      <button id="mic-btn" class="rb rb-caps rb-sm" onclick="toggleMic()"><span class="icon icon-mic"></span> MIC</button>
+      <button id="mic-btn" type="button" class="rb rb-caps rb-sm" title="Hold to talk (or hold Space)"><span class="icon icon-mic"></span> MIC</button>
       <button id="as1-btn" class="rb rb-caps rb-sm" onclick="toggleAsTap('usrp',this)" title="Monitor AllStar 1 in the PCM stream" style="display:none">AS1</button>
       <button id="as2-btn" class="rb rb-caps rb-sm" onclick="toggleAsTap('usrp2',this)" title="Monitor AllStar 2 in the PCM stream" style="display:none">AS2</button>
     </span>
@@ -618,53 +622,187 @@ function setWSVol(v) {
   if (_wsGain) _wsGain.gain.value = v / 100;
 }
 
-// --- Browser Mic → WebMicSource ---
-var _micWs=null, _micStream=null, _micCtx=null, _micProc=null, _micActive=false;
+// --- Browser Mic → WebMicSource (hold-to-talk) ---
+//
+// Press-and-hold keys the transmitter; release unkeys it immediately. The
+// mic stream and socket LINGER for MIC_LINGER_MS after release so a second
+// over doesn't re-pay the getUserMedia + WebSocket handshake (which would
+// clip the first syllable every time) — so "session open" and "keyed" are
+// separate states here, exactly as they are in WebMicSource server-side.
+//
+// Release is sent explicitly, but is never the only thing that stops TX:
+// the gateway runs a dead-man on the key refresh below, so a lost pointerup,
+// a closed lid, or dead wifi still unkeys. Everything here is best-effort on
+// top of that.
+var _micWs=null, _micStream=null, _micCtx=null, _micProc=null;
+var _micSession='off';      // 'off' | 'opening' | 'open'
+var _micKeyed=false;        // operator is holding
+var _micKeyTimer=null, _micLingerTimer=null, _micPointerId=null;
+var MIC_KEY_REFRESH_MS=500; // must stay well under WEB_MIC_KEY_TIMEOUT (2s)
+var MIC_LINGER_MS=30000;
 
-function toggleMic() {
-  if (_micActive) { stopMic(); return; }
-  // Ensure clean state before starting
-  stopMic();
-  _micActive = true;
-  var btn=document.getElementById('mic-btn');
-  btn.innerHTML = '<span class="icon icon-stop"></span> ...'; btn.classList.add('connecting'); btn.classList.remove('live');
+function _micBtn() { return document.getElementById('mic-btn'); }
 
+function _micPaint(state, label) {
+  var b=_micBtn(); if(!b) return;
+  b.classList.remove('connecting','live','armed');
+  if (state) b.classList.add(state);
+  var icon = state==='live' ? 'icon-stop' : 'icon-mic';
+  b.innerHTML='<span class="icon '+icon+'"></span> '+label;
+}
+
+function _micSend(cmd) {
+  if (_micWs && _micWs.readyState===1) {
+    try { _micWs.send(cmd); } catch(e) {}
+  }
+}
+
+// Press — pointerdown, or Space held.
+function micPress() {
+  if (_micKeyed) return;
+  _micKeyed = true;
+  if (_micLingerTimer) { clearTimeout(_micLingerTimer); _micLingerTimer=null; }
+  if (_micSession==='open') {
+    _micPaint('live','TX');
+    _micSend('KEY');
+    _micStartRefresh();
+  } else {
+    // 'off' → open now; 'opening' → a press/release/press while the
+    // permission prompt is still up. Either way onopen keys if still held.
+    _micPaint('connecting','...');
+    if (_micSession==='off') _micOpenSession();
+  }
+}
+
+// Release — pointerup/cancel, Space up, blur, tab hidden, TOT.
+function micRelease(reason) {
+  if (!_micKeyed) return;
+  _micKeyed = false;
+  _micStopRefresh();
+  _micSend('UNKEY');
+  _micPaint(_micSession==='open' ? 'armed' : null, reason==='tot' ? 'TOT' : 'MIC');
+  if (reason==='tot') setTimeout(function() {
+    if (!_micKeyed) _micPaint(_micSession==='open'?'armed':null,'MIC');
+  }, 1500);
+  _micStartLinger();
+}
+
+// Hold the session open briefly for the next over, then release the mic
+// (and its browser recording indicator) properly.
+function _micStartLinger() {
+  if (_micLingerTimer) clearTimeout(_micLingerTimer);
+  if (_micSession==='off') return;
+  _micLingerTimer = setTimeout(function() {
+    _micLingerTimer=null;
+    if (!_micKeyed) micTeardown();
+  }, MIC_LINGER_MS);
+}
+
+function _micStartRefresh() {
+  _micStopRefresh();
+  _micKeyTimer = setInterval(function() {
+    if (!_micKeyed) { _micStopRefresh(); return; }
+    _micSend('KEY');
+  }, MIC_KEY_REFRESH_MS);
+}
+
+function _micStopRefresh() {
+  if (_micKeyTimer) { clearInterval(_micKeyTimer); _micKeyTimer=null; }
+}
+
+function _micOpenSession() {
+  _micSession='opening';
   navigator.mediaDevices.getUserMedia({audio:{sampleRate:48000,channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}})
   .then(function(stream) {
     _micStream = stream;
+    if (!_micKeyed && _micSession==='off') {  // released and torn down while prompting
+      stream.getTracks().forEach(function(t){t.stop();}); _micStream=null; return;
+    }
     var proto = location.protocol==='https:' ? 'wss:' : 'ws:';
     _micWs = new WebSocket(proto+'//'+location.host+'/ws_mic');
     _micWs.binaryType = 'arraybuffer';
     _micWs.onopen = function() {
-      btn.innerHTML='<span class="icon icon-stop"></span> TX'; btn.classList.remove('connecting'); btn.classList.add('live');
+      _micSession='open';
       _micCtx = new AudioContext({sampleRate:48000});
       var src = _micCtx.createMediaStreamSource(stream);
       var proc = _micCtx.createScriptProcessor(2048,1,1);
       proc.onaudioprocess = function(e) {
-        if (!_micWs || _micWs.readyState!==1) return;
+        // Only while keyed: nothing reaches the gateway during the linger.
+        if (!_micKeyed || !_micWs || _micWs.readyState!==1) return;
         var f32=e.inputBuffer.getChannelData(0), buf=new ArrayBuffer(f32.length*2), i16=new Int16Array(buf);
         for (var i=0;i<f32.length;i++) { var s=Math.max(-1,Math.min(1,f32[i])); i16[i]=s<0?s*32768:s*32767; }
         _micWs.send(buf);
       };
       src.connect(proc); proc.connect(_micCtx.destination); _micProc=proc;
+      if (_micKeyed) { _micPaint('live','TX'); _micSend('KEY'); _micStartRefresh(); }
+      // Released before the mic finished opening: the session is up but
+      // must not transmit, and needs a linger timer it never got.
+      else { _micPaint('armed','MIC'); _micStartLinger(); }
     };
-    _micWs.onerror = function() { if (_micActive) stopMic(); };
-    _micWs.onclose = function() { if (_micActive) stopMic(); };
+    // Gateway refused the key: time-out timer tripped. Release, don't retry.
+    _micWs.onmessage = function(ev) {
+      if (typeof ev.data==='string' && ev.data.trim()==='TOT') micRelease('tot');
+    };
+    _micWs.onerror = function() { micTeardown(); };
+    _micWs.onclose = function() { micTeardown(); };
   }).catch(function() {
-    _micActive=false;
-    btn.innerHTML='<span class="icon icon-mic"></span> MIC'; btn.classList.remove('connecting', 'live');
+    // Denied, no device, or insecure origin — getUserMedia needs HTTPS or
+    // localhost, so plain-HTTP LAN origins land here.
+    _micKeyed=false; _micSession='off'; _micStopRefresh();
+    _micPaint(null,'MIC');
   });
 }
 
-function stopMic() {
-  _micActive=false;
+function micTeardown() {
+  _micKeyed=false; _micSession='off';
+  _micStopRefresh();
+  if (_micLingerTimer) { clearTimeout(_micLingerTimer); _micLingerTimer=null; }
   if(_micProc){_micProc.disconnect();_micProc=null;}
   if(_micCtx){_micCtx.close().catch(function(){});_micCtx=null;}
   if(_micStream){_micStream.getTracks().forEach(function(t){t.stop();});_micStream=null;}
-  if(_micWs){try{_micWs.close();}catch(e){}_micWs=null;}
-  var btn=document.getElementById('mic-btn');
-  btn.innerHTML='<span class="icon icon-mic"></span> MIC'; btn.classList.remove('connecting', 'live');
+  if(_micWs){var w=_micWs; _micWs=null; try{w.onclose=null;w.onerror=null;w.close();}catch(e){}}
+  _micPaint(null,'MIC');
 }
+
+// Every path that can end a hold. A pointerup that never arrives (pointer
+// dragged off, window blurred, tab hidden, touch cancelled) is the classic
+// way a hold-to-talk UI strands a transmitter, so all of them unkey.
+(function() {
+  var b=_micBtn(); if(!b) return;
+  b.addEventListener('pointerdown', function(e) {
+    e.preventDefault();
+    _micPointerId=e.pointerId;
+    try { b.setPointerCapture(e.pointerId); } catch(err) {}
+    micPress();
+  });
+  ['pointerup','pointercancel','lostpointercapture'].forEach(function(ev) {
+    b.addEventListener(ev, function(e) {
+      if (_micPointerId!==null && e.pointerId!==undefined && e.pointerId!==_micPointerId) return;
+      _micPointerId=null;
+      micRelease(ev);
+    });
+  });
+  // The button is focusable: stop Space/Enter from also firing a click.
+  b.addEventListener('keydown', function(e) {
+    if (e.key===' '||e.key==='Enter') e.preventDefault();
+  });
+  window.addEventListener('blur', function() { micRelease('window blur'); });
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) micRelease('tab hidden');
+  });
+  window.addEventListener('pagehide', function() { micTeardown(); });
+  // Space anywhere in the shell = hold to talk, unless typing in a field.
+  document.addEventListener('keydown', function(e) {
+    if (e.code!=='Space' || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+    var t=e.target, tag=t&&t.tagName;
+    if (tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable)) return;
+    e.preventDefault();
+    micPress();
+  });
+  document.addEventListener('keyup', function(e) {
+    if (e.code==='Space') micRelease('space up');
+  });
+})();
 
 // --- Audio level bars (always visible) ---
 // Semantic bar classes: sb-in (receive), sb-out (transmit), sb-loc (local output).

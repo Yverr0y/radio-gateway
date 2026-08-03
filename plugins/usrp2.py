@@ -59,6 +59,12 @@ class Usrp2Plugin(UsrpPlugin):
             self._recent_path = os.path.join(
                 os.path.dirname(_here), 'usrp2_recent.json')
             self._recent = self._load_recent()
+            # Desired links ARE per-instance — AS1 and AS2 hold independent
+            # link sets. The node address book (names) is deliberately shared;
+            # see NODE_BOOK in usrp.py.
+            self._desired_path = os.path.join(
+                os.path.dirname(_here), 'usrp2_desired.json')
+            self._desired = self._load_desired()
         return result
 
     def web_routes(self):

@@ -257,6 +257,8 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         'WEB_CONFIG_PASSWORD': 'blank = no auth (user: admin)',
         'GATEWAY_NAME': 'shown at top of dashboard (blank = none)',
         'WEB_MIC_VOLUME': 'multiplier',
+        'WEB_MIC_KEY_TIMEOUT': 'seconds — hold-to-talk dead-man',
+        'WEB_MIC_MAX_TX': 'seconds — max single transmission (TOT)',
         # Email
         'EMAIL_ADDRESS': 'Gmail address (sender)',
         'EMAIL_APP_PASSWORD': 'Gmail app password',
@@ -569,6 +571,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             'ENABLE_WEB_CONFIG', 'WEB_CONFIG_PORT', 'WEB_CONFIG_PASSWORD',
             'WEB_CONFIG_HTTPS', 'GATEWAY_NAME', 'WEB_THEME',
             'ENABLE_WEB_MIC', 'WEB_MIC_VOLUME',
+            'WEB_MIC_KEY_TIMEOUT', 'WEB_MIC_MAX_TX',
             'ENABLE_WEB_MONITOR', 'WEB_MONITOR_VOLUME', 'MONITOR_VAD_THRESHOLD',
             'ENABLE_CLOUDFLARE_TUNNEL',
             'ENABLE_GDRIVE', 'GDRIVE_REMOTE', 'GDRIVE_FOLDER',
