@@ -384,7 +384,9 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
         ]),
         ('ddns', 'Dynamic DNS', [
             'ENABLE_DDNS', 'DDNS_USERNAME', 'DDNS_PASSWORD', 'DDNS_HOSTNAME',
-            'DDNS_UPDATE_INTERVAL', 'DDNS_UPDATE_URL',
+            'DDNS_UPDATE_INTERVAL', 'DDNS_UPDATE_URL', 'DDNS_CHECKIP_URL',
+            'DDNS_FORCE_INTERVAL', 'DDNS_VERIFY_DNS', 'DDNS_MISMATCH_GRACE',
+            'DDNS_ALERT_INTERVAL',
         ]),
         ('echolink', 'EchoLink', [
             'ENABLE_ECHOLINK', 'ECHOLINK_RX_PIPE', 'ECHOLINK_TX_PIPE',

@@ -560,8 +560,17 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
 
         # DDNS
         ddns_status = ''
+        ddns_stats = {}
         if self.ddns_updater:
             ddns_status = self.ddns_updater.get_status() or '...'
+            # Counters, so a stalled DDNS is diagnosed by which one stopped
+            # moving rather than inferred from log silence (a suppressed update
+            # and a successful 'nochg' both print nothing).
+            if hasattr(self.ddns_updater, 'get_stats'):
+                try:
+                    ddns_stats = self.ddns_updater.get_stats()
+                except Exception:
+                    ddns_stats = {}
 
         # Charger
         charger_state = ''
@@ -650,6 +659,7 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             'smart_countdowns': sa_countdowns,
             'smart_activity': self.smart_announce.get_activity() if self.smart_announce and hasattr(self.smart_announce, 'get_activity') else {},
             'ddns': ddns_status,
+            'ddns_stats': ddns_stats,
             'tunnel_url': self.cloudflare_tunnel.get_url() if self.cloudflare_tunnel else '',
             'charger': charger_state,
             'cat': cat_state,

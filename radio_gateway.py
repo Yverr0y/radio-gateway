@@ -507,8 +507,17 @@ class Config:
             'DDNS_USERNAME': '',
             'DDNS_PASSWORD': '',
             'DDNS_HOSTNAME': '',
-            'DDNS_UPDATE_INTERVAL': 300,   # seconds between updates (default 5 min)
+            'DDNS_UPDATE_INTERVAL': 300,   # seconds between public-IP checks (default 5 min)
             'DDNS_UPDATE_URL': 'https://dynupdate.no-ip.com/nic/update',  # No-IP protocol
+            # Public-IP lookup used to skip no-op updates. No-IP treats repeated
+            # updates with an unchanged IP as abuse, so we only call them on change.
+            'DDNS_CHECKIP_URL': 'https://api.ipify.org',
+            'DDNS_FORCE_INTERVAL': 86400,  # send an update anyway this often (safety net)
+            # Independent verification: resolve the hostname and compare to our
+            # public IP. Catches expiry, which a DDNS Key reports as success.
+            'DDNS_VERIFY_DNS': True,
+            'DDNS_MISMATCH_GRACE': 3,      # bad cycles before alerting (DNS propagation)
+            'DDNS_ALERT_INTERVAL': 86400,  # min seconds between alert emails
             # Mumble Server 1 (local mumble-server instance)
             'ENABLE_MUMBLE_SERVER_1': False,
             'MUMBLE_SERVER_1_PORT': 64738,

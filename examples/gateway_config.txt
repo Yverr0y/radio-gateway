@@ -786,11 +786,21 @@ EMAIL_ON_STARTUP = true            # Send status email when gateway starts
 # Uses the No-IP update protocol (works with No-IP, DynDNS, etc.).
 
 ENABLE_DDNS = false
-DDNS_USERNAME =                     # No-IP username or email
-DDNS_PASSWORD =                     # No-IP password
+DDNS_USERNAME =                     # No-IP username, email, or DDNS Key username
+DDNS_PASSWORD =                     # No-IP password or DDNS Key password
 DDNS_HOSTNAME =                     # Hostname to update (e.g. myhost.ddns.net)
-DDNS_UPDATE_INTERVAL = 300          # Seconds between updates (default 5 min, min 60)
+DDNS_UPDATE_INTERVAL = 300          # Seconds between public-IP checks (min 60)
 DDNS_UPDATE_URL = https://dynupdate.no-ip.com/nic/update
+DDNS_CHECKIP_URL = https://api.ipify.org   # Public-IP lookup; the provider is only
+                                    # called when this value CHANGES. No-IP treats
+                                    # repeated same-IP updates as abuse.
+DDNS_FORCE_INTERVAL = 86400         # Send an update anyway this often (safety net)
+DDNS_VERIFY_DNS = true              # Resolve the hostname and compare to our public IP,
+                                    # emailing on a sustained mismatch. Needs ENABLE_EMAIL.
+DDNS_MISMATCH_GRACE = 3             # Bad checks before alerting (allows DNS propagation)
+DDNS_ALERT_INTERVAL = 86400         # Minimum seconds between alert emails
+# NOTE: free No-IP hostnames expire unless confirmed via their emailed link every
+# 30 days. DDNS updates do NOT reset that clock. An expired host returns 'nohost'.
 
 
 [cat]

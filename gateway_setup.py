@@ -745,7 +745,7 @@ def setup_ddns(gw):
         return
     try:
         from gateway_utils import DDNSUpdater
-        gw.ddns_updater = DDNSUpdater(gw.config)
+        gw.ddns_updater = DDNSUpdater(gw.config, gw)
         gw.ddns_updater.start()
     except Exception as e:
         print(f"  [DDNS] Init error: {e}")
