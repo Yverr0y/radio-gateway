@@ -405,6 +405,7 @@ function startStream() {
 
   _audio = new Audio('/stream');
   _audio.volume = document.getElementById('vol-slider').value / 100;
+  _audio.muted = _micDucked;   // as above: starting mid-over stays ducked
 
   _audio.onplaying = function() {
     _playing = true;
@@ -484,6 +485,7 @@ function startWS() {
 
   _wsGain = _wsCtx.createGain();
   _wsGain.gain.value = document.getElementById('ws-vol').value / 100;
+  _wsApplyGain();   // starting the player mid-over must not un-duck it
   _wsGain.connect(_wsCtx.destination);
 
   // Buffer thresholds — kept here in one place so the ScriptProcessor
@@ -618,8 +620,24 @@ function stopWS() {
   clearAsTaps();
 }
 
+// Slider value and TX duck are two independent inputs to one gain, so both go
+// through here. Writing .gain.value directly from either would let a slider
+// drag mid-over un-duck the stream and put the speakerphone back in the mic.
+function _wsApplyGain() {
+  if (!_wsGain) return;
+  var el = document.getElementById('ws-vol');
+  var v = _micDucked ? 0 : (el ? el.value / 100 : 0.5);
+  // Ramp, don't step — an abrupt gain change on a live stream clicks.
+  try {
+    var t = _wsCtx.currentTime;
+    _wsGain.gain.cancelScheduledValues(t);
+    _wsGain.gain.setValueAtTime(_wsGain.gain.value, t);
+    _wsGain.gain.linearRampToValueAtTime(v, t + 0.015);
+  } catch (e) { _wsGain.gain.value = v; }
+}
+
 function setWSVol(v) {
-  if (_wsGain) _wsGain.gain.value = v / 100;
+  _wsApplyGain();
 }
 
 // --- Browser Mic → WebMicSource (hold-to-talk) ---
@@ -643,6 +661,25 @@ var MIC_LINGER_MS=30000;
 
 function _micBtn() { return document.getElementById('mic-btn'); }
 
+// Duck every local output for the duration of the hold. On a speakerphone the
+// gateway's own playback is acoustically coupled straight back into the mic,
+// so the operator hears themselves returned. Two outputs to silence: the PCM
+// player's gain node — which also covers the AS1/AS2 taps, since those feed
+// the node's RX audio INTO the PCM stream rather than playing separately —
+// and the MP3 <audio> element.
+//
+// Deliberately tied to the hold, not to the session: audio comes back the
+// instant the button is released, during the 30 s linger.
+var _micDucked = false;
+
+function _micDuck(on) {
+  if (_micDucked === on) return;
+  _micDucked = on;
+  _wsApplyGain();
+  // .muted, not .volume — leaves the user's slider value untouched.
+  if (_audio) _audio.muted = on;
+}
+
 function _micPaint(state, label) {
   var b=_micBtn(); if(!b) return;
   b.classList.remove('connecting','live','armed');
@@ -661,6 +698,9 @@ function _micSend(cmd) {
 function micPress() {
   if (_micKeyed) return;
   _micKeyed = true;
+  // Duck on the press, not on the session opening: the first over's audio must
+  // not leak out of the speaker while getUserMedia is still prompting.
+  _micDuck(true);
   if (_micLingerTimer) { clearTimeout(_micLingerTimer); _micLingerTimer=null; }
   if (_micSession==='open') {
     _micPaint('live','TX');
@@ -678,6 +718,7 @@ function micPress() {
 function micRelease(reason) {
   if (!_micKeyed) return;
   _micKeyed = false;
+  _micDuck(false);
   _micStopRefresh();
   _micSend('UNKEY');
   _micPaint(_micSession==='open' ? 'armed' : null, reason==='tot' ? 'TOT' : 'MIC');
@@ -749,12 +790,17 @@ function _micOpenSession() {
     // Denied, no device, or insecure origin — getUserMedia needs HTTPS or
     // localhost, so plain-HTTP LAN origins land here.
     _micKeyed=false; _micSession='off'; _micStopRefresh();
+    _micDuck(false);   // same trap as micTeardown: a denied prompt must restore audio
     _micPaint(null,'MIC');
   });
 }
 
 function micTeardown() {
   _micKeyed=false; _micSession='off';
+  // Teardown clears _micKeyed directly, so micRelease's un-duck never runs on
+  // a ws error/close. Without this an unlucky drop leaves the operator with a
+  // permanently silent dashboard and no button to get the audio back.
+  _micDuck(false);
   _micStopRefresh();
   if (_micLingerTimer) { clearTimeout(_micLingerTimer); _micLingerTimer=null; }
   if(_micProc){_micProc.disconnect();_micProc=null;}
