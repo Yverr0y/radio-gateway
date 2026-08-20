@@ -734,6 +734,19 @@ ENABLE_TELEGRAM = false
 TELEGRAM_BOT_TOKEN =          # Token from @BotFather (e.g. 123456:ABC-DEF...)
 TELEGRAM_CHAT_ID =             # Your Telegram chat ID (integer) — only this ID is accepted
 TELEGRAM_TMUX_SESSION = claude-gateway   # Name of the tmux session running Claude Code
+
+# --- Fleet Manager runs -------------------------------------------------
+# How each scheduled check is executed.
+#   oneshot  (default) spawn a fresh `claude -p` per run. Context cannot
+#            accumulate across runs. The old tmux session lived for days and
+#            re-sent + re-cached its whole history on every hourly check --
+#            one 9-day session burned ~68M tokens to move ~174k of content.
+#   tmux     legacy: paste into the long-lived TELEGRAM_TMUX_SESSION and poll
+#            for the report. Fallback only.
+MANAGER_RUN_MODE = oneshot
+MANAGER_CLAUDE_BIN =                     # blank -> $CLAUDE_BIN, then ~/.local/bin/claude
+MANAGER_CLAUDE_MODEL = sonnet
+MANAGER_MAX_TURNS = 40                   # hard cap on tool-use turns per run
 TELEGRAM_STATUS_FILE = /tmp/tg_status.json
 TELEGRAM_PROMPT_SUFFIX = When you have completely finished, call telegram_reply() with your response. Do not call it until done.
 

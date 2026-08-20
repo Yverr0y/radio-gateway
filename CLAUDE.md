@@ -69,6 +69,21 @@ scp user@source-ip:$(pwd)/gateway_config.txt .
 - Only commit when the user explicitly asks
 - Never auto-push
 
+## Bounded output when diagnosing
+Every command you run here is re-sent to the model on **every subsequent turn** of the
+session, so one unbounded dump is not paid for once -- it is paid for again and again.
+A single 9-day manager session burned ~68M tokens moving ~174k tokens of real content.
+
+- `journalctl -u <unit> -n 50 --no-pager` -- never bare `journalctl`, never `-f` here
+- `tail -n 100 logs/endpoints/<name>.log` -- never `cat` a log file
+- Pipe wide output through `head`/`grep` before it reaches you; count with `wc -l`
+  rather than printing the thing you are counting
+- `git log --oneline -20`, not `git log`
+- If a check genuinely needs a big file, grep it for the answer instead of reading it
+
+When a session has been going a long time and the current problem is unrelated to the
+earlier one, `/clear` rather than carrying the whole history forward.
+
 ## Mixer v2.0 Architecture (COMPLETE)
 **Reference docs:**
 - `docs/mixer-v2-design.md` -- architecture reference (bus types, plugin model, routing, API)

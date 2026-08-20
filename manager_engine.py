@@ -73,7 +73,11 @@ class ManagerEngine:
 
     def get_status(self):
         with self._lock:
-            return dict(self._state)
+            st = dict(self._state)
+        # Surfaced so the dashboard can show which execution path is live
+        # without anyone having to read gateway_config.txt.
+        st['run_mode'] = self._run_mode()
+        return st
 
     def get_reports(self, limit=50):
         reports = []
@@ -206,28 +210,17 @@ class ManagerEngine:
                 return
 
             prompt = self._build_prompt(task_type, run_id, task_content)
-            session = self._tmux_session()
 
-            if not self._session_alive(session):
-                print(f"  [Manager] tmux session '{session}' not found — skipping run")
-                self._write_error_report(run_id, task_type, f"tmux session '{session}' not found")
-                return
-
-            pre_count = self._report_count()
-            self._send_to_tmux(session, prompt)
-
-            # Poll for a new report entry matching this run_id
-            deadline = time.time() + _MAX_WAIT_SECS
-            entry = None
-            while time.time() < deadline:
-                time.sleep(_POLL_INTERVAL)
+            if self._run_mode() == 'oneshot':
+                # _run_oneshot blocks until the process exits, and writes its
+                # own error report on every failure path.
+                if not self._run_oneshot(prompt, run_id, task_type):
+                    print(f"  [Manager] Run {run_id} failed")
+                    return
                 entry = self._find_report(run_id)
-                if entry:
-                    break
-
+            else:
+                entry = self._run_via_tmux(prompt, run_id, task_type)
             if not entry:
-                print(f"  [Manager] Run {run_id} timed out after {_MAX_WAIT_SECS}s")
-                self._write_error_report(run_id, task_type, "timed out waiting for Claude response")
                 return
 
             print(f"  [Manager] Run {run_id} complete — severity: {entry.get('severity','?')}")
@@ -357,12 +350,206 @@ class ManagerEngine:
             f"Your run_id for the report is: {run_id}"
         )
 
-    def _send_to_tmux(self, session: str, text: str):
+    def _send_to_tmux(self, session: str, text: str,
+                      settle: float = 1.5, attempts: int = 3) -> bool:
+        """Paste a prompt into the Claude tmux session and make sure it is SENT.
+
+        The Enter used to be fired in the same breath as the paste. A prompt
+        this size arrives as a bracketed paste that the TUI collapses into a
+        "[Pasted text #N]" placeholder, and an Enter landing during that window
+        is consumed as part of the paste instead of submitting it. The prompt
+        then just sits in the input line, Claude is never actually asked
+        anything, and the run only discovers this by timing out 600s later.
+
+        Seen 2026-08-20 with two prompts stacked unsent in the buffer
+        ("[Pasted text #23 +151 lines][Pasted text #24 +114 lines]"). It is the
+        DAILY run that fails because its prompt is the large one; the hourly
+        prompt is small enough to usually win the race. Both 06:00 timeouts in
+        the last week (the 17th and the 20th) have this shape.
+
+        Returns True if the prompt was submitted.
+        """
         try:
+            # Clear whatever is already in the input line. Without this, a
+            # previous run whose Enter was swallowed leaves its entire prompt
+            # sitting there and the next paste is appended to it — so a later
+            # successful Enter submits both mashed into one message.
+            subprocess.run(['tmux', 'send-keys', '-t', session, 'C-u'], check=True)
+            time.sleep(0.2)
+            # Snapshot the IDLE input line. An empty Claude Code prompt is not
+            # blank — it carries dimmed placeholder hint text — so "is there
+            # anything on the line" would call every successful submit a
+            # failure and abort a run that had in fact gone through. Comparing
+            # against this baseline is what makes the check mean "our paste is
+            # still sitting there" rather than "the line is non-empty".
+            baseline = self._prompt_line(session)
             subprocess.run(['tmux', 'send-keys', '-t', session, '-l', text], check=True)
-            subprocess.run(['tmux', 'send-keys', '-t', session, 'Enter'], check=True)
+            for i in range(attempts):
+                time.sleep(settle)
+                subprocess.run(['tmux', 'send-keys', '-t', session, 'Enter'], check=True)
+                time.sleep(0.5)
+                current = self._prompt_line(session)
+                # None = no input line visible, i.e. Claude is busy answering.
+                if current is None or current == baseline:
+                    return True
+                print(f"  [Manager] tmux prompt still unsent after Enter #{i + 1} — retrying")
+            print("  [Manager] tmux prompt could not be submitted — giving up")
+            return False
         except Exception as e:
             print(f"  [Manager] tmux send error: {e}")
+            return False
+
+    def _run_via_tmux(self, prompt: str, run_id: str, task_type: str):
+        """Legacy path: paste into a long-lived Claude TUI and poll for the report.
+
+        Kept behind MANAGER_RUN_MODE='tmux' as a fallback only. See
+        _run_oneshot for why this is no longer the default.
+        """
+        session = self._tmux_session()
+        if not self._session_alive(session):
+            print(f"  [Manager] tmux session '{session}' not found \u2014 skipping run")
+            self._write_error_report(run_id, task_type, f"tmux session '{session}' not found")
+            return None
+
+        if not self._send_to_tmux(session, prompt):
+            # Nothing was ever asked, so waiting the full 600s would only
+            # delay a failure we already know about.
+            print(f"  [Manager] Run {run_id} aborted \u2014 prompt never submitted")
+            self._write_error_report(run_id, task_type,
+                                     "prompt could not be submitted to tmux session")
+            return None
+
+        # Poll for a new report entry matching this run_id
+        deadline = time.time() + _MAX_WAIT_SECS
+        entry = None
+        while time.time() < deadline:
+            time.sleep(_POLL_INTERVAL)
+            entry = self._find_report(run_id)
+            if entry:
+                break
+
+        if not entry:
+            print(f"  [Manager] Run {run_id} timed out after {_MAX_WAIT_SECS}s")
+            self._write_error_report(run_id, task_type, "timed out waiting for Claude response")
+            return None
+        return entry
+
+    def _run_mode(self) -> str:
+        mode = str(getattr(self.config, 'MANAGER_RUN_MODE', 'oneshot') or 'oneshot').lower()
+        return mode if mode in ('oneshot', 'tmux') else 'oneshot'
+
+    def _claude_bin(self) -> str:
+        return str(getattr(self.config, 'MANAGER_CLAUDE_BIN', '') or
+                   os.environ.get('CLAUDE_BIN', '') or
+                   '/home/user/.local/bin/claude')
+
+    # Bounded-output rules live here as well as in CLAUDE.md: a one-shot run
+    # has no user to stop it pasting a 40k-line journal into its own context.
+    _ONESHOT_SYSTEM = (
+        "You are a non-interactive one-shot fleet check. Never read an unbounded "
+        "log: use `journalctl -n 50 --no-pager` and `tail -n 100`, never bare "
+        "`journalctl` or `cat` on a log file. Do not ask questions \u2014 complete the "
+        "checks and append the single JSON report line."
+    )
+
+    def _run_oneshot(self, prompt: str, run_id: str, task_type: str) -> bool:
+        """Run one manager check in a fresh `claude -p` process.
+
+        The manager contract is already stateless \u2014 _build_prompt inlines the
+        entire snapshot, and the result comes back through manager_reports.jsonl
+        keyed by run_id \u2014 so reusing a conversation buys nothing. It costs a
+        great deal: the old tmux session lived for days, and because runs are an
+        hour apart (past the prompt cache TTL) each one re-sent AND re-cached the
+        whole accumulated history. One 9-day session burned ~68M tokens to move
+        ~174k tokens of actual content, with the final hourly checks paying
+        ~370k cache-write tokens apiece. A fresh process per run makes that
+        growth structurally impossible.
+        """
+        model = str(getattr(self.config, 'MANAGER_CLAUDE_MODEL', 'sonnet') or 'sonnet')
+        try:
+            max_turns = int(getattr(self.config, 'MANAGER_MAX_TURNS', 40) or 40)
+        except (TypeError, ValueError):
+            max_turns = 40
+        cmd = [
+            self._claude_bin(), '-p', prompt,
+            '--dangerously-skip-permissions',
+            '--model', model,
+            '--max-turns', str(max_turns),
+            '--append-system-prompt', self._ONESHOT_SYSTEM,
+        ]
+        env = dict(os.environ)
+        env.setdefault('HOME', '/home/user')
+        env['PATH'] = '/home/user/.local/bin:' + env.get('PATH', '/usr/local/bin:/usr/bin:/bin')
+        try:
+            r = subprocess.run(cmd, cwd=_BASE, capture_output=True, text=True,
+                               timeout=_MAX_WAIT_SECS, env=env)
+        except subprocess.TimeoutExpired:
+            self._write_error_report(run_id, task_type,
+                                     f'claude -p timed out after {_MAX_WAIT_SECS}s')
+            return False
+        except FileNotFoundError:
+            self._write_error_report(run_id, task_type,
+                                     f'claude binary not found at {self._claude_bin()}')
+            return False
+        except Exception as e:
+            self._write_error_report(run_id, task_type,
+                                     f'claude -p failed: {type(e).__name__}: {e}')
+            return False
+
+        if self._find_report(run_id):
+            return True
+
+        # The run finished but never appended its line. If it printed the JSON
+        # instead, salvage it rather than discarding the whole check.
+        if self._salvage_report(r.stdout or '', run_id):
+            print(f"  [Manager] Run {run_id}: report salvaged from stdout")
+            return True
+
+        detail = (r.stderr or r.stdout or '').strip().replace('\n', ' ')[:300]
+        self._write_error_report(
+            run_id, task_type,
+            f'claude -p exit {r.returncode} but no report written: {detail or "no output"}')
+        return False
+
+    def _salvage_report(self, stdout: str, run_id: str) -> bool:
+        """Append a report the run printed to stdout but failed to write."""
+        for line in stdout.splitlines():
+            line = line.strip().strip('`').strip()
+            if not line.startswith('{') or run_id not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if e.get('run_id') != run_id:
+                continue
+            try:
+                with open(_REPORTS_FILE, 'a') as f:
+                    f.write(json.dumps(e) + '\n')
+                return True
+            except Exception as exc:
+                print(f"  [Manager] Salvage write failed: {exc}")
+                return False
+        return False
+
+    def _prompt_line(self, session: str):
+        """Contents of the TUI input line, or None if it is not on screen.
+
+        None is also what an unreadable pane returns: callers treat that as
+        "assume it went through" so a capture failure can never turn into an
+        Enter-spamming loop.
+        """
+        try:
+            r = subprocess.run(['tmux', 'capture-pane', '-p', '-t', session],
+                               capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                ls = line.strip()
+                for marker in ('\u276f', '>'):
+                    if ls.startswith(marker):
+                        return ls[len(marker):].strip()
+            return None
+        except Exception:
+            return None
 
     def _session_alive(self, session: str) -> bool:
         try:

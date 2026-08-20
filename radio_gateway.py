@@ -572,6 +572,14 @@ class Config:
             'TELEGRAM_CHAT_ID': 0,
             'TELEGRAM_TMUX_SESSION': 'claude-gateway',
 
+            # Fleet Manager runs. 'oneshot' spawns a fresh `claude -p` per run
+            # so context cannot accumulate across runs; 'tmux' is the legacy
+            # paste-into-a-live-session path, kept only as a fallback.
+            'MANAGER_RUN_MODE': 'oneshot',
+            'MANAGER_CLAUDE_BIN': '',        # blank -> $CLAUDE_BIN, then ~/.local/bin/claude
+            'MANAGER_CLAUDE_MODEL': 'sonnet',
+            'MANAGER_MAX_TURNS': 40,
+
             # Advanced
             'START_CLAUDE_CODE': False,
         }
