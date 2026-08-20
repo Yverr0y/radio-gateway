@@ -210,6 +210,14 @@ def handle_config_form(handler, parent):
     else:
         print(f"  [Config] WARNING: partial form ({len(values)} keys) — merging with current config")
 
+    # Sensitive keys render as empty boxes (we never send secrets to the
+    # browser), so a blank submission means "keep what's stored". Drop the
+    # key entirely and _save_config falls back to the current config value.
+    # Without this, every config save would wipe all six secrets.
+    for key in getattr(parent, '_SENSITIVE_KEYS', ()):
+        if key in values and not values[key].strip():
+            del values[key]
+
     parent._save_config(values)
     # Reload config from file so the config page reflects saved values
     parent.config.load_config()

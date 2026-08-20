@@ -41,7 +41,7 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
 
     # Keys whose values should be masked in the UI
     _SENSITIVE_KEYS = {'TELEGRAM_BOT_TOKEN', 'STREAM_PASSWORD', 'EMAIL_APP_PASSWORD', 'WEB_CONFIG_PASSWORD',
-                       'USRP_AMI_SECRET', 'USRP2_AMI_SECRET'}
+                       'USRP_AMI_SECRET', 'USRP2_AMI_SECRET', 'DDNS_PASSWORD'}
 
     # Keys that store hex integers
     _HEX_KEYS = {'AIOC_VID', 'AIOC_PID'}
@@ -1617,8 +1617,16 @@ class WebConfigServer(_SysinfoMixin, _RoutingCmdsMixin, _CertsMixin):
             inp = f'<select name="{key}">{"".join(options)}</select>'
             default_str = str(default_val) if default_val is not None else ''
         elif is_sensitive:
-            val = html_mod.escape(str(cur_val)) if cur_val else ''
-            inp = f'<input type="password" name="{key}" value="{val}" autocomplete="off">'
+            # Never ship secrets to the browser. type="password" masked these
+            # visually while the real value still sat in value="..." — readable
+            # via View Source by anyone who could load /config.
+            # Not type="password" either: that made Chrome treat /config as a
+            # login page and fire password-reuse warnings on the rotating
+            # trycloudflare hostname. There is no login here, so no password field.
+            # Blank on submit means "keep the stored value" (handle_config_form).
+            placeholder = 'set — leave blank to keep' if cur_val else 'not set'
+            inp = (f'<input type="text" name="{key}" value="" autocomplete="off" '
+                   f'placeholder="{html_mod.escape(placeholder)}">')
             default_str = '(hidden)'
         elif isinstance(cur_val, (int, float)) and not isinstance(cur_val, bool):
             val = str(cur_val)
