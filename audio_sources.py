@@ -3029,6 +3029,34 @@ class StreamOutputSource:
         # that is stuck in the encoder — that coupling is what turned a
         # routine socket drop into a 15h outage on 2026-07-30.
         self._reconnect_lock = threading.Lock()
+        # Serialises the DESTRUCTIVE half of a reconnect (close() + _connect()).
+        # _connect() writes shared instance state — _encoder, _icecast_sock,
+        # connected — so two workers running it at once corrupt each other:
+        # one connects, the other's close() drops that fresh connection, and
+        # its own connect is then refused "403 Mountpoint in use" because the
+        # server still holds the mount it just dropped. That is precisely the
+        # 2026-08-19 flap: 1850 attempts over 3h42, attempt numbers printing
+        # out of order (#79, #83, #72, #85) because ~8 workers were live at
+        # once. _reconnect_lock guards a bool and is held for microseconds;
+        # this one is held across a network round trip, so they must stay
+        # separate or the trigger path would block on the connect path.
+        self._connect_lock = threading.Lock()
+        # How long a worker waits for _connect_lock before retiring. Longer
+        # than the wedge timeout so a worker normally outlasts a slow
+        # predecessor, but bounded so threads cannot pile up without limit.
+        self._connect_lock_wait = 45.0
+        # Bumped whenever the watchdog force-releases _reconnecting out from
+        # under a still-live worker. A worker whose captured epoch no longer
+        # matches has been superseded and must retire without touching the
+        # connection. See _trigger_reconnect's watchdog for why.
+        self._reconnect_epoch = 0
+        # Instrumentation for the paths added 2026-08-20 — without these the
+        # only evidence that the fix is working is an absence of log spam,
+        # which is indistinguishable from the feature never running.
+        self._reconnect_superseded = 0
+        self._reconnect_wedged = 0
+        # Watchdog patience before a reconnect worker is declared wedged.
+        self._reconnect_wedge_timeout = 30.0
         self._reader_thread = None
         self._keepalive_thread = None
         self._last_audio_time = 0  # monotonic time of last real audio push
@@ -3246,15 +3274,21 @@ class StreamOutputSource:
         _metric_stream = mount or 'icecast'
 
         # Reader thread: reads MP3 from ffmpeg, sends to Icecast
-        def _reader():
-            while self._encoder and self._encoder.poll() is None:
+        # Bind this reader to the encoder and socket of THIS connection.
+        # It used to reach through self._encoder / self._icecast_sock on every
+        # iteration, so after a reconnect swapped those fields a surviving
+        # reader from the previous connection would read the NEW encoder's
+        # stdout and push it into the NEW socket — two readers draining one
+        # pipe, interleaving MP3 frames. Defaults capture the values now.
+        def _reader(enc=self._encoder, sock=self._icecast_sock):
+            while enc.poll() is None:
                 try:
-                    data = self._encoder.stdout.read(4096)
+                    data = enc.stdout.read(4096)
                     if not data:
                         break
                     with self._lock:
-                        if self._icecast_sock:
-                            self._icecast_sock.sendall(data)
+                        if self._icecast_sock is sock:
+                            sock.sendall(data)
                             self._bytes_sent += len(data)
                             # Count bytes HERE, at the point they actually go
                             # out. This used to be done in
@@ -3293,6 +3327,21 @@ class StreamOutputSource:
                     print(f"  [Broadcastify] Reader error: {e}")
                     self._note_error(f"reader error: {e}")
                     break
+            # A reader belongs to exactly ONE connection. By the time this one
+            # unwinds, a reconnect may already have published a newer encoder —
+            # and then everything below would be acting on a connection this
+            # thread has nothing to do with: flipping `connected` false, killing
+            # the live encoder and queueing yet another reconnect. Whose reader
+            # would in turn do the same to ITS successor.
+            #
+            # That is the self-sustaining half of the 2026-08-19 flap: 1850
+            # reconnects over 3h42, of which only 26 were watchdog-driven. The
+            # watchdog race started it; this is what kept it going, one
+            # "Reconnected successfully" immediately murdered by the previous
+            # connection's reader, ~900 times over. A stale reader must exit
+            # silently and let the current generation live.
+            if self._encoder is not enc:
+                return
             # Clean up on exit
             if self.connected:
                 uptime_s = int(time.time() - self._connect_time) if self._connect_time else 0
@@ -3426,6 +3475,13 @@ class StreamOutputSource:
                     return
                 if not self._was_connected or self.connected or self._reconnecting:
                     continue
+                # A reconnect worker holding the connect lock may be part-way
+                # through building a fresh encoder, which it has not yet
+                # published by setting `connected`. Reaping it here would
+                # destroy the very recovery we are trying to drive, so leave
+                # an in-flight connect alone and re-check next interval.
+                if self._connect_lock.locked():
+                    continue
                 if self._encoder is not None:
                     # Stream is down but the encoder is still alive — writers
                     # may be parked inside it. Reap it before retrying.
@@ -3452,6 +3508,7 @@ class StreamOutputSource:
             self._reconnecting = True
             self._reconnect_count += 1
             count = self._reconnect_count
+            epoch = self._reconnect_epoch
         try:
             import metrics as _m
             _m.stream_reconnects_total.labels(stream='broadcastify').inc()
@@ -3477,22 +3534,56 @@ class StreamOutputSource:
                     print(f"  [Broadcastify] Mount still held by our previous "
                           f"connection — waiting {delay}s for it to clear")
                 time.sleep(delay)
-                print(f"  [Broadcastify] Auto-reconnecting (attempt #{count})...")
+                # Everything below mutates shared connection state, so only one
+                # worker may be inside it at a time. Waiting here (rather than
+                # barging in) is what stops a late worker from closing a
+                # connection a peer just established.
+                if not self._connect_lock.acquire(timeout=self._connect_lock_wait):
+                    self._reconnect_superseded += 1
+                    print(f"  [Broadcastify] Attempt #{count} gave up waiting for "
+                          f"the connect lock — another attempt is still in flight")
+                    return
                 try:
-                    self.close()
-                except Exception as e:
-                    print(f"  [Broadcastify] close() raised during reconnect: {e}")
-                try:
-                    self._connect()
-                except Exception as e:
-                    print(f"  [Broadcastify] _connect() raised: {e}")
-                if self.connected:
-                    print(f"  [Broadcastify] Reconnected successfully (attempt #{count})")
-                else:
-                    print(f"  [Broadcastify] Reconnect failed (attempt #{count})")
-                    self._note_error(f"reconnect failed (attempt #{count})")
+                    # Three ways this attempt can already be pointless. Checking
+                    # them under the lock is what makes the check meaningful:
+                    # the state cannot change while we hold it.
+                    if self._shutdown:
+                        return
+                    if epoch != self._reconnect_epoch:
+                        self._reconnect_superseded += 1
+                        print(f"  [Broadcastify] Attempt #{count} superseded "
+                              f"(epoch {epoch} < {self._reconnect_epoch}) — retiring "
+                              f"without touching the connection")
+                        return
+                    if self.connected:
+                        self._reconnect_superseded += 1
+                        print(f"  [Broadcastify] Attempt #{count} unnecessary — "
+                              f"stream is already back up")
+                        return
+                    print(f"  [Broadcastify] Auto-reconnecting (attempt #{count})...")
+                    try:
+                        self.close()
+                    except Exception as e:
+                        print(f"  [Broadcastify] close() raised during reconnect: {e}")
+                    try:
+                        self._connect()
+                    except Exception as e:
+                        print(f"  [Broadcastify] _connect() raised: {e}")
+                    if self.connected:
+                        print(f"  [Broadcastify] Reconnected successfully (attempt #{count})")
+                    else:
+                        print(f"  [Broadcastify] Reconnect failed (attempt #{count})")
+                        self._note_error(f"reconnect failed (attempt #{count})")
+                finally:
+                    self._connect_lock.release()
             finally:
-                self._reconnecting = False
+                # Only clear the in-flight flag if we are still the current
+                # generation. A superseded worker finishing late must not clear
+                # the flag its successor is holding, or a third worker spawns
+                # alongside the second and the serialisation is lost.
+                with self._reconnect_lock:
+                    if epoch == self._reconnect_epoch:
+                        self._reconnecting = False
 
         worker = threading.Thread(target=_auto_reconnect, daemon=True,
                                   name="Broadcastify-reconnect")
@@ -3504,10 +3595,26 @@ class StreamOutputSource:
         # encoder/socket, but the stream as a whole recovers instead of
         # staying dark.
         def _watchdog():
-            worker.join(timeout=30)
+            worker.join(timeout=self._reconnect_wedge_timeout)
             if worker.is_alive():
-                print(f"  [Broadcastify] Reconnect attempt #{count} wedged >30s — releasing flag")
-                self._reconnecting = False
+                # Release the flag so recovery is not held hostage by this
+                # worker, AND bump the epoch so the worker retires on wake.
+                # The old code did only the first half, on the assumption that
+                # a wedged worker is effectively dead. It is not always: a
+                # worker parked in getaddrinfo during a DNS outage
+                # (socket.create_connection's timeout covers the TCP connect,
+                # NOT name resolution) comes back minutes later and resumes
+                # tearing down whatever connection succeeded meanwhile. That
+                # assumption is what turned a 4-minute DNS blip into a
+                # 3h42 reconnect flap on 2026-08-19.
+                with self._reconnect_lock:
+                    self._reconnect_epoch += 1
+                    self._reconnecting = False
+                    ep = self._reconnect_epoch
+                self._reconnect_wedged += 1
+                print(f"  [Broadcastify] Reconnect attempt #{count} wedged >"
+                      f"{self._reconnect_wedge_timeout:g}s — releasing flag "
+                      f"(epoch now {ep}; attempt #{count} will retire on wake)")
         threading.Thread(target=_watchdog, daemon=True,
                          name="Broadcastify-reconnect-wd").start()
 

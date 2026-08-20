@@ -37,6 +37,17 @@ def new_src(enc):
     s._encoder_lock = threading.Lock()
     s._reconnect_lock = threading.Lock()
     s._reconnecting = False
+    # Added with the 2026-08-19 stale-reader/flap fix. This stub bypasses
+    # __init__, so every new instance attribute the reconnect paths touch has
+    # to be mirrored here or the whole suite fails on AttributeError inside a
+    # caught handler -- which reads as "the fix regressed", not "the stub is
+    # stale". Keep in sync with StreamOutputSource.__init__.
+    s._connect_lock = threading.Lock()
+    s._connect_lock_wait = 45.0
+    s._reconnect_epoch = 0
+    s._reconnect_superseded = 0
+    s._reconnect_wedged = 0
+    s._reconnect_wedge_timeout = 30.0
     s._was_connected = True
     s.connected = True
     s._reconnect_count = 0

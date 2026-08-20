@@ -736,6 +736,12 @@ class RadioGateway(_LifecycleMixin, _TransmitMixin, _StreamMixin,
             'darkice_pid': self._darkice_pid,
             'darkice_restarts': self._darkice_restart_count,
             'stream_restarts': getattr(getattr(self, 'stream_output', None), '_reconnect_count', 0),
+            # Reconnect-storm instrumentation. A rising 'superseded' count is
+            # the fix working (late workers retiring instead of clobbering a
+            # live connection); a rising 'wedged' count means connects are
+            # hanging — historically DNS. Both flat is the healthy steady state.
+            'stream_reconnect_superseded': getattr(getattr(self, 'stream_output', None), '_reconnect_superseded', 0),
+            'stream_reconnect_wedged': getattr(getattr(self, 'stream_output', None), '_reconnect_wedged', 0),
             'stream_health': bool(getattr(self, 'stream_output', None) and getattr(self.stream_output, 'connected', False)),
             'darkice_stats': self._get_stream_stats(),
             'notifications': list(self._notifications),
